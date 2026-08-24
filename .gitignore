@@ -2,3 +2,6 @@
 
 *.dae
 *.stl
+build/
+install/
+log/
