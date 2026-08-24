@@ -18,6 +18,8 @@ def generate_launch_description():
     ws_root = Path(core_path).parents[3]
     field_path = ws_root / 'src' / 'simulation'
 
+    arm_sdf_path = Path(simulation_path) / 'robot_arm' / 'model.sdf'
+
     models_path_env = SetEnvironmentVariable(
         name='IGN_GAZEBO_RESOURCE_PATH',
         value=[
@@ -37,7 +39,21 @@ def generate_launch_description():
         launch_arguments=[('gz_args', [f' -r 4 {world_file_path}'])]
     )
 
+    gz_spawn_entity = Node(
+        package='ros_gz_sim',
+        executable='create',
+        arguments=[
+            '-name', 'robot_arm',
+            '-file', str(arm_sdf_path),
+            '-x', '0.0',
+            '-y', '0.0',
+            '-z', '0.0',
+        ],
+        output='screen',
+    )
+
     return LaunchDescription([
         models_path_env,
-        gazebo
+        gazebo,
+        gz_spawn_entity
     ])
