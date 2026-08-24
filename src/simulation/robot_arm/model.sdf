@@ -19,6 +19,7 @@
 			<collision name="Endeffector:1_collision">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/Endeffector.stl</uri>
 					</mesh>
 				</geometry>
@@ -26,6 +27,7 @@
 			<visual name="Endeffector:1_visual">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/Endeffector.stl</uri>
 					</mesh>
 				</geometry>
@@ -48,6 +50,7 @@
 			<collision name="Arm_2:1_collision">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/Arm_2.stl</uri>
 					</mesh>
 				</geometry>
@@ -55,6 +58,7 @@
 			<visual name="Arm_2:1_visual">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/Arm_2.stl</uri>
 					</mesh>
 				</geometry>
@@ -77,6 +81,7 @@
 			<collision name="Arm_3:1_collision">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/Arm_3.stl</uri>
 					</mesh>
 				</geometry>
@@ -84,6 +89,7 @@
 			<visual name="Arm_3:1_visual">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/Arm_3.stl</uri>
 					</mesh>
 				</geometry>
@@ -106,6 +112,7 @@
 			<collision name="Arm_4:1_collision">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/Arm_4.stl</uri>
 					</mesh>
 				</geometry>
@@ -113,6 +120,7 @@
 			<visual name="Arm_4:1_visual">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/Arm_4.stl</uri>
 					</mesh>
 				</geometry>
@@ -135,6 +143,7 @@
 			<collision name="Arm_5:1_collision">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/Arm_5.stl</uri>
 					</mesh>
 				</geometry>
@@ -142,6 +151,7 @@
 			<visual name="Arm_5:1_visual">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/Arm_5.stl</uri>
 					</mesh>
 				</geometry>
@@ -164,6 +174,7 @@
 			<collision name="Arm_mid:1_collision">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/Arm_mid.stl</uri>
 					</mesh>
 				</geometry>
@@ -171,6 +182,7 @@
 			<visual name="Arm_mid:1_visual">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/Arm_mid.stl</uri>
 					</mesh>
 				</geometry>
@@ -193,6 +205,7 @@
 			<collision name="Arm_O:1_collision">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/Arm_O.stl</uri>
 					</mesh>
 				</geometry>
@@ -200,6 +213,7 @@
 			<visual name="Arm_O:1_visual">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/Arm_O.stl</uri>
 					</mesh>
 				</geometry>
@@ -222,6 +236,7 @@
 			<collision name="Arm_O2:1_collision">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/Arm_O2.stl</uri>
 					</mesh>
 				</geometry>
@@ -229,6 +244,7 @@
 			<visual name="Arm_O2:1_visual">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/Arm_O2.stl</uri>
 					</mesh>
 				</geometry>
@@ -251,6 +267,7 @@
 			<collision name="base_link:1_collision">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/base_link.stl</uri>
 					</mesh>
 				</geometry>
@@ -258,6 +275,7 @@
 			<visual name="base_link:1_visual">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/base_link.stl</uri>
 					</mesh>
 				</geometry>
@@ -280,6 +298,7 @@
 			<collision name="rot_table:1_collision">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/rot_table.stl</uri>
 					</mesh>
 				</geometry>
@@ -287,6 +306,7 @@
 			<visual name="rot_table:1_visual">
 				<geometry>
 					<mesh>
+						<scale>0.01 0.01 0.01</scale>
 						<uri>model://robot_arm/meshes/rot_table.stl</uri>
 					</mesh>
 				</geometry>
@@ -340,14 +360,14 @@
 				<xyz>-0.08204255192591861 0.030131181823810343 -0.996173243745978</xyz>
 			</axis>
 		</joint>
-		<joint type="revolute" name="rev6">
+		<!-- <joint type="revolute" name="rev6">
 			<pose>0.37257006346524235 -0.6353582767529391 -0.05995840224990962 -0.047293519332168334 0.010374769108393106 -0.5061727873224322</pose>
 			<child>Arm_4:1</child>
 			<parent>Arm_O2:1</parent>
 			<axis>
 				<xyz>-0.08204255196168671 0.0301311821041135 -0.9961732437345538</xyz>
 			</axis>
-		</joint>
+		</joint> -->
 		<joint type="revolute" name="rev7">
 			<pose>0.1508046425100855 0.08863045577972027 -0.01830000426744614 -0.00018686117325014345 0.007012039144670464 0.00027014585632764005</pose>
 			<child>Arm_mid:1</child>
@@ -356,14 +376,14 @@
 				<xyz>-0.08204255191673164 0.030131182235625942 -0.9961732437342785</xyz>
 			</axis>
 		</joint>
-		<joint type="revolute" name="rev8">
+		<!-- <joint type="revolute" name="rev8">
 			<pose>0.3895430485799773 -0.6034583047658773 -0.05793267018241606 -0.047293519733237546 0.010374769084930846 -0.5061727873427555</pose>
 			<child>Arm_5:1</child>
 			<parent>Arm_3:1</parent>
 			<axis>
 				<xyz>0.0820425519175152 -0.0301311822243414 0.9961732437345553</xyz>
 			</axis>
-		</joint>
+		</joint> -->
 		<joint type="revolute" name="rev9">
 			<pose>0.3895430485799773 -0.6034583047658773 -0.05793267018241606 -0.047293519733237546 0.010374769084930846 -0.5061727873427555</pose>
 			<child>Arm_5:1</child>
@@ -372,14 +392,14 @@
 				<xyz>0.08204255191751521 -0.030131182224341403 0.9961732437345553</xyz>
 			</axis>
 		</joint>
-		<joint type="revolute" name="rev10">
+		<!-- <joint type="revolute" name="rev10">
 			<pose>-0.28484369027334444 -0.49732362007747755 0.16693321792315313 -1.6026660646549298 -0.026399024503639096 -0.862031097012122</pose>
 			<child>Endeffector:1</child>
 			<parent>Arm_4:1</parent>
 			<axis>
 				<xyz>-0.0820425519259186 0.030131181823810325 -0.9961732437459779</xyz>
 			</axis>
-		</joint>
+		</joint> -->
 		<joint type="revolute" name="rev11">
 			<pose>-0.2793922093706013 -0.5011622650718645 0.1670515589580453 -1.6026660646549298 -0.026399024503639096 -0.862031097012122</pose>
 			<child>Endeffector:1</child>
