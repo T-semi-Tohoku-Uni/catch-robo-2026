@@ -1,0 +1,392 @@
+<?xml version="1.0" encoding="utf-8"?>
+<sdf version="1.6">
+	<model name="robot_arm">
+		<pose>0 0 0 0 0 0</pose>
+		<link name="Endeffector:1">
+			<pose>-0.19971850548526604 0.135088040014305 0.544011219922493 1.6197675697518596 -0.8622799596203872 -0.0107853996623557</pose>
+			<inertial>
+				<mass>0.312339823004419</mass>
+				<pose>-0.7190860606709285 0.1342061304681142 -0.014496006799311146 -1.6026660646549298 -0.026399024503639096 -0.862031097012122</pose>
+				<inertia>
+					<ixx>0.00016322972242349465</ixx>
+					<ixy>-5.686026314037917e-06</ixy>
+					<ixz>1.1282310929072992e-05</ixz>
+					<iyy>0.000361248833743889</iyy>
+					<iyz>2.344892035407753e-06</iyz>
+					<izz>0.00030157514491900204</izz>
+				</inertia>
+			</inertial>
+			<collision name="Endeffector:1_collision">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/Endeffector.stl</uri>
+					</mesh>
+				</geometry>
+			</collision>
+			<visual name="Endeffector:1_visual">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/Endeffector.stl</uri>
+					</mesh>
+				</geometry>
+			</visual>
+		</link>
+		<link name="Arm_2:1">
+			<pose>-1.1051686904225 1.03032851086635 0.12851213879130602 0.0507718292092022 -0.1238153336270338 1.6215561085749477</pose>
+			<inertial>
+				<mass>0.3762520154896769</mass>
+				<pose>-0.8491967922930831 0.15696922635806185 0.08761457227904709 -0.12109803363206713 -0.05697349770870265 -1.621249126982524</pose>
+				<inertia>
+					<ixx>0.006106300898140941</ixx>
+					<ixy>0.005328423709766673</ixy>
+					<ixz>0.0008497023713377644</ixz>
+					<iyy>0.005419928405554311</iyy>
+					<iyz>-0.0009207205546104646</iyz>
+					<izz>0.01070132997289802</izz>
+				</inertia>
+			</inertial>
+			<collision name="Arm_2:1_collision">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/Arm_2.stl</uri>
+					</mesh>
+				</geometry>
+			</collision>
+			<visual name="Arm_2:1_visual">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/Arm_2.stl</uri>
+					</mesh>
+				</geometry>
+			</visual>
+		</link>
+		<link name="Arm_3:1">
+			<pose>-0.9555050104541241 0.8113094170981031 0.10956152599125302 0.05114445723142109 -0.12293396053374353 1.610616104014388</pose>
+			<inertial>
+				<mass>0.3474769951100577</mass>
+				<pose>-0.627479870033147 0.13310002817333572 0.07374267890982271 -0.1208145167880615 -0.05598609032745708 -1.6103774808392701</pose>
+				<inertia>
+					<ixx>0.004775381716767643</ixx>
+					<ixy>0.004278213002077382</ixy>
+					<ixz>0.0004458175155572121</ixz>
+					<iyy>0.004251729754830967</iyy>
+					<iyz>-0.0004828302437292436</iyz>
+					<izz>0.008593487597305738</izz>
+				</inertia>
+			</inertial>
+			<collision name="Arm_3:1_collision">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/Arm_3.stl</uri>
+					</mesh>
+				</geometry>
+			</collision>
+			<visual name="Arm_3:1_visual">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/Arm_3.stl</uri>
+					</mesh>
+				</geometry>
+			</visual>
+		</link>
+		<link name="Arm_4:1">
+			<pose>-0.6417412600246409 0.365281339910628 0.0702296801444162 0.03635007744968201 -0.031989923611458145 0.5053458780073496</pose>
+			<inertial>
+				<mass>0.3872724630325834</mass>
+				<pose>-0.5053637479998081 0.1749587865624627 0.06190240524203426 -0.047293519332168334 0.010374769108393106 -0.5061727873224322</pose>
+				<inertia>
+					<ixx>0.0017470854345021053</ixx>
+					<ixy>0.00392337553685104</ixy>
+					<ixz>0.0009670742047832164</ixz>
+					<iyy>0.011903561142413673</iyy>
+					<iyz>-0.0003293734967677864</iyz>
+					<izz>0.012858120651543868</izz>
+				</inertia>
+			</inertial>
+			<collision name="Arm_4:1_collision">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/Arm_4.stl</uri>
+					</mesh>
+				</geometry>
+			</collision>
+			<visual name="Arm_4:1_visual">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/Arm_4.stl</uri>
+					</mesh>
+				</geometry>
+			</visual>
+		</link>
+		<link name="Arm_5:1">
+			<pose>-0.630608922489368 0.32669020397495807 0.0681455833349808 0.03635007781150154 -0.03198992378585171 0.5053458780171858</pose>
+			<inertial>
+				<mass>0.23915235849619834</mass>
+				<pose>-0.3460747526416553 0.0887142809683423 0.044997953288423875 -0.047293519733237546 0.010374769084930846 -0.5061727873427555</pose>
+				<inertia>
+					<ixx>0.0007410379686241612</ixx>
+					<ixy>0.0014101178509114902</ixy>
+					<ixz>0.0003625158016580997</ixz>
+					<iyy>0.004391257702867369</iyy>
+					<iyz>-0.00012327503610035323</iyz>
+					<izz>0.004626491418718342</izz>
+				</inertia>
+			</inertial>
+			<collision name="Arm_5:1_collision">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/Arm_5.stl</uri>
+					</mesh>
+				</geometry>
+			</collision>
+			<visual name="Arm_5:1_visual">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/Arm_5.stl</uri>
+					</mesh>
+				</geometry>
+			</visual>
+		</link>
+		<link name="Arm_mid:1">
+			<pose>-0.151225623677991 -0.0786303695408375 0.016404967336501 0.00018876006466176667 -0.007011988285367414 -0.0002714627923392795</pose>
+			<inertial>
+				<mass>0.03491704681498129</mass>
+				<pose>-1.0639246104904763 0.38208058841071646 0.12267818384496806 -0.00018686117325014345 0.007012039144670464 0.00027014585632764005</pose>
+				<inertia>
+					<ixx>3.9403574429768185e-05</ixx>
+					<ixy>-7.292954610676361e-07</ixy>
+					<ixz>-9.098316427547104e-07</ixz>
+					<iyy>6.717502283631802e-05</iyy>
+					<iyz>1.187261515302218e-06</iyz>
+					<izz>2.9930556791134676e-05</izz>
+				</inertia>
+			</inertial>
+			<collision name="Arm_mid:1_collision">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/Arm_mid.stl</uri>
+					</mesh>
+				</geometry>
+			</collision>
+			<visual name="Arm_mid:1_visual">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/Arm_mid.stl</uri>
+					</mesh>
+				</geometry>
+			</visual>
+		</link>
+		<link name="Arm_O:1">
+			<pose>-0.00922483592863493 0.105618407978126 0.010283067216695701 0.007702333870514373 -0.010172062722370723 0.09259905662678009</pose>
+			<inertial>
+				<mass>0.19751213851248015</mass>
+				<pose>-0.9915142267065415 -0.03912026290419197 0.09607182135039978 -0.008610281313256427 0.009415944329379294 -0.09267876898455053</pose>
+				<inertia>
+					<ixx>0.0002491574776719514</ixx>
+					<ixy>0.00010390119004291449</ixy>
+					<ixz>5.032253369384705e-05</ixz>
+					<iyy>0.0005182784270863521</iyy>
+					<iyz>-1.6811869767418043e-05</iyz>
+					<izz>0.0003779617206405419</izz>
+				</inertia>
+			</inertial>
+			<collision name="Arm_O:1_collision">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/Arm_O.stl</uri>
+					</mesh>
+				</geometry>
+			</collision>
+			<visual name="Arm_O:1_visual">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/Arm_O.stl</uri>
+					</mesh>
+				</geometry>
+			</visual>
+		</link>
+		<link name="Arm_O2:1">
+			<pose>-1.2245494418013 0.831055125906728 0.127376901358977 0.041590581433965476 -0.1400936127562562 1.8357397200729932</pose>
+			<inertial>
+				<mass>0.6219980809972264</mass>
+				<pose>-0.7032777178035239 0.06687641826345918 0.08802763848737609 -0.12444568624315895 -0.07673575488132815 -1.833874973524193</pose>
+				<inertia>
+					<ixx>0.008671061958301411</ixx>
+					<ixy>0.007451068991529417</ixy>
+					<ixz>0.0006031930109620703</ixz>
+					<iyy>0.007776896382460291</iyy>
+					<iyz>-0.0006737105032043388</iyz>
+					<izz>0.015053650546762219</izz>
+				</inertia>
+			</inertial>
+			<collision name="Arm_O2:1_collision">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/Arm_O2.stl</uri>
+					</mesh>
+				</geometry>
+			</collision>
+			<visual name="Arm_O2:1_visual">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/Arm_O2.stl</uri>
+					</mesh>
+				</geometry>
+			</visual>
+		</link>
+		<link name="base_link:1">
+			<pose>0.0 0.0 0.0 0.0 -0.0 0.0</pose>
+			<inertial>
+				<mass>1.729910637467533</mass>
+				<pose>-0.8971865298988293 -0.1244128060161655 0.08792642974022956 -0.0 -0.0 -0.0</pose>
+				<inertia>
+					<ixx>0.011197441377036375</ixx>
+					<ixy>-0.0003511901200803777</ixy>
+					<ixz>-7.009537171127249e-05</ixz>
+					<iyy>0.021219684933047756</iyy>
+					<iyz>0.0003553695611505731</iyz>
+					<izz>0.010436568439752955</izz>
+				</inertia>
+			</inertial>
+			<collision name="base_link:1_collision">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/base_link.stl</uri>
+					</mesh>
+				</geometry>
+			</collision>
+			<visual name="base_link:1_visual">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/base_link.stl</uri>
+					</mesh>
+				</geometry>
+			</visual>
+		</link>
+		<link name="rot_table:1">
+			<pose>0.0 0.0 0.0 0.0 -0.0 0.0</pose>
+			<inertial>
+				<mass>1.9849075003419312</mass>
+				<pose>-0.9079803373549922 -0.07108438178993318 0.09069407407441933 -0.0 -0.0 -0.0</pose>
+				<inertia>
+					<ixx>0.006132324774047112</ixx>
+					<ixy>0.0008271503350661988</ixy>
+					<ixz>-2.2168307319861923e-05</ixz>
+					<iyy>0.008853297566428591</iyy>
+					<iyz>-1.2587284242243868e-06</iyz>
+					<izz>0.005898007910207162</izz>
+				</inertia>
+			</inertial>
+			<collision name="rot_table:1_collision">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/rot_table.stl</uri>
+					</mesh>
+				</geometry>
+			</collision>
+			<visual name="rot_table:1_visual">
+				<geometry>
+					<mesh>
+						<uri>model://robot_arm/meshes/rot_table.stl</uri>
+					</mesh>
+				</geometry>
+			</visual>
+		</link>
+		<joint type="revolute" name="rev0">
+			<pose>-0.0008204257074056284 -0.009962553002337523 -0.00027283572757909287 -0.0 -0.0 -0.0</pose>
+			<child>rot_table:1</child>
+			<parent>base_link:1</parent>
+			<axis>
+				<xyz>-0.027283572757909276 0.9991003543347038 0.03246673106171663</xyz>
+			</axis>
+		</joint>
+		<joint type="revolute" name="rev1">
+			<pose>-1.1342583296845925 -0.9533191910226044 0.07018277395725608 -0.12444568624315895 -0.07673575488132815 -1.833874973524193</pose>
+			<child>Arm_O2:1</child>
+			<parent>rot_table:1</parent>
+			<axis>
+				<xyz>-0.0820425519609199 0.03013118210405778 -0.9961732437346184</xyz>
+			</axis>
+		</joint>
+		<joint type="revolute" name="rev2">
+			<pose>0.0090086104514387 -0.10374332849072838 -0.008755972458173836 -0.008610281313256427 0.009415944329379294 -0.09267876898455053</pose>
+			<child>Arm_O:1</child>
+			<parent>rot_table:1</parent>
+			<axis>
+				<xyz>0.08204255195938999 -0.03013118209111555 0.9961732437351359</xyz>
+			</axis>
+		</joint>
+		<joint type="revolute" name="rev3">
+			<pose>-0.8626935216350996 -0.928366909027454 0.04454221081479472 -0.1208145167880615 -0.05598609032745708 -1.6103774808392701</pose>
+			<child>Arm_3:1</child>
+			<parent>rot_table:1</parent>
+			<axis>
+				<xyz>0.08204255193030235 -0.030131182246950022 0.996173243732818</xyz>
+			</axis>
+		</joint>
+		<joint type="revolute" name="rev4">
+			<pose>-1.0996732289123297 -1.0565914425832899 0.06188147122634241 -0.12109803363206713 -0.05697349770870265 -1.621249126982524</pose>
+			<child>Arm_2:1</child>
+			<parent>Arm_O:1</parent>
+			<axis>
+				<xyz>0.08204255178949342 -0.030131181153934705 0.9961732437774754</xyz>
+			</axis>
+		</joint>
+		<joint type="revolute" name="rev5">
+			<pose>0.37483437654221946 -0.6395806413466301 -0.05987735915271065 -0.047293519332168334 0.010374769108393106 -0.5061727873224322</pose>
+			<child>Arm_4:1</child>
+			<parent>Arm_2:1</parent>
+			<axis>
+				<xyz>-0.08204255192591861 0.030131181823810343 -0.996173243745978</xyz>
+			</axis>
+		</joint>
+		<joint type="revolute" name="rev6">
+			<pose>0.37257006346524235 -0.6353582767529391 -0.05995840224990962 -0.047293519332168334 0.010374769108393106 -0.5061727873224322</pose>
+			<child>Arm_4:1</child>
+			<parent>Arm_O2:1</parent>
+			<axis>
+				<xyz>-0.08204255196168671 0.0301311821041135 -0.9961732437345538</xyz>
+			</axis>
+		</joint>
+		<joint type="revolute" name="rev7">
+			<pose>0.1508046425100855 0.08863045577972027 -0.01830000426744614 -0.00018686117325014345 0.007012039144670464 0.00027014585632764005</pose>
+			<child>Arm_mid:1</child>
+			<parent>Arm_4:1</parent>
+			<axis>
+				<xyz>-0.08204255191673164 0.030131182235625942 -0.9961732437342785</xyz>
+			</axis>
+		</joint>
+		<joint type="revolute" name="rev8">
+			<pose>0.3895430485799773 -0.6034583047658773 -0.05793267018241606 -0.047293519733237546 0.010374769084930846 -0.5061727873427555</pose>
+			<child>Arm_5:1</child>
+			<parent>Arm_3:1</parent>
+			<axis>
+				<xyz>0.0820425519175152 -0.0301311822243414 0.9961732437345553</xyz>
+			</axis>
+		</joint>
+		<joint type="revolute" name="rev9">
+			<pose>0.3895430485799773 -0.6034583047658773 -0.05793267018241606 -0.047293519733237546 0.010374769084930846 -0.5061727873427555</pose>
+			<child>Arm_5:1</child>
+			<parent>Arm_mid:1</parent>
+			<axis>
+				<xyz>0.08204255191751521 -0.030131182224341403 0.9961732437345553</xyz>
+			</axis>
+		</joint>
+		<joint type="revolute" name="rev10">
+			<pose>-0.28484369027334444 -0.49732362007747755 0.16693321792315313 -1.6026660646549298 -0.026399024503639096 -0.862031097012122</pose>
+			<child>Endeffector:1</child>
+			<parent>Arm_4:1</parent>
+			<axis>
+				<xyz>-0.0820425519259186 0.030131181823810325 -0.9961732437459779</xyz>
+			</axis>
+		</joint>
+		<joint type="revolute" name="rev11">
+			<pose>-0.2793922093706013 -0.5011622650718645 0.1670515589580453 -1.6026660646549298 -0.026399024503639096 -0.862031097012122</pose>
+			<child>Endeffector:1</child>
+			<parent>Arm_5:1</parent>
+			<axis>
+				<xyz>0.08204255191751518 -0.030131182224341403 0.9961732437345552</xyz>
+			</axis>
+		</joint>
+	</model>
+</sdf>
