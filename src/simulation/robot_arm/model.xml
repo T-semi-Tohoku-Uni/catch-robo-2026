@@ -1,0 +1,90 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mujoco model="robot_arm">
+  <compiler angle="radian" meshdir="." autolimits="true" balanceinertia="true" />
+  <option timestep="0.001" integrator="implicitfast" />
+  <default>
+    <joint damping="0.05" armature="0.001" />
+    <geom density="0" friction="0.8 0.1 0.1" />
+  </default>
+  <asset>
+    <mesh name="Endeffector_1" file="meshes/Endeffector.stl" scale="0.001 0.001 0.001" />
+    <mesh name="Arm_2_1" file="meshes/Arm_2.stl" scale="0.001 0.001 0.001" />
+    <mesh name="Arm_3_1" file="meshes/Arm_3.stl" scale="0.001 0.001 0.001" />
+    <mesh name="Arm_4_1" file="meshes/Arm_4.stl" scale="0.001 0.001 0.001" />
+    <mesh name="Arm_5_1" file="meshes/Arm_5.stl" scale="0.001 0.001 0.001" />
+    <mesh name="Arm_mid_1" file="meshes/Arm_mid.stl" scale="0.001 0.001 0.001" />
+    <mesh name="Arm_O_1" file="meshes/Arm_O.stl" scale="0.001 0.001 0.001" />
+    <mesh name="Arm_O2_1" file="meshes/Arm_O2.stl" scale="0.001 0.001 0.001" />
+    <mesh name="base_link_1" file="meshes/base_link.stl" scale="0.001 0.001 0.001" />
+    <mesh name="rot_table_1_part0" file="mjcf_meshes/rot_table_1_part0.stl" scale="0.001 0.001 0.001" />
+    <mesh name="rot_table_1_part1" file="mjcf_meshes/rot_table_1_part1.stl" scale="0.001 0.001 0.001" />
+  </asset>
+  <worldbody>
+    <body name="base_link:1" pos="0.89981864411 0.017700019056 0.107535661397" quat="0.717435226209 0.695280049297 -0.0187693156923 -0.0389879729177">
+      <inertial pos="-0.897186529899 -0.124412806016 0.0879264297402" mass="1.72991063747" fullinertia="0.011197441377 0.021219684933 0.0104365684398 -0.000351190120081 -7.00953717111e-05 0.000355369561151" />
+      <geom name="base_link_1_visual" type="mesh" mesh="base_link_1" contype="0" conaffinity="0" group="1" />
+      <geom name="base_link_1_collision" type="mesh" mesh="base_link_1" group="3" />
+      <body name="rot_table:1" pos="0 0 0" quat="1 0 0 0">
+        <joint name="rev0" type="hinge" pos="-0.891242556398 -0.135126685394 0.0971199603326" axis="-0.0272835727579 0.999100354335 0.0324667310617" />
+        <inertial pos="-0.907980337355 -0.0710843817899 0.0906940740744" mass="1.98490750034" fullinertia="0.00613232477405 0.00885329756643 0.00589800791021 0.000827150335066 -2.21683073198e-05 -1.25872842421e-06" />
+        <geom name="rot_table_1_visual_part0" type="mesh" mesh="rot_table_1_part0" contype="0" conaffinity="0" group="1" />
+        <geom name="rot_table_1_collision_part0" type="mesh" mesh="rot_table_1_part0" group="3" />
+        <geom name="rot_table_1_visual_part1" type="mesh" mesh="rot_table_1_part1" contype="0" conaffinity="0" group="1" />
+        <geom name="rot_table_1_collision_part1" type="mesh" mesh="rot_table_1_part1" group="3" />
+        <body name="Arm_O2:1" pos="-1.2245494418 0.831055125907 0.127376901359" quat="0.604736706316 0.0681828554981 -0.0260341985765 0.793074293338">
+          <joint name="rev1" type="hinge" pos="-1.01247907785 -0.0565966269158 0.111913860204" axis="-0.0890337812108 0.0299209759056 -0.995579088272" />
+          <inertial pos="-0.703277717804 0.0668764182635 0.0880276384874" mass="0.621998080997" fullinertia="0.00406280734636 0.0124190210259 0.0150197805153 -0.0061629687946 0.000998859294939 0.000574473295963" />
+          <geom name="Arm_O2_1_visual" type="mesh" mesh="Arm_O2_1" contype="0" conaffinity="0" group="1" />
+          <geom name="Arm_O2_1_collision" type="mesh" mesh="Arm_O2_1" group="3" />
+        </body>
+        <body name="Arm_O:1" pos="-0.00922483592863 0.105618407978 0.0102830672167" quat="0.998907134086 0.00408237460653 -0.00490228066001 0.0463016126494">
+          <joint name="rev2" type="hinge" pos="-0.891462054364 -0.15759949684 0.0829164564266" axis="0.0890338092261 -0.0299209846512 0.995579085504" />
+          <inertial pos="-0.991514226707 -0.0391202629042 0.0960718213504" mass="0.197512138512" fullinertia="0.00027158978385 0.000496488400063 0.000377319441486 0.0001270569607 4.86572781063e-05 -2.36033819625e-05" />
+          <geom name="Arm_O_1_visual" type="mesh" mesh="Arm_O_1" contype="0" conaffinity="0" group="1" />
+          <geom name="Arm_O_1_collision" type="mesh" mesh="Arm_O_1" group="3" />
+          <body name="Arm_2:1" pos="-1.0044889681 1.02304589384 0.120577079215" quat="0.719413739908 0.0618412627424 -0.0207825708858 0.69151110895">
+            <joint name="rev4" type="hinge" pos="-1.17021832799 -0.155897181426 0.118093310232" axis="0.0890338091748 -0.0299209845279 0.995579085512" />
+            <inertial pos="-0.849196792293 0.156969226358 0.087614572279" mass="0.37625201549" fullinertia="0.00473449432388 0.00664063494632 0.0108524300064 -0.0053292339533 5.04611903881e-05 6.84448361568e-05" />
+            <geom name="Arm_2_1_visual" type="mesh" mesh="Arm_2_1" contype="0" conaffinity="0" group="1" />
+            <geom name="Arm_2_1_collision" type="mesh" mesh="Arm_2_1" group="3" />
+            <body name="Arm_4:1" pos="-0.689637201213 -0.427159400879 0.0488358963271" quat="0.847047010708 -0.0473230701007 0.0159035409745 -0.529168183163">
+              <joint name="rev5" type="hinge" pos="-0.462619887564 -0.313724287962 0.0527981824245" axis="-0.0890338091809 0.0299209846075 -0.995579085509" />
+              <inertial pos="-0.505363748 0.174958786562 0.061902405242" mass="0.387272463033" fullinertia="0.0075007045867 0.00613836052955 0.0128697021122 0.00638619892804 0.00062651171601 -0.000717688308407" />
+              <geom name="Arm_4_1_visual" type="mesh" mesh="Arm_4_1" contype="0" conaffinity="0" group="1" />
+              <geom name="Arm_4_1_collision" type="mesh" mesh="Arm_4_1" group="3" />
+              <body name="Arm_mid:1" pos="0.212471308545 -0.627680216455 -0.0378653392182" quat="0.967891793696 -0.0223801802505 0.00752115446968 -0.250255939918">
+                <joint name="rev7" type="hinge" pos="-0.741197681377 -0.0560825532013 0.0660009317275" axis="-0.089033809137 0.0299209845871 -0.995579085514" />
+                <inertial pos="-1.06392461049 0.382080588411 0.122678183845" mass="0.034917046815" fullinertia="3.93907430897e-05 6.71750735714e-05 2.99433373961e-05 -7.2867719971e-07 -9.763521815e-07 1.1851241553e-06" />
+                <geom name="Arm_mid_1_visual" type="mesh" mesh="Arm_mid_1" contype="0" conaffinity="0" group="1" />
+                <geom name="Arm_mid_1_collision" type="mesh" mesh="Arm_mid_1" group="3" />
+              </body>
+              <body name="Endeffector:1" pos="0.290346916575 -0.398244688898 0.479522527189" quat="0.70017599617 0.55201799618 -0.433248857243 0.131624974751">
+                <joint name="rev10" type="hinge" pos="-0.789959839572 0.247832474702 0.265967834653" axis="-0.810016453821 -0.586406900825 -0.000539633665813" />
+                <inertial pos="-0.719086060671 0.134206130468 -0.0144960067993" mass="0.312339823004" fullinertia="0.000254182055701 0.000210391123502 0.000361480521884 6.66382277145e-05 -4.62427692096e-08 -1.56607314425e-07" />
+                <geom name="Endeffector_1_visual" type="mesh" mesh="Endeffector_1" contype="0" conaffinity="0" group="1" />
+                <geom name="Endeffector_1_collision" type="mesh" mesh="Endeffector_1" group="3" />
+              </body>
+            </body>
+          </body>
+        </body>
+        <body name="Arm_3:1" pos="-0.955505010454 0.811309417098 0.109561525991" quat="0.690221979625 0.0619613506345 -0.0241471960478 0.720535441732">
+          <joint name="rev3" type="hinge" pos="-0.943058844233 -0.0285493409521 0.101605995615" axis="0.089033809165 -0.0299209845977 0.995579085511" />
+          <inertial pos="-0.627479870033 0.133100028173 0.0737426789098" mass="0.34747699511" fullinertia="0.00386084949697 0.00513407476208 0.00862567480986 -0.00425416527291 0.000302433074182 0.000277083764991" />
+          <geom name="Arm_3_1_visual" type="mesh" mesh="Arm_3_1" contype="0" conaffinity="0" group="1" />
+          <geom name="Arm_3_1_collision" type="mesh" mesh="Arm_3_1" group="3" />
+          <body name="Arm_5:1" pos="-0.498495468635 -0.303931568957 0.0354457211945" quat="0.849940672775 -0.046909991295 0.015764720627 -0.524549119782">
+            <joint name="rev8" type="hinge" pos="-0.447433746461 -0.277747426704 0.0525213413996" axis="0.089033809152 -0.0299209845948 0.995579085512" />
+            <inertial pos="-0.346074752642 0.0887142809683 0.0449979532884" mass="0.239152358496" fullinertia="0.00280950692705 0.00231822097372 0.00463105918943 0.00229511725242 0.000232414445215 -0.000273360288498" />
+            <geom name="Arm_5_1_visual" type="mesh" mesh="Arm_5_1" contype="0" conaffinity="0" group="1" />
+            <geom name="Arm_5_1_collision" type="mesh" mesh="Arm_5_1" group="3" />
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <equality>
+    <connect name="rev6_closed_loop" body1="Arm_O2:1" body2="Arm_4:1" anchor="-0.00746759125434 -0.00665094586192 -1.41259226538e-12" solref="0.02 1" solimp="0.9 0.95 0.001" />
+    <connect name="rev9_closed_loop" body1="Arm_mid:1" body2="Arm_5:1" anchor="0.00350037948798 -0.00936735519985 9.36528632423e-13" solref="0.02 1" solimp="0.9 0.95 0.001" />
+    <connect name="rev11_closed_loop" body1="Arm_5:1" body2="Endeffector:1" anchor="0.00350037948798 -0.00936735519985 9.36695165876e-13" solref="0.02 1" solimp="0.9 0.95 0.001" />
+  </equality>
+</mujoco>

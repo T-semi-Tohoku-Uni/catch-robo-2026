@@ -47,7 +47,7 @@ def generate_launch_description():
             '-file', str(arm_sdf_path),
             '-x', '0.0',
             '-y', '0.0',
-            '-z', '0.1',
+            '-z', '1.0',
         ],
         output='screen',
     )
