@@ -21,6 +21,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--robot-pos", type=float, nargs=3, metavar=("X", "Y", "Z"))
+    parser.add_argument("--robot-scale", type=float, default=1.0)
     parser.add_argument("--backend", choices=("cpu", "gpu"), default="gpu")
     parser.add_argument("--steps", type=int, default=240)
     parser.add_argument("--viewer", action="store_true")
@@ -69,6 +70,7 @@ def main() -> int:
     robot = scene.add_entity(
         gs.morphs.MJCF(
             file=str(args.model),
+            scale=args.robot_scale,
             collision=args.collision,
             visualization=args.visualization,
             **robot_kwargs,
@@ -81,6 +83,7 @@ def main() -> int:
     print(f"genesis backend requested: {args.backend}")
     print(f"entity: {type(robot).__name__}")
     print(f"field: {args.field}")
+    print(f"robot scale: {args.robot_scale}")
     print(f"steps: {args.steps}")
     if args.hold:
         print("holding viewer; press Ctrl-C to quit")

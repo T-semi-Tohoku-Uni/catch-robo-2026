@@ -1,59 +1,59 @@
+from pathlib import Path
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, EnvironmentVariable
-from launch_ros.actions import Node
-import launch_ros
-import re
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.substitutions import LaunchConfiguration
 
-from pathlib import Path
-import os
 
 def generate_launch_description():
+    core_path = Path(get_package_share_directory("core"))
+    ws_root = core_path.parents[3]
+    runner = ws_root / "src" / "simulation" / "script" / "run_genesis_mjcf.py"
 
-    core_path = get_package_share_directory('core')
-    simulation_path = get_package_share_directory('simulation')
+    backend = LaunchConfiguration("backend")
+    steps = LaunchConfiguration("steps")
+    robot_x = LaunchConfiguration("robot_x")
+    robot_y = LaunchConfiguration("robot_y")
+    robot_z = LaunchConfiguration("robot_z")
+    robot_scale = LaunchConfiguration("robot_scale")
 
-    ws_root = Path(core_path).parents[3]
-    field_path = ws_root / 'src' / 'simulation'
-
-    arm_sdf_path = Path(simulation_path) / 'robot_arm' / 'model.sdf'
-
-    models_path_env = SetEnvironmentVariable(
-        name='IGN_GAZEBO_RESOURCE_PATH',
-        value=[
-            EnvironmentVariable('IGN_GAZEBO_RESOURCE_PATH', default_value=''),
-            ':',
-            field_path,
+    genesis = ExecuteProcess(
+        cmd=[
+            "uv",
+            "run",
+            "python",
+            str(runner),
+            "--backend",
+            backend,
+            "--field",
+            "--visualization",
+            "--viewer",
+            "--robot-pos",
+            robot_x,
+            robot_y,
+            robot_z,
+            "--robot-scale",
+            robot_scale,
+            "--steps",
+            steps,
+            "--hold",
         ],
+        cwd=str(ws_root),
+        additional_env={
+            "MPLCONFIGDIR": "/tmp/matplotlib",
+        },
+        output="screen",
     )
 
-    world_file_path = os.path.join(
-        simulation_path, "world", "field.world"
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument("backend", default_value="gpu"),
+            DeclareLaunchArgument("steps", default_value="0"),
+            DeclareLaunchArgument("robot_x", default_value="0.0"),
+            DeclareLaunchArgument("robot_y", default_value="0.0"),
+            DeclareLaunchArgument("robot_z", default_value="0.27"),
+            DeclareLaunchArgument("robot_scale", default_value="10.0"),
+            genesis,
+        ]
     )
-
-    gazebo = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([os.path.join(
-            get_package_share_directory('ros_gz_sim'), 'launch'), '/gz_sim.launch.py']),
-        launch_arguments=[('gz_args', [f' -r 4 {world_file_path}'])]
-    )
-
-    gz_spawn_entity = Node(
-        package='ros_gz_sim',
-        executable='create',
-        arguments=[
-            '-name', 'robot_arm',
-            '-file', str(arm_sdf_path),
-            '-x', '0.0',
-            '-y', '0.0',
-            '-z', '1.0',
-        ],
-        output='screen',
-    )
-
-    return LaunchDescription([
-        models_path_env,
-        gazebo,
-        gz_spawn_entity
-    ])
