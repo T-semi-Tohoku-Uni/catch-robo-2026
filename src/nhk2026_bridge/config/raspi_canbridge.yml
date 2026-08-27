@@ -1,0 +1,20 @@
+/**:
+  ros__parameters:
+    ifname: "can0"
+
+   
+    pub_int_bridge_topic: ["test_i_p"]
+    pub_int_bridge_canid: [0x401]
+  
+
+  
+    sub_int_bridge_topic: ["test_i_s"]
+    sub_int_bridge_canid: [0x404]
+   
+    add_cmd_vel: false
+    cmd_vel_canid: 0x100        # add_cmd_velがfalseの場合無視
+    cmd_vel_topic_name: cmd_vel # add_cmd_velがfalseの場合無視
+
+    add_cmd_vel_feedback: false
+    cmd_vel_feedback_canid: 0x101                   # add_cmd_vel_feedbackがfalseの場合無視
+    cmd_vel_feedback_topic_name: "cmd_vel_feedback" # add_cmd_vel_feedbackがfalseの場合無視
