@@ -76,7 +76,7 @@ def _ensure_can0_up(context, *args, **kwargs):
     
 def generate_launch_description():
     pkg_share = get_package_share_directory('nhk2026_bridge')
-    canid_file = os.path.join(pkg_share, 'config', 'nhk206_canbridge_r2.yml')
+    canid_file = os.path.join(pkg_share, 'config', 'raspi_canbridge.yml')
 
     name_space = ''
     ld = LaunchDescription()
