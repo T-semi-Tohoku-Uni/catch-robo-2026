@@ -1,0 +1,3 @@
+[submodule "src/CatchRobo2026_kinematics"]
+	path = src/CatchRobo2026_kinematics
+	url = https://github.com/ryuzou/CatchRobo2023_inverse-kinematics.git
