@@ -1,0 +1,29 @@
+/**:
+  ros__parameters:
+    ifname: "can0" 
+
+    # CAN -> ROS (ブリッジがPublishし、joint_state_publisher_dansaがSubscribeする)
+    pub_float_bridge_topic: ["nakamura_hand_feedback","nakamura_vertical_feedback","kaneko_arm_feedback","kaneko_lift_feedback"]
+    pub_float_bridge_canid: [0x201,0x202,0x211,0x221] 
+
+    # pub_int_bridge_topic: ["test_i_p"]
+    # pub_int_bridge_canid: [0x401]
+    # pub_bytes_bridge_topic: ["test_b_p"]
+    # pub_bytes_bridge_canid: [0x402]
+
+    # ROS -> CAN (dansa_arm_action_serverがPublishし、ブリッジがSubscribeする)
+    sub_float_bridge_topic: ["nakamura_hand","nakamura_vertical","kaneko_arm","kaneko_lift"]
+    sub_float_bridge_canid: [0x301,0x302,0x311,0x321] 
+
+    sub_int_bridge_topic: ["vacuum","outrigger","wall_touch","hirapata"]
+    sub_int_bridge_canid: [0x500,0x501,0x502,0x503]
+    # sub_bytes_bridge_topic: ["test_b_s"]
+    # sub_bytes_bridge_canid: [0x405]
+
+    add_cmd_vel: true
+    cmd_vel_canid: 0x100        # add_cmd_velがfalseの場合無視
+    cmd_vel_topic_name: "cmd_vel" # add_cmd_velがfalseの場合無視
+
+    add_cmd_vel_feedback: false
+    cmd_vel_feedback_canid: 0x101                   # add_cmd_vel_feedbackがfalseの場合無視
+    cmd_vel_feedback_topic_name: "cmd_vel_feedback" # add_cmd_vel_feedbackがfalseの場合無視
