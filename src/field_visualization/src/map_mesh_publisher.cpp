@@ -35,7 +35,7 @@ private:
 
     marker.pose.position.x = 0.650;
     marker.pose.position.y = 0.0;
-    marker.pose.position.z = -0.028 + 0.228;
+    marker.pose.position.z = -0.028;
     marker.pose.orientation.x = 0.0;
     marker.pose.orientation.y = 0.0;
     marker.pose.orientation.z = 0.0;

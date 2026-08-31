@@ -15,6 +15,8 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/InverseKinematics.srv"
+  "srv/Waypoint.srv"
+  "srv/GenerateRoute.srv"
 )
 
 if(BUILD_TESTING)
