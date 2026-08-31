@@ -12,6 +12,9 @@ find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 
+# アクション通信用の依存関係を追加
+find_package(rclcpp_action REQUIRED) # 追加: アクション通信用
+
 # 3D経路生成ノードの追加依存関係
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -19,15 +22,19 @@ find_package(catchrobo2026_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
+# 運動学ライブラリの依存関係を追加 (別パッケージとして存在する場合)
+find_package(inverse_kinematics_package REQUIRED)
+
 # 実行ファイルの追加
 add_executable(path_generator_3d src/path_generator_3d.cpp)
+add_executable(path_follower_node src/path_follower_node.cpp) # 追加: 経路追従ノード
 
 # インクルードディレクトリの設定 (Eigen3用)
 target_include_directories(path_generator_3d PUBLIC
   ${EIGEN3_INCLUDE_DIRS}
 )
 
-# 依存パッケージのリンク
+# 依存パッケージのリンク (path_generator_3d)
 ament_target_dependencies(path_generator_3d
   rclcpp
   std_msgs
@@ -37,10 +44,26 @@ ament_target_dependencies(path_generator_3d
   tf2_geometry_msgs
   catchrobo2026_msgs
   visualization_msgs
+  inverse_kinematics_package
+)
+
+# 依存パッケージのリンク (path_follower_node) # 追加: 経路追従ノード用のリンク設定
+ament_target_dependencies(path_follower_node
+  rclcpp
+  rclcpp_action
+  std_msgs
+  geometry_msgs
+  nav_msgs
+  tf2
+  tf2_geometry_msgs
+  catchrobo2026_msgs
+  inverse_kinematics_package
 )
 
 # ros2 run 等で実行できるようにインストール
-install(TARGETS path_generator_3d
+install(TARGETS 
+  path_generator_3d
+  path_follower_node # 追加: インストール対象に指定
   DESTINATION lib/${PROJECT_NAME}
 )
 

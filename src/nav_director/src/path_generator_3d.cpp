@@ -1,6 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <std_msgs/msg/float32_multi_array.hpp> // 追加: ジョイントメッセージ用
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <unsupported/Eigen/Splines>
@@ -9,9 +10,10 @@
 #include <vector>
 #include <visualization_msgs/msg/marker_array.hpp>
 
-// 独自メッセージパッケージのヘッダー
+// 独自メッセージパッケージと運動学ライブラリのヘッダー
 #include <catchrobo2026_msgs/srv/waypoint.hpp>
 #include <catchrobo2026_msgs/srv/generate_route.hpp>
+#include "ros2_inverse_kinematics/robot_kinematics.h" // 追加: 運動学計算用
 
 using WaypointSrv = catchrobo2026_msgs::srv::Waypoint;
 using GenRouteSrv = catchrobo2026_msgs::srv::GenerateRoute;
@@ -23,12 +25,13 @@ struct Point3D {
 class PathGenerator3D : public rclcpp::Node {
 public:
     PathGenerator3D() : Node("path_generator_3d") {
-        // パブリッシャーとサブスクライバーの初期化
+        // パブリッシャーの初期化
         pub_path_ = this->create_publisher<nav_msgs::msg::Path>("route", 10);
         pub_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("path_orientations", 10);
         
-        sub_pose_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
-            "current_pose", 10, std::bind(&PathGenerator3D::poseCallback, this, std::placeholders::_1));
+        // サブスクライバーの初期化 (現在位置のPoseではなく、ジョイント角度を受信するように変更)
+        sub_joints_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
+            "current_joints", 10, std::bind(&PathGenerator3D::jointCallback, this, std::placeholders::_1));
 
         // サービスの初期化
         srv_waypoint_ = this->create_service<WaypointSrv>(
@@ -40,22 +43,32 @@ public:
         cur_pose_ = {0.0, 0.0, 0.0, 0.0};
         sample_resolution_ = 50; // 各ウェイポイント間の分割数
         
-        RCLCPP_INFO(this->get_logger(), "3D Path Generator Initialized (with automatic point densification).");
+        RCLCPP_INFO(this->get_logger(), "3D Path Generator Initialized (with Forward Kinematics).");
     }
 
 private:
-    void poseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
-        // 現在地を常に更新
-        cur_pose_.x = msg->pose.position.x;
-        cur_pose_.y = msg->pose.position.y;
-        cur_pose_.z = msg->pose.position.z;
+    // 変更: ジョイント値から順運動学を用いて現在地を計算するコールバック
+    void jointCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
+        if (msg->data.size() < 4) {
+            RCLCPP_WARN(this->get_logger(), "Received joint data size is less than 4.");
+            return;
+        }
+
+        float joint_angles[4];
+        for (int i = 0; i < 4; ++i) {
+            joint_angles[i] = msg->data[i];
+        }
+
+        float current_posrot[6] = {0.0};
         
-        // 現在の姿勢(クォータニオン)からヨー角(PHI)を抽出
-        tf2::Quaternion q;
-        tf2::fromMsg(msg->pose.orientation, q);
-        double roll, pitch, yaw;
-        tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
-        cur_pose_.phi = yaw;
+        // 順運動学で手先位置姿勢を計算
+        kin_.forward_kinematics(current_posrot, joint_angles);
+
+        // cur_pose_ を更新 (X, Y, Z, PHI)
+        cur_pose_.x = current_posrot[0];
+        cur_pose_.y = current_posrot[1];
+        cur_pose_.z = current_posrot[2];
+        cur_pose_.phi = current_posrot[3]; // PHI (Yawに相当)
     }
 
     void waypointCallback(const std::shared_ptr<WaypointSrv::Request> req,
@@ -238,10 +251,11 @@ private:
     Point3D cur_pose_;
     std::vector<Point3D> waypoints_;
     int sample_resolution_;
+    robot_kinematics kin_; // 追加: 運動学インスタンス
 
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_path_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_marker_;
-    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_pose_;
+    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr sub_joints_; // 変更: PoseStampedから変更
     rclcpp::Service<WaypointSrv>::SharedPtr srv_waypoint_;
     rclcpp::Service<GenRouteSrv>::SharedPtr srv_gen_route_;
 };
