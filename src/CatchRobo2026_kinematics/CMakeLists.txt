@@ -7,16 +7,21 @@ endif()
 
 # find dependencies
 find_package(ament_cmake_auto REQUIRED)
-ament_auto_find_build_dependencies()
+find_package(visualization_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
+ament_auto_find_build_dependencies()
 ament_auto_add_executable(inverse_kinematics_node 
   src/inverse_kinematics_node.cpp
   src/robot_kinematics.cpp
 )
 
-install(TARGETS
-        inverse_kinematics_node
-        DESTINATION lib/${PROJECT_NAME})
+ament_target_dependencies(inverse_kinematics_node
+  rclcpp
+  catchrobo2026_msgs
+  visualization_msgs
+  geometry_msgs
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

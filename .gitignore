@@ -2,6 +2,8 @@
 
 *.dae
 *.stl
+*.obj
+*.mtl
 build/
 install/
 log/

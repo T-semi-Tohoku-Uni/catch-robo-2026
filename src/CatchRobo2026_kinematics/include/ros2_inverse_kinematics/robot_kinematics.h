@@ -73,6 +73,7 @@ public:
     robot_kinematics();
     void inverse_kinematics(float*, float*);
     void forward_kinematics(float*, float*);
+    void get_joint_positions(float *joint_angle, float positions[5][3]);
 
 
 
