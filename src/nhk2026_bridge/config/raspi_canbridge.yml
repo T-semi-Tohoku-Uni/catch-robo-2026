@@ -5,11 +5,15 @@
    
     pub_int_bridge_topic: ["test_i_p"]
     pub_int_bridge_canid: [0x401]
+
   
 
   
     sub_int_bridge_topic: ["test_i_s"]
     sub_int_bridge_canid: [0x404]
+
+    sub_float_bridge_topic: ["target_joint_angles"]
+    sub_float_bridge_canid: [0x200]
    
     add_cmd_vel: false
     cmd_vel_canid: 0x100        # add_cmd_velがfalseの場合無視
