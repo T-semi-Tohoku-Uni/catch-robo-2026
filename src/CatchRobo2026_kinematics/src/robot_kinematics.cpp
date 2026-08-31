@@ -35,10 +35,10 @@
      *
      */
 
-#include "../test/include/robot_kinematics.h"
-
+#include "../include/ros2_inverse_kinematics/robot_kinematics.h"
 #include <cmath>
 #include <iostream>
+
 
 /*
  * void posrot_sum(float *posrot0, float *posrot1, float *posrot2){
@@ -133,4 +133,34 @@ void robot_kinematics::inverse_kinematics(float *f_posrot, float *joint_angle) {
     joint_angle[2] = th2_ + th2__;
 
     joint_angle[3] = _posrot[PHI] - joint_angle[0];
+}
+
+void robot_kinematics::get_joint_positions(float *joint_angle, float positions[5][3]) {
+    // p0: ロボットの原点(Base)
+    positions[0][X] = 0.0f;
+    positions[0][Y] = 0.0f;
+    positions[0][Z] = 0.0f;
+
+    // p1: リンク0の終点
+    float lxy1 = link_len[0] * std::sin(joint_angle[1]);
+    positions[1][X] = lxy1 * (-1) * std::sin(joint_angle[0]);
+    positions[1][Y] = lxy1 * std::cos(joint_angle[0]);
+    positions[1][Z] = link_len[0] * std::cos(joint_angle[1]);
+
+    // p2: リンク1の終点
+    float lxy2 = lxy1 + link_len[1] * std::sin(joint_angle[2]);
+    positions[2][X] = lxy2 * (-1) * std::sin(joint_angle[0]);
+    positions[2][Y] = lxy2 * std::cos(joint_angle[0]);
+    positions[2][Z] = positions[1][Z] + link_len[1] * std::cos(joint_angle[2]);
+
+    // p3: リンク2の終点
+    float lxy3 = lxy2 + link_len[2];
+    positions[3][X] = lxy3 * (-1) * std::sin(joint_angle[0]);
+    positions[3][Y] = lxy3 * std::cos(joint_angle[0]);
+    positions[3][Z] = positions[2][Z];
+
+    // p4: リンク3の終点（エンドエフェクタ）
+    positions[4][X] = positions[3][X];
+    positions[4][Y] = positions[3][Y];
+    positions[4][Z] = positions[3][Z] - link_len[3];
 }

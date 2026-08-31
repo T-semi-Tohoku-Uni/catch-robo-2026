@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(core)
+project(field_visualization)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -7,15 +7,28 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-# uncomment the following section in order to fill in
-# further dependencies manually.
-# find_package(<dependency> REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(visualization_msgs REQUIRED)
 
+# (上部の find_package群の直下あたりに追加)
+find_package(rclcpp REQUIRED)
+find_package(visualization_msgs REQUIRED)
+
+# 実行ファイルの追加
+add_executable(map_mesh_publisher src/map_mesh_publisher.cpp)
+ament_target_dependencies(map_mesh_publisher rclcpp visualization_msgs)
+
+# launchディレクトリとrvizディレクトリのインストール指定
 install(DIRECTORY
-  models
+  launch
+  rviz
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(TARGETS
+  map_mesh_publisher
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
