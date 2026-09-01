@@ -107,25 +107,34 @@ private:
             // 1. 順運動学で現在地を計算
             kin_.forward_kinematics(current_posrot, local_joints);
             
-            double cx = current_posrot[0]; // X
-            double cy = current_posrot[1]; // Y
-            double cz = current_posrot[2]; // Z
+            // cx, cy, cz は [mm] 単位
+            double cx = current_posrot[0]; 
+            double cy = current_posrot[1]; 
+            double cz = current_posrot[2]; 
 
-            // 2. 0.1m先の目標経路探索
+            // 2. 100mm (0.1m) 先の目標経路探索
             bool found_target = false;
             for (size_t i = current_path_index_; i < local_path.poses.size(); ++i) {
                 const auto& pose = local_path.poses[i].pose;
-                double dx = pose.position.x - cx;
-                double dy = pose.position.y - cy;
-                double dz = pose.position.z - cz;
                 
-                // 3次元空間でのユークリッド距離 $d = \sqrt{dx^2 + dy^2 + dz^2}$ を計算
+                // ターゲット座標を [m] から [mm] に変換
+                double target_x_mm = pose.position.x * 1000.0;
+                double target_y_mm = pose.position.y * 1000.0;
+                double target_z_mm = pose.position.z * 1000.0;
+
+                // [mm] 同士で差分を計算
+                double dx = target_x_mm - cx;
+                double dy = target_y_mm - cy;
+                double dz = target_z_mm - cz;
+                
+                // 3次元空間でのユークリッド距離 (単位: mm) を計算
                 double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-                if (distance >= 0.1) {
-                    target_posrot[0] = pose.position.x;
-                    target_posrot[1] = pose.position.y;
-                    target_posrot[2] = pose.position.z;
+                // 距離が 100mm (0.1m) 以上離れたポイントを次の目標とする
+                if (distance >= 100.0) {
+                    target_posrot[0] = target_x_mm;
+                    target_posrot[1] = target_y_mm;
+                    target_posrot[2] = target_z_mm;
 
                     // クォータニオンからPHI（ヨー角）を取得
                     tf2::Quaternion q;
@@ -146,9 +155,11 @@ private:
             // 目標が見つからなかった場合（終点到達など）は最終ウェイポイントを維持
             if (!found_target) {
                 const auto& last_pose = local_path.poses.back().pose;
-                target_posrot[0] = last_pose.position.x;
-                target_posrot[1] = last_pose.position.y;
-                target_posrot[2] = last_pose.position.z;
+                
+                // 最終ターゲット座標も [m] から [mm] に変換
+                target_posrot[0] = last_pose.position.x * 1000.0;
+                target_posrot[1] = last_pose.position.y * 1000.0;
+                target_posrot[2] = last_pose.position.z * 1000.0;
                 
                 tf2::Quaternion q;
                 tf2::fromMsg(last_pose.orientation, q);

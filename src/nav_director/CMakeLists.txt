@@ -28,6 +28,7 @@ find_package(inverse_kinematics_package REQUIRED)
 # 実行ファイルの追加
 add_executable(path_generator_3d src/path_generator_3d.cpp)
 add_executable(path_follower_node src/path_follower_node.cpp) # 追加: 経路追従ノード
+add_executable(dummy_robot_node src/dummy_robot_node.cpp)   # 追加: ダミーロボットノード
 
 # インクルードディレクトリの設定 (Eigen3用)
 target_include_directories(path_generator_3d PUBLIC
@@ -60,11 +61,26 @@ ament_target_dependencies(path_follower_node
   inverse_kinematics_package
 )
 
+ament_target_dependencies(dummy_robot_node
+  rclcpp
+  std_msgs
+  geometry_msgs         # 追加
+  tf2                   # 追加
+  tf2_geometry_msgs     # 追加
+  inverse_kinematics_package # 追加
+)
+
 # ros2 run 等で実行できるようにインストール
 install(TARGETS 
   path_generator_3d
-  path_follower_node # 追加: インストール対象に指定
+  path_follower_node
+  dummy_robot_node # 追加: インストール対象に指定
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY
+  launch
+  DESTINATION share/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)

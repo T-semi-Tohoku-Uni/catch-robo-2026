@@ -213,9 +213,9 @@ private:
             geometry_msgs::msg::PoseStamped pose;
             pose.header = path_msg.header;
             
-            pose.pose.position.x = path_points[i].x;
-            pose.pose.position.y = path_points[i].y;
-            pose.pose.position.z = path_points[i].z;
+            pose.pose.position.x = path_points[i].x/1000;
+            pose.pose.position.y = path_points[i].y/1000;
+            pose.pose.position.z = path_points[i].z/1000;
 
             tf2::Quaternion q;
             q.setRPY(0, 0, path_points[i].phi);
