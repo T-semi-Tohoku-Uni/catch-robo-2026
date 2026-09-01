@@ -35,11 +35,13 @@ private:
 
     marker.pose.position.x = 0.650;
     marker.pose.position.y = 0.0;
-    marker.pose.position.z = -0.028 + 0.228;
+    // The current field frame uses the field surface as z = 0.  The former
+    // 228 mm offset belonged to the old robot-origin convention.
+    marker.pose.position.z = -0.028;
     marker.pose.orientation.x = 0.0;
     marker.pose.orientation.y = 0.0;
     marker.pose.orientation.z = 0.0;
-    marker.pose.orientation.w = 0.0;
+    marker.pose.orientation.w = 1.0;
 
     marker.scale.x = 1.0;
     marker.scale.y = 1.0;
