@@ -12,9 +12,14 @@ find_package(ament_cmake REQUIRED)
 # find_package(<dependency> REQUIRED)
 
 find_package(rosidl_default_generators REQUIRED)
+find_package(action_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/InverseKinematics.srv"
+  "srv/Waypoint.srv"
+  "srv/GenerateRoute.srv"
+  "action/FollowRoute.action"      # 追加: 新しいアクションファイル
+  DEPENDENCIES action_msgs
 )
 
 if(BUILD_TESTING)
