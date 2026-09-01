@@ -26,11 +26,11 @@ public:
 
         // 4. IK計算をリクエストするタイマー (例: 50ms = 20Hz)
         ik_timer_ = this->create_wall_timer(
-            50ms, std::bind(&JoyControllerNode::ik_timer_callback, this));
+            5ms, std::bind(&JoyControllerNode::ik_timer_callback, this));
 
         // 5. 【追加】一定周期でパブリッシュを行うタイマー (例: 20ms = 50Hz)
         publish_timer_ = this->create_wall_timer(
-            20ms, std::bind(&JoyControllerNode::publish_timer_callback, this));
+            10ms, std::bind(&JoyControllerNode::publish_timer_callback, this));
 
         // 目標座標の初期値
         target_pose_[0] = 600.0f;  // X
@@ -70,7 +70,7 @@ private:
         target_pose_[0] += vel_x_ * pos_gain;
         target_pose_[1] += vel_y_ * pos_gain;
         target_pose_[2] += vel_z_ * pos_gain;
-        // target_pose_[3] += vel_phi_ * rot_gain;
+        target_pose_[3] += vel_phi_ * rot_gain;
         // target_pose_[4] += vel_theta_ * rot_gain;
         // target_pose_[5] += vel_psi_ * rot_gain;
         RCLCPP_INFO(this->get_logger(), "Current Pose -> X: %.2f, Y: %.2f, Z: %.2f", target_pose_[0], target_pose_[1], target_pose_[2]);
