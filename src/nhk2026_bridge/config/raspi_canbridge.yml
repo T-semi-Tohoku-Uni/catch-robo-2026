@@ -5,6 +5,8 @@
    
     pub_int_bridge_topic: ["test_i_p"]
     pub_int_bridge_canid: [0x401]
+    pub_float_bridge_topic: ["current_joints"]
+    pub_float_bridge_canid: [0x210]
 
   
 
