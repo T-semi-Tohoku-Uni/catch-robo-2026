@@ -35,6 +35,17 @@ target_include_directories(path_generator_3d PUBLIC
   ${EIGEN3_INCLUDE_DIRS}
 )
 
+add_executable(current_kinematics_visualizer src/current_kinematics_visualizer.cpp)
+
+# 依存パッケージのリンク
+ament_target_dependencies(current_kinematics_visualizer
+  rclcpp
+  std_msgs
+  geometry_msgs
+  visualization_msgs
+  inverse_kinematics_package
+)
+
 # 依存パッケージのリンク (path_generator_3d)
 ament_target_dependencies(path_generator_3d
   rclcpp
@@ -74,7 +85,8 @@ ament_target_dependencies(dummy_robot_node
 install(TARGETS 
   path_generator_3d
   path_follower_node
-  dummy_robot_node # 追加: インストール対象に指定
+  dummy_robot_node
+  current_kinematics_visualizer
   DESTINATION lib/${PROJECT_NAME}
 )
 

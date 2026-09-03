@@ -25,5 +25,13 @@ def generate_launch_description():
             executable='joy_controller_node',
             name='joy_controller_node',
             output='screen'
+        ),
+        
+        # 4. 現在のジョイント角度(current_joints)から順運動学を計算し、RViz用のマーカーをパブリッシュするノード
+        Node(
+            package='nav_director',
+            executable='current_kinematics_visualizer',
+            name='current_kinematics_visualizer',
+            output='screen'
         )
     ])
