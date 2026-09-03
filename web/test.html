@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>CatchRobo 2026 Web UI</title>
+    <!-- roslib.js と依存ライブラリの読み込み -->
+    <script src="https://cdn.jsdelivr.net/npm/eventemitter2@6.4.9/lib/eventemitter2.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f9f9f9; }
+        h1 { color: #333; }
+        .panel { background-color: #fff; border: 1px solid #ccc; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .panel h2 { margin-top: 0; color: #0056b3; font-size: 1.2em; }
+        input { margin: 5px 0; padding: 5px; width: 100px; }
+        button { padding: 8px 15px; margin-top: 10px; background-color: #0056b3; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background-color: #004494; }
+        button.cancel { background-color: #dc3545; }
+        button.cancel:hover { background-color: #c82333; }
+        .result { margin-top: 10px; font-weight: bold; color: #333; }
+    </style>
+</head>
+<body>
+
+    <h1>CatchRobo 2026 制御パネル</h1>
+    <p>ROS 2 接続状態: <span id="status" style="color: red; font-weight: bold;">未接続</span></p>
+
+    <!-- 1. ウェイポイント追加 (サービス通信) -->
+    <div class="panel">
+        <h2>1. Waypoint 追加 (Service: /waypoint)</h2>
+        <label>X: <input type="number" id="wp_x" value="600"></label><br>
+        <label>Y: <input type="number" id="wp_y" value="200"></label><br>
+        <label>Z: <input type="number" id="wp_z" value="200"></label><br>
+        <label>Phi: <input type="number" id="wp_phi" value="0.0"></label><br>
+        <button onclick="sendWaypoint()">ウェイポイント追加</button>
+        <div id="wp_result" class="result"></div>
+    </div>
+
+    <!-- 2. 経路生成 (サービス通信) -->
+    <div class="panel">
+        <h2>2. 経路生成 (Service: /generate_route)</h2>
+        <p>追加されたウェイポイントを元に経路を生成します。</p>
+        <button onclick="sendGenerateRoute()">経路を生成する</button>
+        <div id="gen_route_result" class="result"></div>
+    </div>
+
+    <!-- 3. 経路追従 (アクション通信) -->
+    <div class="panel">
+        <h2>3. 経路追従開始 (Action: /follow_route)</h2>
+        <button onclick="sendFollowRouteGoal()">スタート (start: true)</button>
+        <button class="cancel" onclick="cancelFollowRouteGoal()">キャンセル</button>
+        <div class="result">フィードバック: <span id="action_feedback" style="color: #0056b3;">-</span></div>
+        <div class="result">結果: <span id="action_result">-</span></div>
+    </div>
+
+    <script>
+        // ---------------------------------------------------------
+        // 0. ROS 2 との接続設定
+        // ---------------------------------------------------------
+        var ros = new ROSLIB.Ros({
+            url : 'ws://localhost:9090' // rosbridge_serverのアドレスに合わせて変更してください
+        });
+
+        ros.on('connection', function() {
+            document.getElementById('status').innerText = '接続済み';
+            document.getElementById('status').style.color = 'green';
+        });
+
+        ros.on('error', function(error) {
+            document.getElementById('status').innerText = 'エラー (rosbridge_serverが起動しているか確認してください)';
+            document.getElementById('status').style.color = 'red';
+        });
+
+        ros.on('close', function() {
+            document.getElementById('status').innerText = '切断';
+            document.getElementById('status').style.color = 'red';
+        });
+
+        // ---------------------------------------------------------
+        // 1. /waypoint サービスの実装
+        // ---------------------------------------------------------
+        var waypointClient = new ROSLIB.Service({
+            ros : ros,
+            name : '/waypoint',
+            serviceType : 'catchrobo2026_msgs/srv/Waypoint'
+        });
+
+        function sendWaypoint() {
+            var request = new ROSLIB.ServiceRequest({
+                x: parseFloat(document.getElementById('wp_x').value),
+                y: parseFloat(document.getElementById('wp_y').value),
+                z: parseFloat(document.getElementById('wp_z').value),
+                phi: parseFloat(document.getElementById('wp_phi').value)
+            });
+
+            waypointClient.callService(request, function(result) {
+                // ※戻り値のフィールド(success等)は.srvファイルの定義に合わせてください
+                document.getElementById('wp_result').innerText = 
+                    '【送信完了】結果: ' + JSON.stringify(result);
+            });
+        }
+
+        // ---------------------------------------------------------
+        // 2. /generate_route サービスの実装
+        // ---------------------------------------------------------
+        var generateRouteClient = new ROSLIB.Service({
+            ros : ros,
+            name : '/generate_route',
+            serviceType : 'catchrobo2026_msgs/srv/GenerateRoute'
+        });
+
+        function sendGenerateRoute() {
+            // GenerateRoute.srv の Request 定義に合わせてフィールドを追加してください
+            // 引数が不要(Emptyなど)な場合は空のままで動作します
+            var request = new ROSLIB.ServiceRequest({});
+
+            generateRouteClient.callService(request, function(result) {
+                // ※戻り値のフィールド(success等)は.srvファイルの定義に合わせてください
+                document.getElementById('gen_route_result').innerText = 
+                    '【生成完了】結果: ' + JSON.stringify(result);
+            });
+        }
+
+        // ---------------------------------------------------------
+        // 3. /follow_route アクションの実装
+        // ---------------------------------------------------------
+        var followRouteAction = new ROSLIB.ActionClient({
+            ros : ros,
+            serverName : '/follow_route',
+            actionName : 'catchrobo2026_msgs/action/FollowRoute'
+        });
+
+        var currentGoal = null;
+
+        function sendFollowRouteGoal() {
+            // FollowRoute.action の Goal 定義に合わせてフィールドを変更してください
+            currentGoal = new ROSLIB.Goal({
+                actionClient : followRouteAction,
+                goalMessage : {
+                    start: true
+                }
+            });
+
+            currentGoal.on('feedback', function(feedback) {
+                // FollowRoute.action の Feedback 定義に合わせて変更してください
+                document.getElementById('action_feedback').innerText = 
+                    JSON.stringify(feedback);
+            });
+
+            currentGoal.on('result', function(result) {
+                // FollowRoute.action の Result 定義に合わせて変更してください
+                document.getElementById('action_result').innerText = 
+                    JSON.stringify(result);
+                currentGoal = null;
+            });
+
+            currentGoal.send();
+            document.getElementById('action_feedback').innerText = '実行中...';
+            document.getElementById('action_result').innerText = '';
+        }
+
+        function cancelFollowRouteGoal() {
+            if (currentGoal) {
+                currentGoal.cancel();
+                document.getElementById('action_result').innerText = 'キャンセルされました';
+                currentGoal = null;
+            }
+        }
+    </script>
+</body>
+</html>
