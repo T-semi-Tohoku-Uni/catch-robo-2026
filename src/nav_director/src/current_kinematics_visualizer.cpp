@@ -78,10 +78,11 @@ private:
             marker.scale.z = 0.04; // 矢印の頭の長さ
             marker.color.a = 1.0;
             
-            // 色の割り当て（i==1: 緑, i>=2: 青）
-            marker.color.r = (i == 0) ? 1.0 : 0.0;
-            marker.color.g = (i == 1) ? 1.0 : 0.0;
-            marker.color.b = (i >= 2) ? 1.0 : 0.0;
+            // 色の割り当て
+            marker.color.r = 1.0;
+            marker.color.g = 0.5;
+            marker.color.b = 0.0;
+            marker.color.a = 0.8; 
 
             marker_array.markers.push_back(marker);
         }
