@@ -3,16 +3,16 @@
     ifname: "can0"
 
    
-    pub_int_bridge_topic: ["pump_state"]
-    pub_int_bridge_canid: [0x401]
+    pub_int_bridge_topic: ["pump"]
+    pub_int_bridge_canid: [0x404]
     pub_float_bridge_topic: ["current_joints"]
     pub_float_bridge_canid: [0x210]
 
   
 
   
-    sub_int_bridge_topic: ["test_i_s"]
-    sub_int_bridge_canid: [0x404]
+    sub_int_bridge_topic: ["pump_state"]
+    sub_int_bridge_canid: [0x401]
 
     sub_float_bridge_topic: ["target_joint_angles"]
     sub_float_bridge_canid: [0x200]
