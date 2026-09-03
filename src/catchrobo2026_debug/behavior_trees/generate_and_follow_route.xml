@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="GenerateAndFollowRouteTask">
+    <Sequence>
+      <GenerateRoute
+        x="700.0"
+        y="200.0"
+        z="200.0"
+        phi="0.0"
+        success="{route_generated}"/>
+      <FollowRoute
+        start="true"
+        distance_remaining="{distance_remaining}"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

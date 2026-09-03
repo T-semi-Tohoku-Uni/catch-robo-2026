@@ -558,7 +558,8 @@ inline void RosActionNode<T>::cancelGoal()
 
   auto& action_client = client_instance_->action_client;
 
-  auto future_result = action_client->async_get_result(goal_handle_);
+  // async_send_goal() already registered a result callback. Requesting the result
+  // a second time makes rclcpp_action reject the known goal handle during halt.
   auto future_cancel = action_client->async_cancel_goal(goal_handle_);
 
   constexpr auto SUCCESS = rclcpp::FutureReturnCode::SUCCESS;
@@ -566,12 +567,6 @@ inline void RosActionNode<T>::cancelGoal()
   if(executor.spin_until_future_complete(future_cancel, server_timeout_) != SUCCESS)
   {
     RCLCPP_ERROR(logger(), "Failed to cancel action server for [%s]",
-                 action_name_.c_str());
-  }
-
-  if(executor.spin_until_future_complete(future_result, server_timeout_) != SUCCESS)
-  {
-    RCLCPP_ERROR(logger(), "Failed to get result call failed :( for [%s]",
                  action_name_.c_str());
   }
 }

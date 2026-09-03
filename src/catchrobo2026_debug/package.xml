@@ -3,11 +3,22 @@
 <package format="3">
   <name>catchrobo2026_debug</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Behavior Tree execution and debugging tools for CatchRobo 2026.</description>
   <maintainer email="akiyugata271@gmail.com">aky</maintainer>
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>behaviortree_ros2</depend>
+  <depend>btcpp_ros2_interfaces</depend>
+  <depend>catchrobo2026_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>nav_director</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

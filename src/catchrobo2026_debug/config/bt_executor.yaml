@@ -1,0 +1,12 @@
+bt_action_server:
+  ros__parameters:
+    action_name: "behavior_server"
+    tick_frequency: 100
+    groot2_port: 1667
+    ros_plugins_timeout: 5000
+
+    plugins:
+      - catchrobo2026_debug/bt_plugins
+
+    behavior_trees:
+      - catchrobo2026_debug/behavior_trees
