@@ -11,19 +11,19 @@ def generate_launch_description():
             output='screen'
         ),
         
-        # 2. 逆運動学のサービスサーバーノード
-        Node(
-            package='inverse_kinematics_package',
-            executable='inverse_kinematics_node',
-            name='inverse_kinematics_node',
-            output='screen'
-        ),
-
-        # 3. Joy入力を目標座標に変換し、IKを呼び出して関節角度をパブリッシュするノード
+        # 2. Joy入力を目標座標に変換し、IKをローカル計算して関節角度をパブリッシュするノード
         Node(
             package='catchrobo2026_hand_operated',
             executable='joy_controller_node',
             name='joy_controller_node',
+            output='screen'
+        ),
+
+        # 3. ポンプの状態を管理し、パブリッシュするノード (新規追加)
+        Node(
+            package='catchrobo2026_hand_operated',
+            executable='pump_state_node',
+            name='pump_state_node',
             output='screen'
         ),
         

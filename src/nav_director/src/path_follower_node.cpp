@@ -2,6 +2,7 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <nav_msgs/msg/path.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp> // 追加: PoseStamped用
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <cmath>
@@ -20,6 +21,9 @@ public:
     PathFollowerNode() : Node("path_follower_node"), current_path_index_(0) {
         // パブリッシャーとサブスクライバーの初期化
         pub_joints_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("target_joint_angles", 10);
+        
+        // 追加: target_pose用のパブリッシャー
+        pub_target_pose_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("target_pose", 10);
         
         sub_path_ = this->create_subscription<nav_msgs::msg::Path>(
             "route", 10, std::bind(&PathFollowerNode::pathCallback, this, std::placeholders::_1));
@@ -152,29 +156,48 @@ private:
                 }
             }
 
-            // 目標が見つからなかった場合（終点到達など）は最終ウェイポイントを維持
+            // 目標が見つからなかった場合（終点到達など）は最終ウェイポイントを目標とする
             if (!found_target) {
                 const auto& last_pose = local_path.poses.back().pose;
                 
-                // 最終ターゲット座標も [m] から [mm] に変換
-                target_posrot[0] = last_pose.position.x * 1000.0;
-                target_posrot[1] = last_pose.position.y * 1000.0;
-                target_posrot[2] = last_pose.position.z * 1000.0;
+                // 最終ターゲット座標を [mm] に変換
+                double final_target_x_mm = last_pose.position.x * 1000.0;
+                double final_target_y_mm = last_pose.position.y * 1000.0;
+                double final_target_z_mm = last_pose.position.z * 1000.0;
                 
+                target_posrot[0] = final_target_x_mm;
+                target_posrot[1] = final_target_y_mm;
+                target_posrot[2] = final_target_z_mm;
+                
+                // 最終ターゲットの姿勢を取得
                 tf2::Quaternion q;
                 tf2::fromMsg(last_pose.orientation, q);
-                double r, p, y;
-                tf2::Matrix3x3(q).getRPY(r, p, y);
-                target_posrot[3] = static_cast<float>(y);
+                double r, p, target_yaw;
+                tf2::Matrix3x3(q).getRPY(r, p, target_yaw);
+                
+                target_posrot[3] = static_cast<float>(target_yaw);
                 target_posrot[4] = -M_PI / 2.0F;
                 target_posrot[5] = 0.0F;
                 
-                // 完了判定
-                result->success = true;
-                goal_handle->succeed(result);
-                RCLCPP_INFO(this->get_logger(), "Reached the end of the path.");
-                return;
+                double pos_error = std::sqrt(std::pow(final_target_x_mm - cx, 2) + 
+                                             std::pow(final_target_y_mm - cy, 2) + 
+                                             std::pow(final_target_z_mm - cz, 2));
+
+                double current_yaw = current_posrot[3];
+                double yaw_error = std::abs(std::atan2(std::sin(target_yaw - current_yaw), 
+                                                       std::cos(target_yaw - current_yaw)));
+
+                const double POS_TOLERANCE = 10.0;
+                const double YAW_TOLERANCE = 0.05;
+
+                if (pos_error <= POS_TOLERANCE && yaw_error <= YAW_TOLERANCE) {
+                    result->success = true;
+                    goal_handle->succeed(result);
+                    RCLCPP_INFO(this->get_logger(), "Reached the end of the path with correct position and orientation.");
+                    return;
+                }
             }
+
 
             // 3. 逆運動学で目標ジョイント角を計算
             kin_.inverse_kinematics(target_posrot, target_joints);
@@ -187,7 +210,30 @@ private:
             }
             pub_joints_->publish(msg_out);
 
-            // フィードバックの送信 (省略可)
+            // 5. target_poseをPoseStampedで出力
+            geometry_msgs::msg::PoseStamped target_pose_msg;
+            target_pose_msg.header.stamp = this->now();
+            
+            // パスと同じフレームIDを使用。設定されていなければ"map"をデフォルトにする
+            target_pose_msg.header.frame_id = local_path.header.frame_id; 
+            if (target_pose_msg.header.frame_id.empty()) {
+                target_pose_msg.header.frame_id = "map"; 
+            }
+
+            // 単位を [mm] からROSの標準である [m] に戻す
+            target_pose_msg.pose.position.x = target_posrot[0] / 1000.0;
+            target_pose_msg.pose.position.y = target_posrot[1] / 1000.0;
+            target_pose_msg.pose.position.z = target_posrot[2] / 1000.0;
+
+            // Roll, Pitch, Yawからクォータニオンへ変換
+            tf2::Quaternion q_out;
+            // 順序は (roll, pitch, yaw) : (PSI, THE, PHI) = (target_posrot[5], target_posrot[4], target_posrot[3])
+            q_out.setRPY(target_posrot[5], target_posrot[4], target_posrot[3]);
+            target_pose_msg.pose.orientation = tf2::toMsg(q_out);
+
+            pub_target_pose_->publish(target_pose_msg);
+
+            // フィードバックの送信
             feedback->distance_remaining = local_path.poses.size() - current_path_index_;
             goal_handle->publish_feedback(feedback);
 
@@ -198,6 +244,7 @@ private:
     robot_kinematics kin_; // 運動学クラスのインスタンス
     
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pub_joints_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_target_pose_; // 追加: ターゲット姿勢用
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr sub_path_;
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr sub_current_joints_;
     rclcpp_action::Server<FollowRoute>::SharedPtr action_server_;
