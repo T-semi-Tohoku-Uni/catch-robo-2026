@@ -13,6 +13,12 @@
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>catchrobo2026_msgs</depend>
+  
+  <!-- 追加した依存関係 -->
+  <depend>geometry_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>ros2_inverse_kinematics</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

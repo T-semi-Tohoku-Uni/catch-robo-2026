@@ -18,7 +18,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/InverseKinematics.srv"
   "srv/Waypoint.srv"
   "srv/GenerateRoute.srv"
-  "action/FollowRoute.action"      # 追加: 新しいアクションファイル
+  "action/FollowRoute.action"
+  "srv/PumpControl.srv"
   DEPENDENCIES action_msgs
 )
 
