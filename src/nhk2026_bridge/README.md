@@ -46,3 +46,32 @@ youruser ALL=(root) NOPASSWD: /usr/sbin/ip link set can0 down
 
 ### 運用上の注意
 - Active 状態ではパラメータ変更は拒否されます。変更する場合は `deactivate` してから再設定してください。
+
+### vcanでの起動
+
+`vcan_can.launch.py` は `config/raspi_canbridge.yml` を読み込み、`ifname` だけを上書きします。
+
+```bash
+sudo modprobe vcan
+sudo ip link add dev vcan0 type vcan
+sudo ip link set dev vcan0 mtu 72
+sudo ip link set dev vcan0 up
+ros2 launch nhk2026_bridge vcan_can.launch.py
+```
+
+別名のvcanを使う場合は、launch引数で指定します。
+
+```bash
+ros2 launch nhk2026_bridge vcan_can.launch.py ifname:=vcan1
+```
+
+### vcanによる簡易テスト
+
+`iproute2` と `can-utils` をインストールし、ワークスペースをビルド・sourceした後に実行します。
+
+```bash
+sudo -v
+ros2 run nhk2026_bridge test_vcan_bridge.sh
+```
+
+テストは専用の `vcan_nhk26` を一時作成し、ROS→CANとCAN→ROSを確認した後に削除します。既存インターフェイスが同名で存在する場合は変更せず失敗します。
