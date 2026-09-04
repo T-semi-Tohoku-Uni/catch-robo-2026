@@ -26,6 +26,7 @@ public:
 
 private:
     std::string Ifname;
+    CanBridge::SocketMode socket_mode_{CanBridge::SocketMode::NonBlocking};
 
     CallbackReturn on_configure(const rclcpp_lifecycle::State &state);
     CallbackReturn on_activate(const rclcpp_lifecycle::State &state);

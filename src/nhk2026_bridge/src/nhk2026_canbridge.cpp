@@ -28,6 +28,7 @@ CanBridgenhk2026::CanBridgenhk2026()
     this->declare_parameter("sub_bytes_bridge_canid", default_canid);
     
     this->declare_parameter("ifname", "can0");
+    this->declare_parameter("non_blocking", true);
     this->declare_parameter("add_cmd_vel", false);
     this->declare_parameter("add_cmd_vel_feedback", false);
 
@@ -120,6 +121,9 @@ CanBridgenhk2026::CallbackReturn CanBridgenhk2026::on_configure(const rclcpp_lif
         return CallbackReturn::FAILURE;
     }
     this->Ifname = this->get_parameter("ifname").as_string();
+    const bool non_blocking = this->get_parameter("non_blocking").as_bool();
+    this->socket_mode_ = non_blocking ?
+        CanBridge::SocketMode::NonBlocking : CanBridge::SocketMode::Blocking;
     this->add_cmd_vel = this->get_parameter("add_cmd_vel").as_bool();
     this->add_cmd_vel_feedback = this->get_parameter("add_cmd_vel_feedback").as_bool();
 
@@ -209,13 +213,20 @@ CanBridgenhk2026::CallbackReturn CanBridgenhk2026::on_activate(const rclcpp_life
     }
     try
     {
-        this->can_bridge = std::make_unique<CanBridge>(this->Ifname);
+        this->can_bridge = std::make_unique<CanBridge>(
+            this->Ifname,
+            this->socket_mode_);
     }
     catch(const std::exception& e)
     {
         RCLCPP_ERROR(this->get_logger(), "%s", e.what());
         return CallbackReturn::FAILURE;
     }
+    RCLCPP_INFO(
+        this->get_logger(),
+        "CAN socket TX mode: %s",
+        this->socket_mode_ == CanBridge::SocketMode::NonBlocking ?
+            "non-blocking" : "blocking");
 
     rclcpp::QoS device = rclcpp::QoS(rclcpp::KeepLast(10))
         .reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE)
@@ -341,6 +352,7 @@ void CanBridgenhk2026::stop_bridge_() noexcept
     this->cmd_vel_subscriber.reset();
 
     this->running_.store(false);
+    if (this->rx_thread_.joinable()) this->rx_thread_.join();
     if (this->can_bridge)
     {
         try
@@ -361,7 +373,6 @@ void CanBridgenhk2026::stop_bridge_() noexcept
                 "Unknown exception during CAN bridge shutdown");
         }
     }
-    if (this->rx_thread_.joinable()) this->rx_thread_.join();
     this->can_bridge.reset();
 
     this->float_publisher_.clear();
@@ -519,6 +530,12 @@ rcl_interfaces::msg::SetParametersResult CanBridgenhk2026::parameters_callback(
             this->Ifname = param.as_string();
             continue;
         }
+        if (name == "non_blocking" && type == rclcpp::ParameterType::PARAMETER_BOOL)
+        {
+            this->socket_mode_ = param.as_bool() ?
+                CanBridge::SocketMode::NonBlocking : CanBridge::SocketMode::Blocking;
+            continue;
+        }
         if (name == "add_cmd_vel" && type == rclcpp::ParameterType::PARAMETER_BOOL)
         {
             this->add_cmd_vel = param.as_bool();
@@ -573,7 +590,6 @@ void CanBridgenhk2026::rx_loop()
             RCLCPP_ERROR(this->get_logger(), "%s", e.what());
             this->rx_error_.store(true);
             this->running_.store(false);
-            if (this->can_bridge) this->can_bridge->shutdown();
             break;
         }
 
