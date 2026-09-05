@@ -44,6 +44,9 @@ youruser ALL=(root) NOPASSWD: /usr/sbin/ip link set can0 down
 - int 系: `std_msgs/msg/Int32MultiArray`
 - bytes 系: `std_msgs/msg/ByteMultiArray`
 
+int 系は各要素を符号付き32bit整数の4バイトbig-endianで送受信します。
+`send_int` / `rxdata_to_int` は `htobe32` / `be32toh` と `memcpy` で変換します。
+
 ### 運用上の注意
 - Active 状態ではパラメータ変更は拒否されます。変更する場合は `deactivate` してから再設定してください。
 

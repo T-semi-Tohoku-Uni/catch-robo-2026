@@ -10,6 +10,7 @@
 #include "rcl_interfaces/msg/parameter_descriptor.hpp"
 #include "std_msgs/msg/int32_multi_array.hpp"
 #include "catchrobo2026_msgs/srv/pump_control.hpp"
+#include "catchrobo2026_pump/pump_command.hpp"
 
 using namespace std::chrono_literals;
 using PumpControl = catchrobo2026_msgs::srv::PumpControl;
@@ -17,7 +18,7 @@ using PumpControl = catchrobo2026_msgs::srv::PumpControl;
 class PumpControllerNode : public rclcpp::Node {
 public:
     PumpControllerNode() : Node("pump_controller_node") {
-        // 配線・極性は起動時の設定。L/C/Rの順にCAN指令のビット番号を指定する。
+        // Configure wiring and polarity at startup, in L/C/R order.
         rcl_interfaces::msg::ParameterDescriptor descriptor;
         descriptor.read_only = true;
         pump_bits_ = this->declare_parameter<std::vector<int64_t>>(
@@ -39,12 +40,12 @@ public:
         }
         auto bits = pump_bits_;
         bits.insert(bits.end(), valve_bits_.begin(), valve_bits_.end());
-        int32_t used_bits = 0;
+        std::array<bool, 6> used_bits{};
         for (const auto bit : bits) {
-            if (bit < 0 || bit > 5 || (used_bits & (1 << bit)) != 0) {
+            if (bit < 0 || bit > 5 || used_bits[bit]) {
                 throw std::invalid_argument("pump_bits and valve_bits must use bits 0..5 without duplicates");
             }
-            used_bits |= 1 << bit;
+            used_bits[bit] = true;
         }
 
         pump_pub_ = this->create_publisher<std_msgs::msg::Int32MultiArray>("pump_state", 10);
@@ -64,7 +65,7 @@ private:
         std::shared_ptr<PumpControl::Response> response)
     {
         const std::array<int8_t, 3> states = {request->left, request->center, request->right};
-        // 全値を確認してから更新し、不正な要求では一部だけ変更されないようにする。
+        // Validate every state before updating any collector.
         for (const auto state : states) {
             if (state < PumpControl::Request::RELEASE || state > PumpControl::Request::SUCTION) {
                 response->success = false;
@@ -79,21 +80,27 @@ private:
     }
 
     void timer_callback() {
-        // CAN指令は6bit。GPIOのHigh/Lowへの変換はマイコン側で行う。
-        int32_t state = 0;
+        // Map logical states to CAN bit levels; the MCU inverts them at the GPIO.
+        std::array<bool, 6> levels{};
         for (size_t i = 0; i < collector_states_.size(); ++i) {
-            // 吸引はポンプON、開放は電磁弁ON、オフは両方OFF。
+            // Suction enables the pump; release enables the valve.
             const bool pump_on = collector_states_[i] == PumpControl::Request::SUCTION;
             const bool valve_on = collector_states_[i] == PumpControl::Request::RELEASE;
-            if (pump_on == pump_on_level_) {
-                state |= 1 << pump_bits_[i];
-            }
-            if (valve_on == valve_on_level_) {
-                state |= 1 << valve_bits_[i];
-            }
+            levels[pump_bits_[i]] = pump_on == pump_on_level_;
+            levels[valve_bits_[i]] = valve_on == valve_on_level_;
         }
+
+        PumpCommand command{};
+        command.bits.pump1 = levels[0];
+        command.bits.pump2 = levels[1];
+        command.bits.pump3 = levels[2];
+        command.bits.valve1 = levels[3];
+        command.bits.valve2 = levels[4];
+        command.bits.valve3 = levels[5];
+
+        // Publish a host-order integer; the CAN bridge applies htobe32.
         std_msgs::msg::Int32MultiArray msg;
-        msg.data = {state};
+        msg.data = {static_cast<int32_t>(command.raw)};
         pump_pub_->publish(msg);
     }
 

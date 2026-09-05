@@ -12,6 +12,7 @@ find_package(std_msgs REQUIRED)
 find_package(catchrobo2026_msgs REQUIRED)
 
 add_executable(pump_controller_node src/pump_controller_node.cpp)
+target_include_directories(pump_controller_node PRIVATE include)
 ament_target_dependencies(pump_controller_node
   rclcpp
   rcl_interfaces

@@ -68,6 +68,18 @@ Joyの〇ボタンは、全3項目に同じ値を送り「開放 → オフ → 
 出力は `/pump_state`（`std_msgs/msg/Int32MultiArray`、要素1個）、100 Hz。
 `nhk2026_bridge` がCAN ID `0x401` の4バイトbig-endian整数として送ります。
 
+[PumpCommand](include/catchrobo2026_pump/pump_command.hpp) は `union` で32bit整数 `raw` と、
+MCU出力番号に対応する `pump1..3` / `valve1..3` のビットフィールドを表します。
+上位26bitは0です。L/C/Rの状態は起動設定に従って各フィールドへ割り当てます。
+トピックにはホスト順の整数を渡し、ブリッジの `send_int()` で `htobe32()` と
+`memcpy()` によりバイト列へ変換します。受信側の `rxdata_to_int()` は `be32toh()` を使います。
+たとえば吸引56の送信データは `00 00 00 38` です。
+
+ビットフィールドの配置は対象ABIに依存し、`union` の別メンバからの読出しには
+[GCCの拡張](https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html#index-fstrict-aliasing)を使用します。
+宣言順はホストのエンディアンで切り替え、サイズはコンパイル時に確認します。
+コンパイラやCPUを変更した場合は、6ビット全64通りの整数値との対応も確認してください。
+
 2026-09-06に確認したマイコンソース:
 `../supplementary/catchrobo2026_pump/Core/Src/main.c`（ワークスペースルートからの相対パス）。
 受信コールバックと `setPumpState()` / `setSolenoState()` の対応は以下です。

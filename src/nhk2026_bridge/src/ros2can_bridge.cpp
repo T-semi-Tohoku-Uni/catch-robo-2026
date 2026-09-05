@@ -1,6 +1,7 @@
 #include "ros2can_bridge.hpp"
 
 #include <cerrno>
+#include <endian.h>
 #include <fcntl.h>
 #include <poll.h>
 
@@ -147,11 +148,9 @@ void CanBridge::send_int(int canid, const std::vector<int> &txdata_i)
     frame.flags |= CANFD_BRS;
     for (size_t i = 0; i < txdata_i.size(); i++)
     {
-        uint32_t val = static_cast<uint32_t>(txdata_i[i]);
-        frame.data[i*4    ] = (uint8_t)((val >> 24) & 0xff);
-        frame.data[i*4 + 1] = (uint8_t)((val >> 16) & 0xff);
-        frame.data[i*4 + 2] = (uint8_t)((val >>  8) & 0xff);
-        frame.data[i*4 + 3] = (uint8_t)((val      ) & 0xff);
+        const uint32_t big_endian_value = htobe32(static_cast<uint32_t>(txdata_i[i]));
+        std::memcpy(frame.data + i * sizeof(big_endian_value),
+            &big_endian_value, sizeof(big_endian_value));
     }
     const ssize_t nbytes = write(this->sock, &frame, sizeof(frame));
     if (nbytes < 0)
@@ -293,12 +292,10 @@ std::vector<int> CanBridge::rxdata_to_int(const RxData_struct &rxdata)
 
     for (size_t i = 0; i < vector_len; i++)
     {
-        uint32_t rxdata_ui32 = (static_cast<uint32_t>(rxdata.data[i*4])     << 24) |
-                               (static_cast<uint32_t>(rxdata.data[i*4 + 1]) << 16) |
-                               (static_cast<uint32_t>(rxdata.data[i*4 + 2]) << 8)  |
-                               (static_cast<uint32_t>(rxdata.data[i*4 + 3]));
-
-        rxdata_i[i] = static_cast<int32_t>(rxdata_ui32);
+        uint32_t big_endian_value;
+        std::memcpy(&big_endian_value,
+            rxdata.data.data() + i * sizeof(big_endian_value), sizeof(big_endian_value));
+        rxdata_i[i] = static_cast<int32_t>(be32toh(big_endian_value));
     }
 
     return rxdata_i;
