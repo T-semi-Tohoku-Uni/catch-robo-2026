@@ -1,0 +1,15 @@
+pump_controller_node:
+  ros__parameters:
+    # L/C/Rの順。マイコンではbit0..2=Pump1..3、bit3..5=電磁弁1..3。
+    # 実機の配線対応を確認し、必要なら各リストを並べ替える。
+    pump_bits: [0, 1, 2]
+    valve_bits: [3, 4, 5]
+
+    # 論理ONに対応するCAN指令ビット。GPIOの電圧レベルではない。
+    # マイコンは値1→GPIO Low、値0→GPIO High。通電極性は実機で確認する。
+    pump_on_level: true
+    valve_on_level: true
+
+    # 全機構の起動時状態: 開放=-1、オフ=0、吸引=1。
+    # 上記の既定設定では従来の0b111000を送信する。
+    initial_state: -1

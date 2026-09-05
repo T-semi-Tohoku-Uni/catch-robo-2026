@@ -1,8 +1,21 @@
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+
 def generate_launch_description():
+    pump_config = os.path.join(
+        get_package_share_directory('catchrobo2026_pump'), 'config', 'pump.yaml')
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'pump_config',
+            default_value=pump_config,
+            description='Pump controller parameter file'
+        ),
         # 1. コントローラーのハードウェア入力を読み取るROS 2標準ノード
         Node(
             package='joy',
@@ -19,11 +32,12 @@ def generate_launch_description():
             output='screen'
         ),
 
-        # 3. ポンプの状態を管理し、パブリッシュするノード (新規追加)
+        # 3. ポンプ・電磁弁制御ノード
         Node(
-            package='catchrobo2026_hand_operated',
-            executable='pump_state_node',
-            name='pump_state_node',
+            package='catchrobo2026_pump',
+            executable='pump_controller_node',
+            name='pump_controller_node',
+            parameters=[LaunchConfiguration('pump_config')],
             output='screen'
         ),
         

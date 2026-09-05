@@ -3,11 +3,11 @@
 #include <vector>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/joy.hpp"
 #include "std_msgs/msg/float32_multi_array.hpp"
-#include "std_msgs/msg/int32_multi_array.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 
 #include <tf2/LinearMath/Quaternion.h>
@@ -31,9 +31,6 @@ public:
         pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
             "target_pose", 10, std::bind(&JoyControllerNode::pose_callback, this, std::placeholders::_1));
             
-        pump_sub_ = this->create_subscription<std_msgs::msg::Int32MultiArray>(
-            "pump_state", 10, std::bind(&JoyControllerNode::pump_callback, this, std::placeholders::_1));
-
         // 3. サービスクライアント (Pump切り替え用)
         pump_client_ = this->create_client<catchrobo2026_msgs::srv::PumpControl>("set_pump_state");
 
@@ -53,6 +50,8 @@ public:
     }
 
 private:
+    using PumpRequest = catchrobo2026_msgs::srv::PumpControl::Request;
+
     void pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
         // 自動制御ノード等からtarget_poseを受け取った場合、基準座標を上書きする
         // 単位を [m] から [mm] に変換
@@ -71,12 +70,6 @@ private:
         current_pose_[5] = static_cast<float>(roll);  // PSI
     }
 
-    void pump_callback(const std_msgs::msg::Int32MultiArray::SharedPtr msg) {
-        if (!msg->data.empty()) {
-            current_pump_val_ = msg->data[0];
-        }
-    }
-
     void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg) {
         if (msg->axes.size() < 6 || msg->buttons.size() < 6) return;
         
@@ -89,29 +82,47 @@ private:
         // --- 〇ボタン(buttons[1])によるPump状態の遷移 ---
         bool current_o_button = msg->buttons[1]; 
 
-        if (current_o_button && !prev_o_button_) {
+        if (current_o_button && !prev_o_button_ && !pump_request_pending_) {
             if (!pump_client_->service_is_ready()) {
                 RCLCPP_WARN(this->get_logger(), "Pump service not ready.");
             } else {
-                auto request = std::make_shared<catchrobo2026_msgs::srv::PumpControl::Request>();
-                
-                // 現在の値から次のコマンドを決定 (1:56, 2:0, 3:7)
-                if (current_pump_val_ == 56) {
-                    request->command = 2; // 次は 0
-                } else if (current_pump_val_ == 0) {
-                    request->command = 3; // 次は 7
-                } else {
-                    request->command = 1; // それ以外(7など)なら 56 に戻す
-                }
-
-                pump_client_->async_send_request(request);
-                RCLCPP_INFO(this->get_logger(), "Requested Pump change. Sent command: %d", request->command);
+                auto request = std::make_shared<PumpRequest>();
+                // 〇ボタンは全機構を「OFF→吸引→開放」の順に操作する。
+                // CANのビット割当・極性はポンプ制御ノードに任せる。
+                request->left = next_pump_state_;
+                request->center = next_pump_state_;
+                request->right = next_pump_state_;
+                pump_request_pending_ = true;
+                pump_request_time_ = std::chrono::steady_clock::now();
+                pump_request_id_ = pump_client_->async_send_request(request,
+                    [this](rclcpp::Client<catchrobo2026_msgs::srv::PumpControl>::SharedFuture future) {
+                        pump_request_pending_ = false;
+                        if (!future.get()->success) {
+                            RCLCPP_WARN(this->get_logger(), "Pump request was rejected.");
+                            return;
+                        }
+                        if (next_pump_state_ == PumpRequest::OFF) {
+                            next_pump_state_ = PumpRequest::SUCTION;
+                        } else if (next_pump_state_ == PumpRequest::SUCTION) {
+                            next_pump_state_ = PumpRequest::RELEASE;
+                        } else {
+                            next_pump_state_ = PumpRequest::OFF;
+                        }
+                    }).request_id;
             }
         }
         prev_o_button_ = current_o_button;
     }
 
     void publish_timer_callback() {
+        // 応答が途絶えても、次のボタン操作で同じ状態を再要求できるようにする。
+        if (pump_request_pending_ &&
+            std::chrono::steady_clock::now() - pump_request_time_ >= 1s) {
+            pump_client_->remove_pending_request(pump_request_id_);
+            pump_request_pending_ = false;
+            RCLCPP_WARN(this->get_logger(), "Pump request timed out. Press again to retry.");
+        }
+
         // 1. Joy入力による手動介入 (位置の微調整)
         const float pos_gain = 5.0f;  
         const float rot_gain = 0.05f; 
@@ -138,7 +149,6 @@ private:
     // --- 変数定義 ---
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
-    rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr pump_sub_;
     
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr joint_pub_;
     rclcpp::Client<catchrobo2026_msgs::srv::PumpControl>::SharedPtr pump_client_;
@@ -148,7 +158,10 @@ private:
     robot_kinematics kin_; // 運動学クラスのインスタンス
 
     float current_pose_[6];
-    int current_pump_val_ = 56;
+    int8_t next_pump_state_ = PumpRequest::OFF;
+    bool pump_request_pending_ = false;
+    int64_t pump_request_id_ = 0;
+    std::chrono::steady_clock::time_point pump_request_time_;
     bool prev_o_button_ = false; 
     
     float vel_x_ = 0.0f;
