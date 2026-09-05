@@ -45,6 +45,12 @@ def generate_launch_description():
             name='pump_state_node',
             output='screen'
         ),
+        Node(
+            package='catchrobo2026_hand_operated',
+            executable='endeffector_state_node',
+            name='endeffector_state_node',
+            output='screen'
+        ),
 
         # ==================================
         # 共通可視化系

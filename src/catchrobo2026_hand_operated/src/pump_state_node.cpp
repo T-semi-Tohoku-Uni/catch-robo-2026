@@ -39,10 +39,10 @@ private:
         
         // コマンド (1, 2, 3) に応じて送信する値を変更
         if (command == 1) {
-            current_pump_value_ = 56;
+            current_pump_value_ = 63;
             response->success = true;
         } else if (command == 2) {
-            current_pump_value_ = 0;
+            current_pump_value_ = 56;
             response->success = true;
         } else if (command == 3) {
             current_pump_value_ = 7;
