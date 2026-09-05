@@ -2,3 +2,7 @@
 	path = src/CatchRobo2026_kinematics
 	url = git@github.com:T-semi-Tohoku-Uni/CatchRobo2026_kinematics.git
 	branch = codex/add-fk-target-csv
+[submodule "src/catchrobo2026_ui"]
+	path = src/catchrobo2026_ui
+	url = git@github.com:T-semi-Tohoku-Uni/catchrobo2026_UI.git
+	branch = master
