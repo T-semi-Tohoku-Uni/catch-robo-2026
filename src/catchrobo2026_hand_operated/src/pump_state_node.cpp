@@ -42,7 +42,7 @@ private:
             current_pump_value_ = 56;
             response->success = true;
         } else if (command == 2) {
-            current_pump_value_ = 7;
+            current_pump_value_ = 63;
             response->success = true;
         } else if (command == 3) {
             current_pump_value_ = 0;
