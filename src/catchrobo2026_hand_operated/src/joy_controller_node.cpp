@@ -13,7 +13,10 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include "ros2_inverse_kinematics/robot_kinematics.h"
+
+// サービス型のインクルード
 #include "catchrobo2026_msgs/srv/pump_control.hpp"
+#include "catchrobo2026_msgs/srv/endeffector_control.hpp"
 
 using namespace std::chrono_literals;
 
@@ -33,9 +36,15 @@ public:
             
         pump_sub_ = this->create_subscription<std_msgs::msg::Int32MultiArray>(
             "pump_state", 10, std::bind(&JoyControllerNode::pump_callback, this, std::placeholders::_1));
+            
+        // 【追加】Endeffector状態のサブスクライバー
+        endeffector_sub_ = this->create_subscription<std_msgs::msg::Int32MultiArray>(
+            "endeffector_state", 10, std::bind(&JoyControllerNode::endeffector_callback, this, std::placeholders::_1));
 
-        // 3. サービスクライアント (Pump切り替え用)
+        // 3. サービスクライアント
         pump_client_ = this->create_client<catchrobo2026_msgs::srv::PumpControl>("set_pump_state");
+        // 【追加】Endeffector切り替え用サービスクライアント
+        endeffector_client_ = this->create_client<catchrobo2026_msgs::srv::EndeffectorControl>("set_endeffector_state");
 
         // 4. IK計算とパブリッシュを行うメインループタイマー (例: 20ms = 50Hz)
         publish_timer_ = this->create_wall_timer(
@@ -49,7 +58,7 @@ public:
         current_pose_[4] = -M_PI / 2.0f; // Theta (Pitch相当、デフォルト姿勢)
         current_pose_[5] = 0.0f;    // Psi (Roll相当)
 
-        RCLCPP_INFO(this->get_logger(), "Joy Controller Node started with integrated IK.");
+        RCLCPP_INFO(this->get_logger(), "Joy Controller Node started with integrated IK, Pump, and Endeffector control.");
     }
 
 private:
@@ -74,6 +83,13 @@ private:
     void pump_callback(const std_msgs::msg::Int32MultiArray::SharedPtr msg) {
         if (!msg->data.empty()) {
             current_pump_val_ = msg->data[0];
+        }
+    }
+
+    // 【追加】Endeffector状態のコールバック
+    void endeffector_callback(const std_msgs::msg::Int32MultiArray::SharedPtr msg) {
+        if (!msg->data.empty()) {
+            current_endeffector_val_ = msg->data[0];
         }
     }
 
@@ -109,6 +125,28 @@ private:
             }
         }
         prev_o_button_ = current_o_button;
+
+        // --- 【追加】ボタン(例: buttons[2])によるEndeffector状態の遷移 ---
+        bool current_endeffector_button = msg->buttons[2]; // 任意のボタンに変更可能
+
+        if (current_endeffector_button && !prev_endeffector_button_) {
+            if (!endeffector_client_->service_is_ready()) {
+                RCLCPP_WARN(this->get_logger(), "Endeffector service not ready.");
+            } else {
+                auto request = std::make_shared<catchrobo2026_msgs::srv::EndeffectorControl::Request>();
+                
+                // 現在の値から次のコマンドを決定 (endeffector_state_nodeの仕様に準拠: 0または1)
+                if (current_endeffector_val_ == 0) {
+                    request->command = 1; 
+                } else {
+                    request->command = 0; // 初期値の56や1の場合は0へ
+                }
+
+                endeffector_client_->async_send_request(request);
+                RCLCPP_INFO(this->get_logger(), "Requested Endeffector change. Sent command: %d", request->command);
+            }
+        }
+        prev_endeffector_button_ = current_endeffector_button;
     }
 
     void publish_timer_callback() {
@@ -139,9 +177,11 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
     rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr pump_sub_;
+    rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr endeffector_sub_; // 【追加】
     
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr joint_pub_;
     rclcpp::Client<catchrobo2026_msgs::srv::PumpControl>::SharedPtr pump_client_;
+    rclcpp::Client<catchrobo2026_msgs::srv::EndeffectorControl>::SharedPtr endeffector_client_; // 【追加】
     
     rclcpp::TimerBase::SharedPtr publish_timer_; 
     
@@ -149,7 +189,9 @@ private:
 
     float current_pose_[6];
     int current_pump_val_ = 56;
+    int current_endeffector_val_ = 56; // 【追加】初期値はノード側に合わせる
     bool prev_o_button_ = false; 
+    bool prev_endeffector_button_ = false; // 【追加】
     
     float vel_x_ = 0.0f;
     float vel_y_ = 0.0f;

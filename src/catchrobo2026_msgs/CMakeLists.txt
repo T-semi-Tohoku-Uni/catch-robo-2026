@@ -20,6 +20,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GenerateRoute.srv"
   "action/FollowRoute.action"
   "srv/PumpControl.srv"
+  "srv/EndeffectorControl.srv"
   DEPENDENCIES action_msgs
 )
 
