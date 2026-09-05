@@ -8,25 +8,49 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
-# 以下の3つを追加
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(catchrobo2026_msgs REQUIRED)
 
-# 実行ファイルの追加（※ソースファイル名が src/joy_controller_node.cpp の場合）
-add_executable(joy_controller_node src/joy_controller_node.cpp)
+# ==========================================
+# 追加した依存パッケージ
+# ==========================================
+find_package(geometry_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(inverse_kinematics_package REQUIRED)
 
-# 依存パッケージをリンク
+# ==========================================
+# 実行ファイルの追加と依存パッケージのリンク
+# ==========================================
+
+# 1. joy_controller_node
+add_executable(joy_controller_node src/joy_controller_node.cpp)
 ament_target_dependencies(joy_controller_node
   rclcpp
   sensor_msgs
   std_msgs
   catchrobo2026_msgs
+  geometry_msgs            # 追加
+  tf2                      # 追加
+  tf2_geometry_msgs        # 追加
+  inverse_kinematics_package
 )
 
+# 2. pump_state_node 
+add_executable(pump_state_node src/pump_state_node.cpp)
+ament_target_dependencies(pump_state_node
+  rclcpp
+  std_msgs
+  catchrobo2026_msgs
+)
+
+# ==========================================
 # インストール設定
+# ==========================================
 install(TARGETS
   joy_controller_node
+  pump_state_node   
   DESTINATION lib/${PROJECT_NAME}
 )
 
