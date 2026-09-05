@@ -114,7 +114,7 @@ private:
                 // 現在の値から次のコマンドを決定 (1:56, 2:0, 3:7)
                 if (current_pump_val_ == 63) {
                     request->command = 2; // 次は 0
-                } else if (current_pump_val_ == 0) {
+                } else if (current_pump_val_ == 56) {
                     request->command = 3; // 次は 7
                 } else {
                     request->command = 1; // それ以外(7など)なら 56 に戻す
