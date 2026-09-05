@@ -59,6 +59,12 @@ def generate_launch_description():
             parameters=[LaunchConfiguration('pump_config')],
             output='screen'
         ),
+        Node(
+            package='catchrobo2026_endeffector',
+            executable='endeffector_state_node',
+            name='endeffector_state_node',
+            output='screen'
+        ),
 
         # ==================================
         # 共通可視化系

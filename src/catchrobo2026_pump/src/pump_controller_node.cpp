@@ -24,10 +24,10 @@ public:
             "pump_bits", {0, 1, 2}, descriptor);
         valve_bits_ = this->declare_parameter<std::vector<int64_t>>(
             "valve_bits", {3, 4, 5}, descriptor);
-        pump_on_level_ = this->declare_parameter<bool>("pump_on_level", true, descriptor);
-        valve_on_level_ = this->declare_parameter<bool>("valve_on_level", true, descriptor);
+        pump_on_level_ = this->declare_parameter<bool>("pump_on_level", false, descriptor);
+        valve_on_level_ = this->declare_parameter<bool>("valve_on_level", false, descriptor);
         const auto initial_state = this->declare_parameter<int64_t>(
-            "initial_state", PumpControl::Request::RELEASE, descriptor);
+            "initial_state", PumpControl::Request::SUCTION, descriptor);
         if (initial_state < PumpControl::Request::RELEASE ||
             initial_state > PumpControl::Request::SUCTION) {
             throw std::invalid_argument("initial_state must be -1, 0 or 1");
