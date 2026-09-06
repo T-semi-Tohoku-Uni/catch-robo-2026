@@ -3,6 +3,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -11,17 +12,29 @@ def generate_launch_description():
     pump_config = os.path.join(
         get_package_share_directory('catchrobo2026_pump'), 'config', 'pump.yaml')
     return LaunchDescription([
-        # ==================================
-        # 自動制御 (アクション通信) 系
-        # ==================================
-        # 1. 3D経路生成ノード
+        DeclareLaunchArgument(
+            'pump_config',
+            default_value=pump_config,
+            description='Pump controller parameter file'
+        ),
+        DeclareLaunchArgument(
+            'use_dummy',
+            default_value='false',
+            choices=['true', 'false'],
+            description='Use simulated joint feedback instead of hardware feedback'
+        ),
+        DeclareLaunchArgument(
+            'initial_pose',
+            default_value='[600.0, 200.0, 200.0, 0.0]',
+            description='Dummy initial pose [x_mm, y_mm, z_mm, yaw_rad]'
+        ),
+        # Navigation nodes.
         Node(
             package='nav_director',
             executable='path_generator_3d',
             name='path_generator_3d',
             output='screen'
         ),
-        # 2. 経路追従ノード
         Node(
             package='nav_director',
             executable='path_follower_node',
@@ -29,17 +42,13 @@ def generate_launch_description():
             output='screen'
         ),
 
-        # ==================================
-        # 手動制御 (Joy) 系
-        # ==================================
-        # 3. コントローラーノード
+        # Manual control.
         Node(
             package='joy',
             executable='joy_node',
             name='joy_node',
             output='screen'
         ),
-        # 4. Joyからの入力と自動制御からの target_pose を合成するノード
         Node(
             package='catchrobo2026_hand_operated',
             executable='joy_controller_node',
@@ -47,7 +56,7 @@ def generate_launch_description():
             output='screen'
         ),
 
-        # 3. ポンプ・電磁弁制御ノード
+        # Device controllers.
         Node(
             package='catchrobo2026_pump',
             executable='pump_controller_node',
@@ -55,8 +64,6 @@ def generate_launch_description():
             parameters=[LaunchConfiguration('pump_config')],
             output='screen'
         ),
-        
-        # 4. エンドエフェクタ制御ノード
         Node(
             package='catchrobo2026_endeffector',
             executable='endeffector_state_node',
@@ -64,22 +71,22 @@ def generate_launch_description():
             output='screen'
         ),
 
-        # 5. 現在のジョイント角度(current_joints)から順運動学を計算し、RViz用のマーカーをパブリッシュするノード
+        # Visualize measured joints.
         Node(
             package='nav_director',
             executable='current_kinematics_visualizer',
             name='current_kinematics_visualizer',
             output='screen'
         ),
-        # 3. ダミーロボットノード
+        # Simulated feedback is opt-in.
         Node(
             package='nav_director',
             executable='dummy_robot_node',
             name='dummy_robot_node',
             output='screen',
+            condition=IfCondition(LaunchConfiguration('use_dummy')),
             parameters=[
-                # ここで初期角度を自由に変更できます (例: 1.57は90度)
-                {'initial_joints': [600.0, 200.0, 200.0, 0.0]}
+                {'initial_pose': LaunchConfiguration('initial_pose')}
             ]
         )
     ])
