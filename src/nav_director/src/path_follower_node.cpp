@@ -226,7 +226,7 @@ private:
             for (int i = 0; i < 4; ++i) {
                 msg_out.data[i] = target_joints[i];
             }
-            pub_joints_->publish(msg_out);
+            //pub_joints_->publish(msg_out);
 
             // 5. target_poseをPoseStampedで出力
             geometry_msgs::msg::PoseStamped target_pose_msg;
