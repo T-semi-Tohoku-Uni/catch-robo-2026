@@ -19,7 +19,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/Waypoint.srv"
   "srv/GenerateRoute.srv"
   "action/FollowRoute.action"
-  "action/ExecuteSequence.action"
   "srv/PumpControl.srv"
   "srv/EndeffectorControl.srv"
   DEPENDENCIES action_msgs
