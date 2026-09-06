@@ -11,6 +11,11 @@ def generate_launch_description():
     pump_config = os.path.join(
         get_package_share_directory('catchrobo2026_pump'), 'config', 'pump.yaml')
     return LaunchDescription([
+    DeclareLaunchArgument(
+        'pump_config',
+        default_value=pump_config,
+        description='Pump controller parameter file'
+    ),
         # ==================================
         # 自動制御 (アクション通信) 系
         # ==================================

@@ -1,0 +1,256 @@
+# Coordinates transcribed from CatchRobo2026_kinematics/config/flange_targets.
+# PICK: pick_pose_red.csv; pick_pose_blue.csv has identical coordinates by ID.
+# PLACE: shooting_pose_red.csv and shooting_pose_blue.csv, central column.
+# Runtime reads this YAML only. Units: mm and rad.
+# Relative Z offsets are provisional values for hardware tuning.
+version: 1
+
+values:
+  # Initial CSV Z values; their physical clearance is not verified.
+  work_above_z: 166.95
+  common_work_above_z: 186.95
+  place_above_z: 294.35
+  # Each offset is relative to the last absolute pose, not the preceding move.
+  pick_approach_dz: -10
+  pick_retreat_dz: 10
+  place_approach_dz: -10
+  place_retreat_dz: 10
+
+poses:
+  # PICK: UI row 0; CSV ID = row * 6 + column + 1.
+  pick_0_1_above: [375, 138, '$work_above_z', -1.5707963267949]
+  pick_0_2_above: [575, 138, '$work_above_z', -1.5707963267949]
+  pick_0_3_above: [775, 138, '$work_above_z', -1.5707963267949]
+  pick_0_4_above: [975, 138, '$work_above_z', -1.5707963267949]
+  # PICK: UI row 1; CSV ID = row * 6 + column + 1.
+  pick_1_1_above: [375, 338, '$work_above_z', -1.5707963267949]
+  pick_1_2_above: [575, 338, '$work_above_z', -1.5707963267949]
+  pick_1_3_above: [775, 338, '$work_above_z', -1.5707963267949]
+  pick_1_4_above: [975, 338, '$work_above_z', -1.5707963267949]
+  # PICK: UI row 2; CSV ID = row * 6 + column + 1.
+  pick_2_1_above: [375, 538, '$work_above_z', -1.5707963267949]
+  pick_2_2_above: [575, 538, '$work_above_z', -1.5707963267949]
+  pick_2_3_above: [775, 538, '$work_above_z', -1.5707963267949]
+  pick_2_4_above: [975, 538, '$work_above_z', -1.5707963267949]
+  # PICK: UI row 3; CSV ID = row * 6 + column + 1.
+  pick_3_1_above: [375, 457, '$common_work_above_z', 1.5707963267949]
+  pick_3_2_above: [575, 457, '$common_work_above_z', 1.5707963267949]
+  pick_3_3_above: [775, 457, '$common_work_above_z', 1.5707963267949]
+  pick_3_4_above: [975, 457, '$common_work_above_z', 1.5707963267949]
+  # PLACE red: GroupIdx=box+1, RowIdx=box_column+1, ColIdx=2.
+  place_red_0_0_above: [167.28, -71.65, '$place_above_z', -1.5707963267949]
+  place_red_0_1_above: [204.02, -185.65, '$place_above_z', 1.5707963267949]
+  place_red_1_0_above: [167.28, -221.65, '$place_above_z', -1.5707963267949]
+  place_red_1_1_above: [204.02, -335.65, '$place_above_z', 1.5707963267949]
+  place_red_2_0_above: [167.28, -371.65, '$place_above_z', -1.5707963267949]
+  place_red_2_1_above: [204.02, -485.65, '$place_above_z', 1.5707963267949]
+  place_red_3_0_above: [167.28, -521.65, '$place_above_z', -1.5707963267949]
+  place_red_3_1_above: [204.02, -635.65, '$place_above_z', 1.5707963267949]
+  # PLACE blue: GroupIdx=box+1, RowIdx=box_column+1, ColIdx=2.
+  place_blue_0_0_above: [1182.72, -71.65, '$place_above_z', -1.5707963267949]
+  place_blue_0_1_above: [1145.98, -185.65, '$place_above_z', 1.5707963267949]
+  place_blue_1_0_above: [1182.72, -221.65, '$place_above_z', -1.5707963267949]
+  place_blue_1_1_above: [1145.98, -335.65, '$place_above_z', 1.5707963267949]
+  place_blue_2_0_above: [1182.72, -371.65, '$place_above_z', -1.5707963267949]
+  place_blue_2_1_above: [1145.98, -485.65, '$place_above_z', 1.5707963267949]
+  place_blue_3_0_above: [1182.72, -521.65, '$place_above_z', -1.5707963267949]
+  place_blue_3_1_above: [1145.98, -635.65, '$place_above_z', 1.5707963267949]
+
+sequences:
+  pick_common:
+    steps:
+      - move: {relative: [0, 0, '$pick_approach_dz', 0]}
+      - pump: suction
+      - move: {relative: [0, 0, '$pick_retreat_dz', 0]}
+      - pump: off
+  place_common:
+    steps:
+      - move: {relative: [0, 0, '$place_approach_dz', 0]}
+      - pump: release
+      - move: {relative: [0, 0, '$place_retreat_dz', 0]}
+      - pump: off
+
+  pick_0_1:
+    steps:
+      - move: {absolute: pick_0_1_above}
+      - call: pick_common
+  pick_0_2:
+    steps:
+      - move: {absolute: pick_0_2_above}
+      - call: pick_common
+  pick_0_3:
+    steps:
+      - move: {absolute: pick_0_3_above}
+      - call: pick_common
+  pick_0_4:
+    steps:
+      - move: {absolute: pick_0_4_above}
+      - call: pick_common
+  pick_1_1:
+    steps:
+      - move: {absolute: pick_1_1_above}
+      - call: pick_common
+  pick_1_2:
+    steps:
+      - move: {absolute: pick_1_2_above}
+      - call: pick_common
+  pick_1_3:
+    steps:
+      - move: {absolute: pick_1_3_above}
+      - call: pick_common
+  pick_1_4:
+    steps:
+      - move: {absolute: pick_1_4_above}
+      - call: pick_common
+  pick_2_1:
+    steps:
+      - move: {absolute: pick_2_1_above}
+      - call: pick_common
+  pick_2_2:
+    steps:
+      - move: {absolute: pick_2_2_above}
+      - call: pick_common
+  pick_2_3:
+    steps:
+      - move: {absolute: pick_2_3_above}
+      - call: pick_common
+  pick_2_4:
+    steps:
+      - move: {absolute: pick_2_4_above}
+      - call: pick_common
+  pick_3_1:
+    steps:
+      - move: {absolute: pick_3_1_above}
+      - call: pick_common
+  pick_3_2:
+    steps:
+      - move: {absolute: pick_3_2_above}
+      - call: pick_common
+  pick_3_3:
+    steps:
+      - move: {absolute: pick_3_3_above}
+      - call: pick_common
+  pick_3_4:
+    steps:
+      - move: {absolute: pick_3_4_above}
+      - call: pick_common
+  place_red_0_0:
+    steps:
+      - move: {absolute: place_red_0_0_above}
+      - call: place_common
+  place_red_0_1:
+    steps:
+      - move: {absolute: place_red_0_1_above}
+      - call: place_common
+  place_red_1_0:
+    steps:
+      - move: {absolute: place_red_1_0_above}
+      - call: place_common
+  place_red_1_1:
+    steps:
+      - move: {absolute: place_red_1_1_above}
+      - call: place_common
+  place_red_2_0:
+    steps:
+      - move: {absolute: place_red_2_0_above}
+      - call: place_common
+  place_red_2_1:
+    steps:
+      - move: {absolute: place_red_2_1_above}
+      - call: place_common
+  place_red_3_0:
+    steps:
+      - move: {absolute: place_red_3_0_above}
+      - call: place_common
+  place_red_3_1:
+    steps:
+      - move: {absolute: place_red_3_1_above}
+      - call: place_common
+  place_blue_0_0:
+    steps:
+      - move: {absolute: place_blue_0_0_above}
+      - call: place_common
+  place_blue_0_1:
+    steps:
+      - move: {absolute: place_blue_0_1_above}
+      - call: place_common
+  place_blue_1_0:
+    steps:
+      - move: {absolute: place_blue_1_0_above}
+      - call: place_common
+  place_blue_1_1:
+    steps:
+      - move: {absolute: place_blue_1_1_above}
+      - call: place_common
+  place_blue_2_0:
+    steps:
+      - move: {absolute: place_blue_2_0_above}
+      - call: place_common
+  place_blue_2_1:
+    steps:
+      - move: {absolute: place_blue_2_1_above}
+      - call: place_common
+  place_blue_3_0:
+    steps:
+      - move: {absolute: place_blue_3_0_above}
+      - call: place_common
+  place_blue_3_1:
+    steps:
+      - move: {absolute: place_blue_3_1_above}
+      - call: place_common
+
+bindings:
+  red:
+    pick:
+      '0,1': pick_0_1
+      '0,2': pick_0_2
+      '0,3': pick_0_3
+      '0,4': pick_0_4
+      '1,1': pick_1_1
+      '1,2': pick_1_2
+      '1,3': pick_1_3
+      '1,4': pick_1_4
+      '2,1': pick_2_1
+      '2,2': pick_2_2
+      '2,3': pick_2_3
+      '2,4': pick_2_4
+      '3,1': pick_3_1
+      '3,2': pick_3_2
+      '3,3': pick_3_3
+      '3,4': pick_3_4
+    place:
+      '0,0': place_red_0_0
+      '0,1': place_red_0_1
+      '1,0': place_red_1_0
+      '1,1': place_red_1_1
+      '2,0': place_red_2_0
+      '2,1': place_red_2_1
+      '3,0': place_red_3_0
+      '3,1': place_red_3_1
+  blue:
+    pick:
+      '0,1': pick_0_1
+      '0,2': pick_0_2
+      '0,3': pick_0_3
+      '0,4': pick_0_4
+      '1,1': pick_1_1
+      '1,2': pick_1_2
+      '1,3': pick_1_3
+      '1,4': pick_1_4
+      '2,1': pick_2_1
+      '2,2': pick_2_2
+      '2,3': pick_2_3
+      '2,4': pick_2_4
+      '3,1': pick_3_1
+      '3,2': pick_3_2
+      '3,3': pick_3_3
+      '3,4': pick_3_4
+    place:
+      '0,0': place_blue_0_0
+      '0,1': place_blue_0_1
+      '1,0': place_blue_1_0
+      '1,1': place_blue_1_1
+      '2,0': place_blue_2_0
+      '2,1': place_blue_2_1
+      '3,0': place_blue_3_0
+      '3,1': place_blue_3_1

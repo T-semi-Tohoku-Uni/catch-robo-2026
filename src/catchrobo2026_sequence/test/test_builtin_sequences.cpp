@@ -1,0 +1,237 @@
+#include "catchrobo2026_sequence/sequence_config.hpp"
+
+#include <gtest/gtest.h>
+#include <yaml-cpp/yaml.h>
+
+#include <string>
+#include <vector>
+
+namespace catchrobo2026_sequence
+{
+namespace
+{
+
+std::string key(int first, int second)
+{
+  return std::to_string(first) + "," + std::to_string(second);
+}
+
+double value(const YAML::Node & yaml, std::string name)
+{
+  for (int depth = 0; depth < 64; ++depth) {
+    const auto entry = yaml["values"][name];
+    const auto text = entry.as<std::string>();
+    if (!text.empty() && text.front() == '$') {
+      name = text.substr(1);
+    } else {
+      return entry.as<double>();
+    }
+  }
+  throw std::runtime_error("value reference cycle");
+}
+
+void expect_same_steps(const std::vector<Step> & actual, const std::vector<Step> & expected)
+{
+  ASSERT_EQ(actual.size(), expected.size());
+  for (std::size_t index = 0; index < actual.size(); ++index) {
+    SCOPED_TRACE(index);
+    EXPECT_EQ(actual[index].type, expected[index].type);
+    for (std::size_t axis = 0; axis < actual[index].pose.size(); ++axis) {
+      EXPECT_DOUBLE_EQ(actual[index].pose[axis], expected[index].pose[axis]);
+    }
+    EXPECT_EQ(actual[index].command, expected[index].command);
+    EXPECT_DOUBLE_EQ(actual[index].seconds, expected[index].seconds);
+  }
+}
+
+template<typename Callback>
+void for_each_binding(Callback callback)
+{
+  for (const std::string team : {"red", "blue"}) {
+    for (const std::string kind : {"pick", "place"}) {
+      for (int first = 0; first < 4; ++first) {
+        const int begin = kind == "pick" ? 1 : 0;
+        const int end = kind == "pick" ? 5 : 2;
+        for (int second = begin; second < end; ++second) {
+          SCOPED_TRACE(team + " " + kind + " " + key(first, second));
+          callback(team, kind, first, second);
+        }
+      }
+    }
+  }
+}
+
+TEST(BuiltinSequences, EveryUiPositionIsConfigured)
+{
+  const auto yaml = YAML::LoadFile(SEQUENCE_CONFIG_PATH);
+  const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
+  for (const std::string team : {"red", "blue"}) {
+    SCOPED_TRACE(team);
+    ASSERT_EQ(yaml["bindings"][team]["pick"].size(), 16u);
+    ASSERT_EQ(yaml["bindings"][team]["place"].size(), 8u);
+    for (int row = 0; row < 4; ++row) {
+      for (int column = 1; column < 5; ++column) {
+        SCOPED_TRACE(key(row, column));
+        const auto steps = config.compile(team, "pick", row, column);
+        ASSERT_FALSE(steps.empty());
+        EXPECT_EQ(steps.front().type, StepType::MOVE);
+      }
+    }
+    for (int box = 0; box < 4; ++box) {
+      for (int column = 0; column < 2; ++column) {
+        SCOPED_TRACE(key(box, column));
+        const auto steps = config.compile(team, "place", box, column);
+        ASSERT_FALSE(steps.empty());
+        EXPECT_EQ(steps.front().type, StepType::MOVE);
+      }
+    }
+  }
+}
+
+TEST(BuiltinSequences, PickupBindingsAndExpandedStepsAreSharedBetweenTeams)
+{
+  const auto yaml = YAML::LoadFile(SEQUENCE_CONFIG_PATH);
+  const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
+  for (int row = 0; row < 4; ++row) {
+    for (int column = 1; column < 5; ++column) {
+      const auto binding = key(row, column);
+      SCOPED_TRACE(binding);
+      EXPECT_EQ(
+        yaml["bindings"]["red"]["pick"][binding].as<std::string>(),
+        yaml["bindings"]["blue"]["pick"][binding].as<std::string>());
+      expect_same_steps(
+        config.compile("red", "pick", row, column),
+        config.compile("blue", "pick", row, column));
+    }
+  }
+}
+
+TEST(BuiltinSequences, PlacementBindingsSelectDifferentTeamApproaches)
+{
+  const auto yaml = YAML::LoadFile(SEQUENCE_CONFIG_PATH);
+  const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
+  for (int box = 0; box < 4; ++box) {
+    for (int column = 0; column < 2; ++column) {
+      const auto binding = key(box, column);
+      SCOPED_TRACE(binding);
+      EXPECT_NE(
+        yaml["bindings"]["red"]["place"][binding].as<std::string>(),
+        yaml["bindings"]["blue"]["place"][binding].as<std::string>());
+      const auto red = config.compile("red", "place", box, column);
+      const auto blue = config.compile("blue", "place", box, column);
+      ASSERT_FALSE(red.empty());
+      ASSERT_FALSE(blue.empty());
+      EXPECT_NE(red.front().pose, blue.front().pose);
+    }
+  }
+}
+
+TEST(BuiltinSequences, AllBindingsReachBothWaypointsAroundTheirPumpCommands)
+{
+  const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
+  for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
+      const auto steps = config.compile(team, kind, first, second);
+      ASSERT_EQ(steps.size(), 5u);
+      EXPECT_EQ(steps[0].type, StepType::MOVE);
+      EXPECT_EQ(steps[1].type, StepType::MOVE);
+      EXPECT_EQ(steps[2].type, StepType::PUMP);
+      EXPECT_EQ(steps[2].command, kind == "pick" ? 1 : -1);
+      EXPECT_EQ(steps[3].type, StepType::MOVE);
+      EXPECT_EQ(steps[4].type, StepType::PUMP);
+      EXPECT_EQ(steps[4].command, 0);
+    });
+}
+
+TEST(BuiltinSequences, BothRelativeOffsetsUseTheFixedApproachAnchor)
+{
+  const auto yaml = YAML::LoadFile(SEQUENCE_CONFIG_PATH);
+  const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
+  for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
+      const auto steps = config.compile(team, kind, first, second);
+      ASSERT_EQ(steps.size(), 5u);
+      for (const auto index : {1u, 3u}) {
+        const std::string offset = kind + (index == 1 ? "_approach_dz" : "_retreat_dz");
+        for (const auto axis : {0u, 1u, 3u}) {
+          EXPECT_DOUBLE_EQ(steps[index].pose[axis], steps[0].pose[axis]);
+        }
+        EXPECT_DOUBLE_EQ(steps[index].pose[2], steps[0].pose[2] + value(yaml, offset));
+      }
+    });
+}
+
+TEST(BuiltinSequences, OneHeightEditMovesOnlyTheSelectedRegionAndItsRelativeWaypoints)
+{
+  const auto before = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
+  for (const std::string name : {"work_above_z", "common_work_above_z", "place_above_z"}) {
+    SCOPED_TRACE(name);
+    auto yaml = YAML::LoadFile(SEQUENCE_CONFIG_PATH);
+    const double original_height = value(yaml, name);
+    constexpr double delta = 137.0;
+    yaml["values"][name] = original_height + delta;
+    const auto after = SequenceConfig::from_yaml(YAML::Dump(yaml));
+    for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
+        auto expected = before.compile(team, kind, first, second);
+        const bool changed =
+          (name == "work_above_z" && kind == "pick" && first < 3) ||
+          (name == "common_work_above_z" && kind == "pick" && first == 3) ||
+          (name == "place_above_z" && kind == "place");
+        if (changed) {
+          for (auto & step : expected) {
+            if (step.type == StepType::MOVE) {
+              step.pose[2] += delta;
+            }
+          }
+        }
+        expect_same_steps(after.compile(team, kind, first, second), expected);
+      });
+  }
+}
+
+TEST(BuiltinSequences, OneRelativeOffsetEditChangesOnlyItsWaypointAcrossTheMatchingBindings)
+{
+  const auto before = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
+  for (const std::string changed_kind : {"pick", "place"}) {
+    for (const auto index : {1u, 3u}) {
+      const std::string name = changed_kind + (index == 1 ? "_approach_dz" : "_retreat_dz");
+      SCOPED_TRACE(name);
+      auto yaml = YAML::LoadFile(SEQUENCE_CONFIG_PATH);
+      constexpr double delta = 83.0;
+      yaml["values"][name] = value(yaml, name) + delta;
+      const auto after = SequenceConfig::from_yaml(YAML::Dump(yaml));
+      for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
+          auto expected = before.compile(team, kind, first, second);
+          ASSERT_EQ(expected.size(), 5u);
+          if (kind == changed_kind) {
+            expected[index].pose[2] += delta;
+          }
+          expect_same_steps(after.compile(team, kind, first, second), expected);
+        });
+    }
+  }
+}
+
+TEST(BuiltinSequences, OneCommonSequenceEditChangesEveryMatchingBindingOnly)
+{
+  const auto before = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
+  for (const std::string changed_kind : {"pick", "place"}) {
+    SCOPED_TRACE(changed_kind);
+    auto yaml = YAML::LoadFile(SEQUENCE_CONFIG_PATH);
+    YAML::Node extra;
+    extra["wait"] = 0.375;
+    yaml["sequences"][changed_kind + "_common"]["steps"].push_back(extra);
+    const auto after = SequenceConfig::from_yaml(YAML::Dump(yaml));
+    for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
+        auto expected = before.compile(team, kind, first, second);
+        if (kind == changed_kind) {
+          Step wait;
+          wait.type = StepType::WAIT;
+          wait.seconds = 0.375;
+          expected.push_back(wait);
+        }
+        expect_same_steps(after.compile(team, kind, first, second), expected);
+      });
+  }
+}
+
+}  // namespace
+}  // namespace catchrobo2026_sequence

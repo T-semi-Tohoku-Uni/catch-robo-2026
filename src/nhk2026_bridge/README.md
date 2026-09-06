@@ -24,6 +24,8 @@ youruser ALL=(root) NOPASSWD: /usr/sbin/ip link set can0 down
 ### パラメータ
 #### 基本
 - `ifname`（string, default: `can0`）
+- `non_blocking`（bool, default: `true`）: SocketCANの非ブロッキング送信。
+- `tx_retry_timeout_ms`（int, default: `5`, range: `0..1000`）: 送信キュー混雑時の再試行待ち時間。`0` は再試行せず、その送信の失敗を報告します。
 
 #### ブリッジ設定
 - `pub_float_bridge_topic` / `pub_int_bridge_topic` / `pub_bytes_bridge_topic`（string[]）
@@ -49,6 +51,21 @@ int 系は各要素を符号付き32bit整数の4バイトbig-endianで送受信
 
 ### 運用上の注意
 - Active 状態ではパラメータ変更は拒否されます。変更する場合は `deactivate` してから再設定してください。
+
+### 送信バッファ不足への対処
+
+`No buffer space available`（`ENOBUFS`、errno 105）は送信キューへフレームを投入できなかったことを示します。従来の整数シフト実装と現在の `htobe32` 実装では、CAN ID・長さ・フラグ・データを含む送信フレームは同一です。
+
+ブリッジは `ENOBUFS`、`EAGAIN`／`EWOULDBLOCK`、`EINTR` で失敗したフレームを約1ms間隔で再試行します。既定では5msの期限までに投入できなければ失敗を報告し、そのフレームの再試行を終了します。成功したフレームは再送しません。ログにはインターフェース、CAN ID、データ長、errno、試行回数を出します。インターフェースDOWN等の他のエラーは即座に報告します。
+
+待ち時間は [raspi_canbridge.yml](config/raspi_canbridge.yml) の `tx_retry_timeout_ms` で調整できます。ブリッジは単一のROSコールバックスレッドを使用するため、待ち時間を長くすると他の指令処理も遅れます。`non_blocking=false` では、再試行待ちとは別にカーネルの送信処理自体がブロックする可能性があります。
+
+この処理が吸収するのは短い混雑です。キューが継続して排出されない原因や、投入済みフレームの送信完了・実機側の受信は保証しません。エラーが続く場合は、発生中のTX packets／errorsとキューの増減を確認します。
+
+```bash
+ip -details -statistics link show can0
+tc -statistics qdisc show dev can0
+```
 
 ### vcanでの起動
 
