@@ -7,6 +7,9 @@ import subprocess
 
 from launch.actions import EmitEvent, RegisterEventHandler
 from launch.actions import OpaqueFunction, Shutdown
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+from launch_ros.parameter_descriptions import ParameterValue
 from launch.event_handlers import OnProcessStart
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
@@ -77,9 +80,18 @@ def _ensure_can0_up(context, *args, **kwargs):
 def generate_launch_description():
     pkg_share = get_package_share_directory('nhk2026_bridge')
     canid_file = os.path.join(pkg_share, 'config', 'raspi_canbridge.yml')
+    non_blocking = LaunchConfiguration('non_blocking')
 
     name_space = ''
     ld = LaunchDescription()
+    ld.add_action(
+        DeclareLaunchArgument(
+            'non_blocking',
+            default_value='true',
+            choices=['true', 'false'],
+            description='Use non-blocking SocketCAN transmission',
+        )
+    )
     ld.add_action(OpaqueFunction(function=_require_can0))
     ld.add_action(OpaqueFunction(function=_ensure_can0_up))
 
@@ -89,7 +101,10 @@ def generate_launch_description():
         executable='nhk2026_canbridge',
         name='nhk2026_canbridge',
         namespace=name_space,
-        parameters=[canid_file],
+        parameters=[
+            canid_file,
+            {'non_blocking': ParameterValue(non_blocking, value_type=bool)},
+        ],
         output='screen',
         emulate_tty=True, 
     )

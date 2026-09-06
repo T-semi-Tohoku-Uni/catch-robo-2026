@@ -18,10 +18,11 @@ find_package(visualization_msgs REQUIRED)
 add_executable(map_mesh_publisher src/map_mesh_publisher.cpp)
 ament_target_dependencies(map_mesh_publisher rclcpp visualization_msgs)
 
-# launchディレクトリとrvizディレクトリのインストール指定
+# launch、rviz、modelsディレクトリのインストール指定
 install(DIRECTORY
   launch
   rviz
+  models
   DESTINATION share/${PROJECT_NAME}
 )
 

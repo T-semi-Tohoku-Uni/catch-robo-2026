@@ -1,7 +1,15 @@
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+
 def generate_launch_description():
+    pump_config = os.path.join(
+        get_package_share_directory('catchrobo2026_pump'), 'config', 'pump.yaml')
     return LaunchDescription([
         # ==================================
         # 自動制御 (アクション通信) 系
@@ -38,24 +46,25 @@ def generate_launch_description():
             name='joy_controller_node',
             output='screen'
         ),
-        # 5. ポンプ管理ノード
+
+        # 3. ポンプ・電磁弁制御ノード
         Node(
-            package='catchrobo2026_hand_operated',
-            executable='pump_state_node',
-            name='pump_state_node',
+            package='catchrobo2026_pump',
+            executable='pump_controller_node',
+            name='pump_controller_node',
+            parameters=[LaunchConfiguration('pump_config')],
             output='screen'
         ),
+        
+        # 4. エンドエフェクタ制御ノード
         Node(
-            package='catchrobo2026_hand_operated',
+            package='catchrobo2026_endeffector',
             executable='endeffector_state_node',
             name='endeffector_state_node',
             output='screen'
         ),
 
-        # ==================================
-        # 共通可視化系
-        # ==================================
-        # 6. 現在の運動学ビジュアライザノード
+        # 5. 現在のジョイント角度(current_joints)から順運動学を計算し、RViz用のマーカーをパブリッシュするノード
         Node(
             package='nav_director',
             executable='current_kinematics_visualizer',

@@ -3,6 +3,7 @@
 #include <vector>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/joy.hpp"
@@ -34,16 +35,11 @@ public:
         pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
             "target_pose", 10, std::bind(&JoyControllerNode::pose_callback, this, std::placeholders::_1));
             
-        pump_sub_ = this->create_subscription<std_msgs::msg::Int32MultiArray>(
-            "pump_state", 10, std::bind(&JoyControllerNode::pump_callback, this, std::placeholders::_1));
-            
-        // 【追加】Endeffector状態のサブスクライバー
         endeffector_sub_ = this->create_subscription<std_msgs::msg::Int32MultiArray>(
             "endeffector_state", 10, std::bind(&JoyControllerNode::endeffector_callback, this, std::placeholders::_1));
 
         // 3. サービスクライアント
         pump_client_ = this->create_client<catchrobo2026_msgs::srv::PumpControl>("set_pump_state");
-        // 【追加】Endeffector切り替え用サービスクライアント
         endeffector_client_ = this->create_client<catchrobo2026_msgs::srv::EndeffectorControl>("set_endeffector_state");
 
         // 4. IK計算とパブリッシュを行うメインループタイマー (例: 20ms = 50Hz)
@@ -62,6 +58,8 @@ public:
     }
 
 private:
+    using PumpRequest = catchrobo2026_msgs::srv::PumpControl::Request;
+
     void pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
     // 単位を [m] から [mm] に変換
     current_pose_[0] = msg->pose.position.x * 1000.0;
@@ -86,13 +84,6 @@ private:
     // 4DoF IKでは THE(Pitch) と PSI(Roll) は使用しないため更新不要です
 }
 
-    void pump_callback(const std_msgs::msg::Int32MultiArray::SharedPtr msg) {
-        if (!msg->data.empty()) {
-            current_pump_val_ = msg->data[0];
-        }
-    }
-
-    // 【追加】Endeffector状態のコールバック
     void endeffector_callback(const std_msgs::msg::Int32MultiArray::SharedPtr msg) {
         if (!msg->data.empty()) {
             current_endeffector_val_ = msg->data[0];
@@ -111,39 +102,49 @@ private:
         // --- 〇ボタン(buttons[1])によるPump状態の遷移 ---
         bool current_o_button = msg->buttons[1]; 
 
-        if (current_o_button && !prev_o_button_) {
+        if (current_o_button && !prev_o_button_ && !pump_request_pending_) {
             if (!pump_client_->service_is_ready()) {
                 RCLCPP_WARN(this->get_logger(), "Pump service not ready.");
             } else {
-                auto request = std::make_shared<catchrobo2026_msgs::srv::PumpControl::Request>();
-                
-                // 現在の値から次のコマンドを決定 (1:56, 2:0, 3:7)
-                if (current_pump_val_ == 63) {
-                    request->command = 2; // 次は 0
-                } else if (current_pump_val_ == 56) {
-                    request->command = 3; // 次は 7
-                } else {
-                    request->command = 1; // それ以外(7など)なら 56 に戻す
-                }
-
-                pump_client_->async_send_request(request);
-                RCLCPP_INFO(this->get_logger(), "Requested Pump change. Sent command: %d", request->command);
+                auto request = std::make_shared<PumpRequest>();
+                // mainの起動時吸引から「開放→OFF→吸引」の順に操作する。
+                // CANのビット割当・極性はポンプ制御ノードに任せる。
+                request->left = next_pump_state_;
+                request->center = next_pump_state_;
+                request->right = next_pump_state_;
+                pump_request_pending_ = true;
+                pump_request_time_ = std::chrono::steady_clock::now();
+                pump_request_id_ = pump_client_->async_send_request(request,
+                    [this](rclcpp::Client<catchrobo2026_msgs::srv::PumpControl>::SharedFuture future) {
+                        pump_request_pending_ = false;
+                        if (!future.get()->success) {
+                            RCLCPP_WARN(this->get_logger(), "Pump request was rejected.");
+                            return;
+                        }
+                        if (next_pump_state_ == PumpRequest::OFF) {
+                            next_pump_state_ = PumpRequest::SUCTION;
+                        } else if (next_pump_state_ == PumpRequest::SUCTION) {
+                            next_pump_state_ = PumpRequest::RELEASE;
+                        } else {
+                            next_pump_state_ = PumpRequest::OFF;
+                        }
+                    }).request_id;
             }
         }
         prev_o_button_ = current_o_button;
 
-        // --- 【追加】ボタン(例: buttons[2])によるEndeffector状態の遷移 ---
-        bool current_endeffector_button = msg->buttons[2]; // 任意のボタンに変更可能
+        // --- buttons[2]によるEndeffector状態の切り替え ---
+        bool current_endeffector_button = msg->buttons[2];
 
         if (current_endeffector_button && !prev_endeffector_button_) {
             if (!endeffector_client_->service_is_ready()) {
                 RCLCPP_WARN(this->get_logger(), "Endeffector service not ready.");
             } else {
                 auto request = std::make_shared<catchrobo2026_msgs::srv::EndeffectorControl::Request>();
-                
+
                 // 現在の値から次のコマンドを決定 (endeffector_state_nodeの仕様に準拠: 0または1)
                 if (current_endeffector_val_ == 0) {
-                    request->command = 1; 
+                    request->command = 1;
                 } else {
                     request->command = 0; // 初期値の56や1の場合は0へ
                 }
@@ -156,6 +157,14 @@ private:
     }
 
     void publish_timer_callback() {
+        // 応答が途絶えても、次のボタン操作で同じ状態を再要求できるようにする。
+        if (pump_request_pending_ &&
+            std::chrono::steady_clock::now() - pump_request_time_ >= 1s) {
+            pump_client_->remove_pending_request(pump_request_id_);
+            pump_request_pending_ = false;
+            RCLCPP_WARN(this->get_logger(), "Pump request timed out. Press again to retry.");
+        }
+
         // 1. Joy入力による手動介入 (位置の微調整)
         const float pos_gain = 5.0f;  
         const float rot_gain = 0.05f; 
@@ -182,22 +191,24 @@ private:
     // --- 変数定義 ---
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
-    rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr pump_sub_;
-    rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr endeffector_sub_; // 【追加】
+    rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr endeffector_sub_;
     
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr joint_pub_;
     rclcpp::Client<catchrobo2026_msgs::srv::PumpControl>::SharedPtr pump_client_;
-    rclcpp::Client<catchrobo2026_msgs::srv::EndeffectorControl>::SharedPtr endeffector_client_; // 【追加】
+    rclcpp::Client<catchrobo2026_msgs::srv::EndeffectorControl>::SharedPtr endeffector_client_;
     
     rclcpp::TimerBase::SharedPtr publish_timer_; 
     
     robot_kinematics kin_; // 運動学クラスのインスタンス
 
     float current_pose_[6];
-    int current_pump_val_ = 56;
-    int current_endeffector_val_ = 56; // 【追加】初期値はノード側に合わせる
+    int8_t next_pump_state_ = PumpRequest::RELEASE;
+    bool pump_request_pending_ = false;
+    int64_t pump_request_id_ = 0;
+    std::chrono::steady_clock::time_point pump_request_time_;
+    int current_endeffector_val_ = 56; // main由来の起動値。実機での意味は未確認。
     bool prev_o_button_ = false; 
-    bool prev_endeffector_button_ = false; // 【追加】
+    bool prev_endeffector_button_ = false;
     
     float vel_x_ = 0.0f;
     float vel_y_ = 0.0f;

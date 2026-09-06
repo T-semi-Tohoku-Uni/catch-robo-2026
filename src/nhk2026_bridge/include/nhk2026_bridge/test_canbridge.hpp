@@ -19,6 +19,7 @@ public:
     using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 private:
     const char* Ifname;
+    CanBridge::SocketMode socket_mode_{CanBridge::SocketMode::NonBlocking};
     
     CallbackReturn on_configure(const rclcpp_lifecycle::State &state);
     CallbackReturn on_activate(const rclcpp_lifecycle::State &state);

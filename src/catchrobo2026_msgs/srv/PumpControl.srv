@@ -1,3 +1,11 @@
-int32 command
+# 各回収機構の状態: 開放=-1、オフ=0、吸引=1。
+int8 RELEASE=-1
+int8 OFF=0
+int8 SUCTION=1
+
+# L/C/Rを毎回すべて設定する。いずれかが範囲外なら全体を拒否する。
+int8 left
+int8 center
+int8 right
 ---
 bool success

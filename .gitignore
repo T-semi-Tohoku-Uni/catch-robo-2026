@@ -1,4 +1,5 @@
 .vscode/
+.idea/
 
 *.dae
 *.stl
@@ -7,3 +8,7 @@
 build/
 install/
 log/
+
+# Local Codex instructions and memory
+/.codex/
+/AGENTS.md

@@ -37,27 +37,11 @@ ament_target_dependencies(joy_controller_node
   inverse_kinematics_package
 )
 
-# 2. pump_state_node 
-add_executable(pump_state_node src/pump_state_node.cpp)
-ament_target_dependencies(pump_state_node
-  rclcpp
-  std_msgs
-  catchrobo2026_msgs
-)
-
-add_executable(endeffector_state_node src/endeffector_state_node.cpp)
-ament_target_dependencies(endeffector_state_node
-  rclcpp
-  std_msgs
-  catchrobo2026_msgs
-)
 # ==========================================
 # インストール設定
 # ==========================================
 install(TARGETS
   joy_controller_node
-  pump_state_node  
-  endeffector_state_node 
   DESTINATION lib/${PROJECT_NAME}
 )
 

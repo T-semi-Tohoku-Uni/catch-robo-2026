@@ -30,7 +30,7 @@ private:
     
     marker.type = visualization_msgs::msg::Marker::MESH_RESOURCE;
     marker.action = visualization_msgs::msg::Marker::ADD;
-    marker.mesh_resource = "package://core/models/field/meshes/catch_field.obj";
+    marker.mesh_resource = "package://field_visualization/models/field/meshes/catch_field.obj";
     marker.mesh_use_embedded_materials = true;
 
     marker.pose.position.x = 0.650;

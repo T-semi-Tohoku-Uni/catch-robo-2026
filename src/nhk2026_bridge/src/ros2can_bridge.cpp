@@ -1,10 +1,12 @@
 #include "ros2can_bridge.hpp"
 
 #include <cerrno>
+#include <endian.h>
+#include <fcntl.h>
 #include <poll.h>
 
-CanBridge::CanBridge(const std::string &Ifname)
-: ifname(Ifname), sock(-1)
+CanBridge::CanBridge(const std::string &interface_name, SocketMode socket_mode)
+: ifname(interface_name), sock(-1)
 {
     this->sock = socket(PF_CAN, SOCK_RAW, CAN_RAW);
     if (this->sock < 0)
@@ -12,29 +14,81 @@ CanBridge::CanBridge(const std::string &Ifname)
         throw std::runtime_error("failed to open socket");
     }
 
-    int enable_canfd = 1;
-    if (setsockopt(this->sock, SOL_CAN_RAW, CAN_RAW_FD_FRAMES,
-    &enable_canfd, sizeof(enable_canfd)) < 0)
-    {
-        close(this->sock);
-        throw std::runtime_error("failed to socketopt canfd");
-    }
-
     ifreq ifr{};
     std::strncpy(ifr.ifr_name, ifname.c_str(), IFNAMSIZ - 1);
     if (ioctl(this->sock, SIOCGIFINDEX, &ifr) < 0)
     {
+        const int error_number = errno;
         close(this->sock);
-        throw std::runtime_error("failed to use ioctl");
+        this->sock = -1;
+        throw std::runtime_error(
+            std::string("failed to get CAN interface index: ") + std::strerror(error_number));
     }
+
     sockaddr_can addr{};
     addr.can_family = AF_CAN;
     addr.can_ifindex = ifr.ifr_ifindex;
 
-    if (bind(this->sock, (sockaddr*)&addr, sizeof(addr)) < 0)
+    if (ioctl(this->sock, SIOCGIFMTU, &ifr) < 0)
+    {
+        const int error_number = errno;
+        close(this->sock);
+        this->sock = -1;
+        throw std::runtime_error(
+            std::string("failed to get CAN interface MTU: ") + std::strerror(error_number));
+    }
+
+    const int mtu = ifr.ifr_mtu;
+    if (mtu != CANFD_MTU)
     {
         close(this->sock);
-        throw std::runtime_error("failed to bind");
+        this->sock = -1;
+        throw std::runtime_error(
+            "CAN interface is not CAN FD capable: MTU is " + std::to_string(mtu) +
+            ", expected " + std::to_string(CANFD_MTU));
+    }
+
+    const int enable_canfd = 1;
+    if (setsockopt(this->sock, SOL_CAN_RAW, CAN_RAW_FD_FRAMES,
+        &enable_canfd, sizeof(enable_canfd)) < 0)
+    {
+        const int error_number = errno;
+        close(this->sock);
+        this->sock = -1;
+        throw std::runtime_error(
+            std::string("failed to enable CAN FD frames: ") + std::strerror(error_number));
+    }
+
+    if (bind(this->sock, (sockaddr*)&addr, sizeof(addr)) < 0)
+    {
+        const int error_number = errno;
+        close(this->sock);
+        this->sock = -1;
+        throw std::runtime_error(
+            std::string("failed to bind CAN socket: ") + std::strerror(error_number));
+    }
+
+    if (socket_mode == SocketMode::NonBlocking)
+    {
+        const int socket_flags = fcntl(this->sock, F_GETFL, 0);
+        if (socket_flags < 0)
+        {
+            const int error_number = errno;
+            close(this->sock);
+            this->sock = -1;
+            throw std::runtime_error(
+                std::string("failed to get CAN socket flags: ") + std::strerror(error_number));
+        }
+
+        if (fcntl(this->sock, F_SETFL, socket_flags | O_NONBLOCK) < 0)
+        {
+            const int error_number = errno;
+            close(this->sock);
+            this->sock = -1;
+            throw std::runtime_error(
+                std::string("failed to set CAN socket non-blocking: ") +
+                std::strerror(error_number));
+        }
     }
 }
 
@@ -68,10 +122,15 @@ void CanBridge::send_float(int canid, const std::vector<float> &txdata_f)
         frame.data[i*4 + 2] = (uint8_t)((data.data_ui32 >>  8) & 0xff);
         frame.data[i*4 + 3] = (uint8_t)((data.data_ui32      ) & 0xff);
     }
-    int nbytes = write(this->sock, &frame, sizeof(frame));
-    if (nbytes != sizeof(frame))
+    const ssize_t nbytes = write(this->sock, &frame, sizeof(frame));
+    if (nbytes < 0)
     {
-        throw std::runtime_error("failed to write");
+        throw std::runtime_error(std::string("failed to write: ") + std::strerror(errno));
+    }
+    if (nbytes != static_cast<ssize_t>(sizeof(frame)))
+    {
+        throw std::runtime_error(
+            "failed to write: unexpected frame size " + std::to_string(nbytes));
     }
 }
 
@@ -89,16 +148,19 @@ void CanBridge::send_int(int canid, const std::vector<int> &txdata_i)
     frame.flags |= CANFD_BRS;
     for (size_t i = 0; i < txdata_i.size(); i++)
     {
-        uint32_t val = static_cast<uint32_t>(txdata_i[i]);
-        frame.data[i*4    ] = (uint8_t)((val >> 24) & 0xff);
-        frame.data[i*4 + 1] = (uint8_t)((val >> 16) & 0xff);
-        frame.data[i*4 + 2] = (uint8_t)((val >>  8) & 0xff);
-        frame.data[i*4 + 3] = (uint8_t)((val      ) & 0xff);
+        const uint32_t big_endian_value = htobe32(static_cast<uint32_t>(txdata_i[i]));
+        std::memcpy(frame.data + i * sizeof(big_endian_value),
+            &big_endian_value, sizeof(big_endian_value));
     }
-    int nbytes = write(this->sock, &frame, sizeof(frame));
-    if (nbytes != sizeof(frame))
+    const ssize_t nbytes = write(this->sock, &frame, sizeof(frame));
+    if (nbytes < 0)
     {
-        throw std::runtime_error("failed to write");
+        throw std::runtime_error(std::string("failed to write: ") + std::strerror(errno));
+    }
+    if (nbytes != static_cast<ssize_t>(sizeof(frame)))
+    {
+        throw std::runtime_error(
+            "failed to write: unexpected frame size " + std::to_string(nbytes));
     }
 }
 
@@ -120,10 +182,15 @@ void CanBridge::send_bytes(int canid, const std::vector<uint8_t> &txdata_b)
         std::memcpy(frame.data, txdata_b.data(), static_cast<size_t>(byte_length));
     }
 
-    int nbytes = write(this->sock, &frame, sizeof(frame));
-    if (nbytes != sizeof(frame))
+    const ssize_t nbytes = write(this->sock, &frame, sizeof(frame));
+    if (nbytes < 0)
     {
-        throw std::runtime_error("failed to write");
+        throw std::runtime_error(std::string("failed to write: ") + std::strerror(errno));
+    }
+    if (nbytes != static_cast<ssize_t>(sizeof(frame)))
+    {
+        throw std::runtime_error(
+            "failed to write: unexpected frame size " + std::to_string(nbytes));
     }
 }
 
@@ -154,20 +221,38 @@ bool CanBridge::receive_data(RxData_struct &out)
             return false;
         }
 
+        if ((pfd.revents & POLLIN) == 0)
+        {
+            if ((pfd.revents & POLLNVAL) != 0)
+            {
+                throw std::runtime_error("failed to poll: invalid CAN socket");
+            }
+            if ((pfd.revents & (POLLERR | POLLHUP)) != 0)
+            {
+                throw std::runtime_error("failed to poll: CAN socket error");
+            }
+            return false;
+        }
+
         canfd_frame frame{};
-        const int nbytes = read(this->sock, &frame, sizeof(frame));
+        const ssize_t nbytes = recv(this->sock, &frame, sizeof(frame), MSG_DONTWAIT);
         if (nbytes < 0)
         {
             if (errno == EINTR)
             {
                 continue;
             }
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            {
+                return false;
+            }
             throw std::runtime_error(std::string("failed to read: ") + std::strerror(errno));
         }
-        if (nbytes != static_cast<int>(sizeof(canfd_frame)) &&
-            nbytes != static_cast<int>(sizeof(can_frame)))
+        if (nbytes != static_cast<ssize_t>(sizeof(canfd_frame)) &&
+            nbytes != static_cast<ssize_t>(sizeof(can_frame)))
         {
-            throw std::runtime_error("failed to read: unexpected frame size " + std::to_string(nbytes));
+            throw std::runtime_error(
+                "failed to read: unexpected frame size " + std::to_string(nbytes));
         }
         if (frame.len > CANFD_MAX_DLEN)
         {
@@ -207,12 +292,10 @@ std::vector<int> CanBridge::rxdata_to_int(const RxData_struct &rxdata)
 
     for (size_t i = 0; i < vector_len; i++)
     {
-        uint32_t rxdata_ui32 = (static_cast<uint32_t>(rxdata.data[i*4])     << 24) |
-                               (static_cast<uint32_t>(rxdata.data[i*4 + 1]) << 16) |
-                               (static_cast<uint32_t>(rxdata.data[i*4 + 2]) << 8)  |
-                               (static_cast<uint32_t>(rxdata.data[i*4 + 3]));
-
-        rxdata_i[i] = static_cast<int32_t>(rxdata_ui32);
+        uint32_t big_endian_value;
+        std::memcpy(&big_endian_value,
+            rxdata.data.data() + i * sizeof(big_endian_value), sizeof(big_endian_value));
+        rxdata_i[i] = static_cast<int32_t>(be32toh(big_endian_value));
     }
 
     return rxdata_i;

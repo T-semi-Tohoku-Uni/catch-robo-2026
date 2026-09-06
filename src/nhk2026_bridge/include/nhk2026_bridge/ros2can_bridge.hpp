@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
@@ -14,13 +15,21 @@
 class CanBridge
 {
 public:
+    enum class SocketMode
+    {
+        Blocking,
+        NonBlocking,
+    };
+
     struct RxData_struct
     {
         int canid;
         std::vector<uint8_t> data;
     };
 
-    CanBridge(const std::string& Ifname);
+    CanBridge(
+        const std::string &interface_name,
+        SocketMode socket_mode);
     ~CanBridge();
     void send_float(int canid, const std::vector<float> &txdata_f);
     void send_int(int canid, const std::vector<int> &txdata_i);

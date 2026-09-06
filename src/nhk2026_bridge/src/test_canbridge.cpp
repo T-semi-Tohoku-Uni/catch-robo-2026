@@ -5,8 +5,12 @@ TestCanBridge::TestCanBridge()
 Ifname("can0")
 {
     this->declare_parameter<int>("vel_canid", 0x200);
+    this->declare_parameter("non_blocking", true);
 
     this->vel_canid = this->get_parameter("vel_canid").as_int();
+    const bool non_blocking = this->get_parameter("non_blocking").as_bool();
+    this->socket_mode_ = non_blocking ?
+        CanBridge::SocketMode::NonBlocking : CanBridge::SocketMode::Blocking;
     
     this->parameter_callback_handle_ = this->add_on_set_parameters_callback(
         std::bind(&TestCanBridge::parameters_callback, this, _1)
@@ -28,13 +32,20 @@ TestCanBridge::CallbackReturn TestCanBridge::on_activate(const rclcpp_lifecycle:
 {
 	try
 	{
-		this->bridge = std::make_unique<CanBridge>(this->Ifname);
+		this->bridge = std::make_unique<CanBridge>(
+			this->Ifname,
+			this->socket_mode_);
 	}
 	catch(const std::exception& e)
 	{
 		RCLCPP_INFO(this->get_logger(), "please check can0");
 		return CallbackReturn::FAILURE;
 	}
+    RCLCPP_INFO(
+        this->get_logger(),
+        "CAN socket TX mode: %s",
+        this->socket_mode_ == CanBridge::SocketMode::NonBlocking ?
+            "non-blocking" : "blocking");
 
     this->vel_subscriber = this->create_subscription<geometry_msgs::msg::Twist>(
         std::string("cmd_vel"),
@@ -129,12 +140,31 @@ rcl_interfaces::msg::SetParametersResult TestCanBridge::parameters_callback(
     rcl_interfaces::msg::SetParametersResult result;
     result.successful = true;
     result.reason = "success";
+    if (this->bridge)
+    {
+        for (const auto &param : parameters)
+        {
+            if (param.get_name() == "non_blocking")
+            {
+                result.successful = false;
+                result.reason = "CAN bridge is active";
+                return result;
+            }
+        }
+    }
+
 
     for (const auto &param : parameters)
     {
         if (param.get_name() == "vel_canid" && param.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER)
         {
             this->vel_canid = param.as_int();
+        }
+        if (param.get_name() == "non_blocking" &&
+            param.get_type() == rclcpp::ParameterType::PARAMETER_BOOL)
+        {
+            this->socket_mode_ = param.as_bool() ?
+                CanBridge::SocketMode::NonBlocking : CanBridge::SocketMode::Blocking;
         }
     }
 
