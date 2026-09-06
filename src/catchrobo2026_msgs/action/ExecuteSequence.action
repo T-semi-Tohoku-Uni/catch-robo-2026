@@ -1,0 +1,17 @@
+# UI identity and selected collectors; positions use the UI's zero-based indices.
+uint64 control_epoch
+uint64 step_id
+uint8 PICK=1
+uint8 PLACE=2
+uint8 kind
+uint8 row
+uint8 column
+uint8 box
+uint8 box_column
+uint8 collector_mask
+---
+bool success
+string message
+---
+uint32 step_index
+string phase
