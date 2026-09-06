@@ -11,20 +11,35 @@ def generate_launch_description():
     pump_config = os.path.join(
         get_package_share_directory('catchrobo2026_pump'), 'config', 'pump.yaml')
     return LaunchDescription([
-        DeclareLaunchArgument(
-            'pump_config',
-            default_value=pump_config,
-            description='Pump controller parameter file'
+        # ==================================
+        # 自動制御 (アクション通信) 系
+        # ==================================
+        # 1. 3D経路生成ノード
+        Node(
+            package='nav_director',
+            executable='path_generator_3d',
+            name='path_generator_3d',
+            output='screen'
         ),
-        # 1. コントローラーのハードウェア入力を読み取るROS 2標準ノード
+        # 2. 経路追従ノード
+        Node(
+            package='nav_director',
+            executable='path_follower_node',
+            name='path_follower_node',
+            output='screen'
+        ),
+
+        # ==================================
+        # 手動制御 (Joy) 系
+        # ==================================
+        # 3. コントローラーノード
         Node(
             package='joy',
             executable='joy_node',
             name='joy_node',
             output='screen'
         ),
-        
-        # 2. Joy入力を目標座標に変換し、IKをローカル計算して関節角度をパブリッシュするノード
+        # 4. Joyからの入力と自動制御からの target_pose を合成するノード
         Node(
             package='catchrobo2026_hand_operated',
             executable='joy_controller_node',
@@ -55,5 +70,16 @@ def generate_launch_description():
             executable='current_kinematics_visualizer',
             name='current_kinematics_visualizer',
             output='screen'
+        ),
+        # 3. ダミーロボットノード
+        Node(
+            package='nav_director',
+            executable='dummy_robot_node',
+            name='dummy_robot_node',
+            output='screen',
+            parameters=[
+                # ここで初期角度を自由に変更できます (例: 1.57は90度)
+                {'initial_joints': [600.0, 200.0, 200.0, 0.0]}
+            ]
         )
     ])
