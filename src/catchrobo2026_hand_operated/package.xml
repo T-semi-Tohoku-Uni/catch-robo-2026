@@ -23,6 +23,7 @@
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>catchrobo2026_pump</exec_depend>
   <exec_depend>catchrobo2026_endeffector</exec_depend>
+  <exec_depend>catchrobo2026_state_machine</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 
