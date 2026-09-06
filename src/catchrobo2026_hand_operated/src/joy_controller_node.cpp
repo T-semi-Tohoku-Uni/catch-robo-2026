@@ -10,6 +10,9 @@
 #include "std_msgs/msg/float32_multi_array.hpp"
 #include "std_msgs/msg/int32_multi_array.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+// 追加: マーカー用インクルード
+#include "visualization_msgs/msg/marker_array.hpp"
+#include "geometry_msgs/msg/point.hpp"
 
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -27,6 +30,9 @@ public:
         
         // 1. パブリッシャー (各モーターの4つの角度を出力)
         joint_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("target_joint_angles", 10);
+        
+        // 追加: マーカーパブリッシャー
+        marker_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("target_arm_markers", 10);
 
         // 2. サブスクライバー
         joy_sub_ = this->create_subscription<sensor_msgs::msg::Joy>(
@@ -54,35 +60,35 @@ public:
         current_pose_[4] = -M_PI / 2.0f; // Theta (Pitch相当、デフォルト姿勢)
         current_pose_[5] = 0.0f;    // Psi (Roll相当)
 
-        RCLCPP_INFO(this->get_logger(), "Joy Controller Node started with integrated IK, Pump, and Endeffector control.");
+        RCLCPP_INFO(this->get_logger(), "Joy Controller Node started with integrated IK, Pump, Endeffector control, and Markers.");
     }
 
 private:
     using PumpRequest = catchrobo2026_msgs::srv::PumpControl::Request;
 
     void pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
-    // 単位を [m] から [mm] に変換
-    current_pose_[0] = msg->pose.position.x * 1000.0;
-    current_pose_[1] = msg->pose.position.y * 1000.0;
-    current_pose_[2] = msg->pose.position.z * 1000.0;
+        // 単位を [m] から [mm] に変換
+        current_pose_[0] = msg->pose.position.x * 1000.0;
+        current_pose_[1] = msg->pose.position.y * 1000.0;
+        current_pose_[2] = msg->pose.position.z * 1000.0;
 
-    tf2::Quaternion q;
-    tf2::fromMsg(msg->pose.orientation, q);
+        tf2::Quaternion q;
+        tf2::fromMsg(msg->pose.orientation, q);
 
-    // クォータニオンを回転行列に変換
-    tf2::Matrix3x3 mat(q);
+        // クォータニオンを回転行列に変換
+        tf2::Matrix3x3 mat(q);
 
-    // 【修正】Pitch = -90度の特異点（ジンバルロック）を回避するため、
-    // 常に水平面上に残る「ローカルY軸」のベクトルを抽出してYawを計算します。
-    tf2::Vector3 y_axis = mat.getColumn(1); 
-    
-    // Y軸ベクトルは [-sin(yaw), cos(yaw), 0]^T の形になるため、atan2でYawを逆算
-    double yaw = std::atan2(-y_axis.x(), y_axis.y());
+        // 【修正】Pitch = -90度の特異点（ジンバルロック）を回避するため、
+        // 常に水平面上に残る「ローカルY軸」のベクトルを抽出してYawを計算します。
+        tf2::Vector3 y_axis = mat.getColumn(1); 
+        
+        // Y軸ベクトルは [-sin(yaw), cos(yaw), 0]^T の形になるため、atan2でYawを逆算
+        double yaw = std::atan2(-y_axis.x(), y_axis.y());
 
-    current_pose_[3] = static_cast<float>(yaw);   // PHI
-    
-    // 4DoF IKでは THE(Pitch) と PSI(Roll) は使用しないため更新不要です
-}
+        current_pose_[3] = static_cast<float>(yaw);   // PHI
+        
+        // 4DoF IKでは THE(Pitch) と PSI(Roll) は使用しないため更新不要です
+    }
 
     void endeffector_callback(const std_msgs::msg::Int32MultiArray::SharedPtr msg) {
         if (!msg->data.empty()) {
@@ -107,8 +113,6 @@ private:
                 RCLCPP_WARN(this->get_logger(), "Pump service not ready.");
             } else {
                 auto request = std::make_shared<PumpRequest>();
-                // mainの起動時吸引から「開放→OFF→吸引」の順に操作する。
-                // CANのビット割当・極性はポンプ制御ノードに任せる。
                 request->left = next_pump_state_;
                 request->center = next_pump_state_;
                 request->right = next_pump_state_;
@@ -142,11 +146,10 @@ private:
             } else {
                 auto request = std::make_shared<catchrobo2026_msgs::srv::EndeffectorControl::Request>();
 
-                // 現在の値から次のコマンドを決定 (endeffector_state_nodeの仕様に準拠: 0または1)
                 if (current_endeffector_val_ == 0) {
                     request->command = 1;
                 } else {
-                    request->command = 0; // 初期値の56や1の場合は0へ
+                    request->command = 0; 
                 }
 
                 endeffector_client_->async_send_request(request);
@@ -157,7 +160,6 @@ private:
     }
 
     void publish_timer_callback() {
-        // 応答が途絶えても、次のボタン操作で同じ状態を再要求できるようにする。
         if (pump_request_pending_ &&
             std::chrono::steady_clock::now() - pump_request_time_ >= 1s) {
             pump_client_->remove_pending_request(pump_request_id_);
@@ -173,7 +175,6 @@ private:
         current_pose_[1] += vel_y_ * pos_gain;
         current_pose_[2] += vel_z_ * pos_gain;
         current_pose_[3] += vel_phi_ * rot_gain;
-        // 必要な場合は Theta, Psi の速度も追加加算してください
 
         // 2. ローカルで逆運動学(IK)を計算
         float target_joints[4] = {0.0f};
@@ -186,6 +187,56 @@ private:
             msg_out.data[i] = target_joints[i];
         }
         joint_pub_->publish(msg_out);
+
+        // 4. アームの姿勢マーカー (矢印) をパブリッシュ
+        publish_arm_markers(target_joints);
+    }
+
+    void publish_arm_markers(float* target_joints) {
+        float positions[6][3];
+        // 運動学モデルから6つのジョイント位置(0~5)の座標配列を取得
+        kin_.get_joint_positions(target_joints, positions);
+
+        visualization_msgs::msg::MarkerArray marker_array;
+        
+        // 6つの点から5本の矢印(リンク)を生成する
+        for (int i = 0; i < 5; ++i) {
+            visualization_msgs::msg::Marker marker;
+            marker.header.frame_id = "map"; // 適切な固定フレーム名に変更してください (例: "base_link" や "map")
+            marker.header.stamp = this->now();
+            marker.ns = "arm_links";
+            marker.id = i;
+            marker.type = visualization_msgs::msg::Marker::ARROW;
+            marker.action = visualization_msgs::msg::Marker::ADD;
+
+            geometry_msgs::msg::Point p_start, p_end;
+            // robot_kinematicsは[mm]単位なので、RViz用に[m]に変換する[cite: 1]
+            p_start.x = positions[i][0] / 1000.0;
+            p_start.y = positions[i][1] / 1000.0;
+            p_start.z = positions[i][2] / 1000.0;
+
+            p_end.x = positions[i+1][0] / 1000.0;
+            p_end.y = positions[i+1][1] / 1000.0;
+            p_end.z = positions[i+1][2] / 1000.0;
+
+            marker.points.push_back(p_start);
+            marker.points.push_back(p_end);
+
+            // 矢印の太さ設定
+            marker.scale.x = 0.015; // シャフトの直径 (1.5cm)
+            marker.scale.y = 0.03;  // ヘッドの直径 (3.0cm)
+            marker.scale.z = 0.03;  // ヘッドの長さ (3.0cm)
+
+            // 色の設定 (例として緑色)
+            marker.color.r = 0.0f;
+            marker.color.g = 1.0f;
+            marker.color.b = 0.0f;
+            marker.color.a = 0.8f; // 若干透過
+
+            marker_array.markers.push_back(marker);
+        }
+
+        marker_pub_->publish(marker_array);
     }
 
     // --- 変数定義 ---
@@ -194,6 +245,8 @@ private:
     rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr endeffector_sub_;
     
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr joint_pub_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_; // 追加
+    
     rclcpp::Client<catchrobo2026_msgs::srv::PumpControl>::SharedPtr pump_client_;
     rclcpp::Client<catchrobo2026_msgs::srv::EndeffectorControl>::SharedPtr endeffector_client_;
     
@@ -206,7 +259,7 @@ private:
     bool pump_request_pending_ = false;
     int64_t pump_request_id_ = 0;
     std::chrono::steady_clock::time_point pump_request_time_;
-    int current_endeffector_val_ = 56; // main由来の起動値。実機での意味は未確認。
+    int current_endeffector_val_ = 56; 
     bool prev_o_button_ = false; 
     bool prev_endeffector_button_ = false;
     

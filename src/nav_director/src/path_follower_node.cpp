@@ -198,6 +198,24 @@ private:
                 }
             }
 
+            // ===============================================================
+            // 【追加】現在の目標位置と現在位置との誤差を計算しINFO出力
+            // ===============================================================
+            double err_x = target_posrot[0] - current_posrot[0];
+            double err_y = target_posrot[1] - current_posrot[1];
+            double err_z = target_posrot[2] - current_posrot[2];
+            double err_dist = std::sqrt(err_x * err_x + err_y * err_y + err_z * err_z);
+            
+            // Yaw角の誤差 (-PI ~ PI の範囲で計算)
+            double err_yaw = std::atan2(std::sin(target_posrot[3] - current_posrot[3]), 
+                                        std::cos(target_posrot[3] - current_posrot[3]));
+
+            // 1秒(1000ms)に1回だけ出力 (スパム防止)
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                "Error -> Dist: %6.2f [mm] (X:%6.2f, Y:%6.2f, Z:%6.2f) | Yaw: %6.4f [rad]",
+                err_dist, err_x, err_y, err_z, err_yaw);
+            // ===============================================================
+
 
             // 3. 逆運動学で目標ジョイント角を計算
             kin_.inverse_kinematics(target_posrot, target_joints);
