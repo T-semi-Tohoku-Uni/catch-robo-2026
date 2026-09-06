@@ -63,22 +63,28 @@ public:
 
 private:
     void pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
-        // 自動制御ノード等からtarget_poseを受け取った場合、基準座標を上書きする
-        // 単位を [m] から [mm] に変換
-        current_pose_[0] = msg->pose.position.x * 1000.0;
-        current_pose_[1] = msg->pose.position.y * 1000.0;
-        current_pose_[2] = msg->pose.position.z * 1000.0;
+    // 単位を [m] から [mm] に変換
+    current_pose_[0] = msg->pose.position.x * 1000.0;
+    current_pose_[1] = msg->pose.position.y * 1000.0;
+    current_pose_[2] = msg->pose.position.z * 1000.0;
 
-        // クォータニオンからRPYを取得して角度を上書き
-        tf2::Quaternion q;
-        tf2::fromMsg(msg->pose.orientation, q);
-        double roll, pitch, yaw;
-        tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
-        
-        current_pose_[3] = static_cast<float>(yaw);   // PHI
-        current_pose_[4] = static_cast<float>(pitch); // THE
-        current_pose_[5] = static_cast<float>(roll);  // PSI
-    }
+    tf2::Quaternion q;
+    tf2::fromMsg(msg->pose.orientation, q);
+
+    // クォータニオンを回転行列に変換
+    tf2::Matrix3x3 mat(q);
+
+    // 【修正】Pitch = -90度の特異点（ジンバルロック）を回避するため、
+    // 常に水平面上に残る「ローカルY軸」のベクトルを抽出してYawを計算します。
+    tf2::Vector3 y_axis = mat.getColumn(1); 
+    
+    // Y軸ベクトルは [-sin(yaw), cos(yaw), 0]^T の形になるため、atan2でYawを逆算
+    double yaw = std::atan2(-y_axis.x(), y_axis.y());
+
+    current_pose_[3] = static_cast<float>(yaw);   // PHI
+    
+    // 4DoF IKでは THE(Pitch) と PSI(Roll) は使用しないため更新不要です
+}
 
     void pump_callback(const std_msgs::msg::Int32MultiArray::SharedPtr msg) {
         if (!msg->data.empty()) {

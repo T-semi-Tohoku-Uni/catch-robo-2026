@@ -12,6 +12,9 @@ public:
         // MarkerArray用のパブリッシャー
         marker_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("current_robot_markers", 10);
         
+        // 順運動学の結果(x, y, z, yaw)をパブリッシュするパブリッシャーを追加
+        pose_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("current_pose3d", 10);
+        
         // current_jointsのサブスクライバー
         joint_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
             "current_joints", 10,
@@ -29,6 +32,17 @@ private:
         }
 
         float joint_angle[4] = {msg->data[0], msg->data[1], msg->data[2], msg->data[3]};
+        
+        // 追加: 順運動学の計算とパブリッシュ
+        float posrot[6] = {0.0f};
+        robot_kin_.forward_kinematics(posrot, joint_angle);
+
+        std_msgs::msg::Float32MultiArray pose_msg;
+        // posrotのインデックスは 0:X, 1:Y, 2:Z, 3:PHI(Yaw)
+        pose_msg.data = {posrot[0], posrot[1], posrot[2], posrot[3]};
+        pose_pub_->publish(pose_msg);
+
+        // 既存のマーカー描画用処理
         float positions[6][3];
         
         // 運動学ライブラリのHomogeneous transformチェーンを利用して全リンクの座標を一括取得
@@ -91,6 +105,7 @@ private:
     }
 
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pose_pub_;
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr joint_sub_;
     robot_kinematics robot_kin_;
 };
