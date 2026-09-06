@@ -15,7 +15,7 @@ public:
   : Node("repeater_node"), current_value_(0)
   {
     // パブリッシャーの設定 (トピック名: 'repeated_value')
-    publisher_ = this->create_publisher<std_msgs::msg::Int32>("repeated_value", 10);
+    publisher_ = this->create_publisher<std_msgs::msg::Int32>("init_state", 10);
     
     // StateControl サービスを使用するようにサーバーを設定
     service_ = this->create_service<catchrobo2026_msgs::srv::StateControl>(
