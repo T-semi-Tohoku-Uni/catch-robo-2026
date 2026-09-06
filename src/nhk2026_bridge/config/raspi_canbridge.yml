@@ -4,8 +4,8 @@
     tx_retry_timeout_ms: 5
 
    
-    pub_int_bridge_topic: ["pump"]
-    pub_int_bridge_canid: [0x404]
+    pub_int_bridge_topic: ["pressure_sensor"]
+    pub_int_bridge_canid: [0x406]
     pub_float_bridge_topic: ["current_joints"]
     pub_float_bridge_canid: [0x210]
 
