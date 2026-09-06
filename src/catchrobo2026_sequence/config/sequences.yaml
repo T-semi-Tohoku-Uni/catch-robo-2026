@@ -11,9 +11,9 @@ values:
   common_work_above_z: 186.95
   place_above_z: 294.35
   # Each offset is relative to the last absolute pose, not the preceding move.
-  pick_approach_dz: 10
+  pick_approach_dz: -10
   pick_retreat_dz: 10
-  place_approach_dz: 10
+  place_approach_dz: -10
   place_retreat_dz: 10
 
 poses:

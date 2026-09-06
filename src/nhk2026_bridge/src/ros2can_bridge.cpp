@@ -1,13 +1,21 @@
 #include "ros2can_bridge.hpp"
 
 #include <cerrno>
+#include <algorithm>
 #include <endian.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sstream>
+#include <thread>
 
-CanBridge::CanBridge(const std::string &interface_name, SocketMode socket_mode)
-: ifname(interface_name), sock(-1)
+CanBridge::CanBridge(
+    const std::string &interface_name, SocketMode socket_mode, int tx_retry_timeout_ms)
+: ifname(interface_name), tx_retry_timeout_(tx_retry_timeout_ms), sock(-1)
 {
+    if (tx_retry_timeout_ms < 0 || tx_retry_timeout_ms > 1000)
+    {
+        throw std::invalid_argument("tx_retry_timeout_ms must be between 0 and 1000");
+    }
     this->sock = socket(PF_CAN, SOCK_RAW, CAN_RAW);
     if (this->sock < 0)
     {
@@ -122,16 +130,7 @@ void CanBridge::send_float(int canid, const std::vector<float> &txdata_f)
         frame.data[i*4 + 2] = (uint8_t)((data.data_ui32 >>  8) & 0xff);
         frame.data[i*4 + 3] = (uint8_t)((data.data_ui32      ) & 0xff);
     }
-    const ssize_t nbytes = write(this->sock, &frame, sizeof(frame));
-    if (nbytes < 0)
-    {
-        throw std::runtime_error(std::string("failed to write: ") + std::strerror(errno));
-    }
-    if (nbytes != static_cast<ssize_t>(sizeof(frame)))
-    {
-        throw std::runtime_error(
-            "failed to write: unexpected frame size " + std::to_string(nbytes));
-    }
+    send_frame(frame);
 }
 
 void CanBridge::send_int(int canid, const std::vector<int> &txdata_i)
@@ -152,16 +151,7 @@ void CanBridge::send_int(int canid, const std::vector<int> &txdata_i)
         std::memcpy(frame.data + i * sizeof(big_endian_value),
             &big_endian_value, sizeof(big_endian_value));
     }
-    const ssize_t nbytes = write(this->sock, &frame, sizeof(frame));
-    if (nbytes < 0)
-    {
-        throw std::runtime_error(std::string("failed to write: ") + std::strerror(errno));
-    }
-    if (nbytes != static_cast<ssize_t>(sizeof(frame)))
-    {
-        throw std::runtime_error(
-            "failed to write: unexpected frame size " + std::to_string(nbytes));
-    }
+    send_frame(frame);
 }
 
 void CanBridge::send_bytes(int canid, const std::vector<uint8_t> &txdata_b)
@@ -182,16 +172,52 @@ void CanBridge::send_bytes(int canid, const std::vector<uint8_t> &txdata_b)
         std::memcpy(frame.data, txdata_b.data(), static_cast<size_t>(byte_length));
     }
 
-    const ssize_t nbytes = write(this->sock, &frame, sizeof(frame));
-    if (nbytes < 0)
+    send_frame(frame);
+}
+
+void CanBridge::send_frame(const canfd_frame &frame)
+{
+    using Clock = std::chrono::steady_clock;
+    const auto deadline = Clock::now() + tx_retry_timeout_;
+    size_t attempts = 0;
+    int error_number = 0;
+    for (;;)
     {
-        throw std::runtime_error(std::string("failed to write: ") + std::strerror(errno));
+        // Do not enqueue an old command after the retry deadline.
+        if (attempts > 0 && Clock::now() >= deadline)
+        {
+            break;
+        }
+        ++attempts;
+        const ssize_t nbytes = write(this->sock, &frame, sizeof(frame));
+        if (nbytes == static_cast<ssize_t>(sizeof(frame)))
+        {
+            return;
+        }
+        if (nbytes >= 0)
+        {
+            throw std::runtime_error(
+                "failed to write: unexpected frame size " + std::to_string(nbytes));
+        }
+        error_number = errno;
+        const bool retryable = error_number == ENOBUFS || error_number == EAGAIN ||
+            error_number == EWOULDBLOCK || error_number == EINTR;
+        if (!retryable || tx_retry_timeout_.count() == 0)
+        {
+            break;
+        }
+        // POLLOUT can stay ready while the device TX queue is full.
+        std::this_thread::sleep_until(
+            std::min(deadline, Clock::now() + std::chrono::milliseconds(1)));
     }
-    if (nbytes != static_cast<ssize_t>(sizeof(frame)))
-    {
-        throw std::runtime_error(
-            "failed to write: unexpected frame size " + std::to_string(nbytes));
-    }
+
+    std::ostringstream message;
+    message << "failed to write: " << std::strerror(error_number)
+            << " (interface=" << ifname << ", CAN ID=0x" << std::hex << frame.can_id
+            << std::dec << ", length=" << static_cast<unsigned int>(frame.len)
+            << ", errno=" << error_number << ", attempts=" << attempts
+            << ", retry_timeout_ms=" << tx_retry_timeout_.count() << ")";
+    throw std::runtime_error(message.str());
 }
 
 bool CanBridge::receive_data(RxData_struct &out)

@@ -1,6 +1,7 @@
 /**:
   ros__parameters:
     ifname: "can0"
+    tx_retry_timeout_ms: 5
 
    
     pub_int_bridge_topic: ["pump"]

@@ -3,6 +3,7 @@ from launch_ros.actions import LifecycleNode
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 import os
+import re
 import subprocess
 
 from launch.actions import EmitEvent, RegisterEventHandler
@@ -44,19 +45,26 @@ def _run_cmd(cmd):
         return False, e.output
     
 def _ensure_can0_up(context, *args, **kwargs):
-    # can0 があるかチェック
+    # Read the current interface configuration.
     try:
         out = subprocess.check_output(["/usr/sbin/ip", "-details", "link", "show", "can0"], text=True)
     except Exception:
-        # can0 が無い/読めないなら何もしない
+        # Leave missing or unreadable interfaces to the preceding check.
         return []
 
-    # すでに UP かつ FD 設定済みなら何もしない
-    desired_ok = all(token in out for token in ("bitrate 1000000", "dbitrate 2000000", "fd on"))
-    if "UP" in out and desired_ok:
+    # ip reports CAN FD as a controller flag, not as "fd on".
+    link_flags = re.search(r"^\d+:\s+can0(?:@\S+)?:\s+<([^>]*)>", out, re.MULTILINE)
+    can_flags = re.search(r"^\s+can\s+<([^>]*)>", out, re.MULTILINE)
+    desired_ok = (
+        can_flags is not None
+        and "FD" in can_flags.group(1).split(",")
+        and re.search(r"^\s+bitrate\s+1000000(?:\s|$)", out, re.MULTILINE)
+        and re.search(r"^\s+dbitrate\s+2000000(?:\s|$)", out, re.MULTILINE)
+    )
+    if link_flags and "UP" in link_flags.group(1).split(",") and desired_ok:
         return []
 
-    # DOWN または FD 未設定なら sudo -n で再設定（launch 内で直列実行）
+    # Configure a down or mismatched interface with the existing commands.
     cmds = [
         ["sudo", "-n", "/usr/sbin/ip", "link", "set", "can0", "down"],
         [

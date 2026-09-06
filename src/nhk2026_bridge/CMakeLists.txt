@@ -96,6 +96,19 @@ install(
 )
 
 if(BUILD_TESTING)
+  add_executable(test_can_tx_retry
+    test/test_can_tx_retry.cpp
+    src/ros2can_bridge.cpp
+  )
+  target_compile_features(test_can_tx_retry PRIVATE cxx_std_17)
+  # Link syscall wrappers into the test, including the libstdc++ steady clock.
+  foreach(wrapped_function socket ioctl setsockopt bind fcntl close write nanosleep
+      _ZNSt6chrono3_V212steady_clock3nowEv)
+    target_link_libraries(test_can_tx_retry PRIVATE "-Wl,--wrap=${wrapped_function}")
+  endforeach()
+  add_test(NAME can_tx_retry COMMAND test_can_tx_retry)
+  set_tests_properties(can_tx_retry PROPERTIES TIMEOUT 10)
+
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
   # comment the line when a copyright and license is added to all source files

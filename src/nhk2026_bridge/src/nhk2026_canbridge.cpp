@@ -1,6 +1,8 @@
 #include "nhk2026_canbridge.hpp"
 
 #include "lifecycle_msgs/msg/transition.hpp"
+#include "rcl_interfaces/msg/integer_range.hpp"
+#include "rcl_interfaces/msg/parameter_descriptor.hpp"
 
 #include <chrono>
 #include <functional>
@@ -29,6 +31,14 @@ CanBridgenhk2026::CanBridgenhk2026()
     
     this->declare_parameter("ifname", "can0");
     this->declare_parameter("non_blocking", true);
+    rcl_interfaces::msg::ParameterDescriptor retry_descriptor;
+    retry_descriptor.description = "TX retry budget in milliseconds; zero disables retries";
+    rcl_interfaces::msg::IntegerRange retry_range;
+    retry_range.from_value = 0;
+    retry_range.to_value = 1000;
+    retry_range.step = 1;
+    retry_descriptor.integer_range.push_back(retry_range);
+    this->declare_parameter("tx_retry_timeout_ms", 5, retry_descriptor);
     this->declare_parameter("add_cmd_vel", false);
     this->declare_parameter("add_cmd_vel_feedback", false);
 
@@ -211,11 +221,14 @@ CanBridgenhk2026::CallbackReturn CanBridgenhk2026::on_activate(const rclcpp_life
         }
         return CallbackReturn::FAILURE;
     }
+    const int tx_retry_timeout_ms = static_cast<int>(
+        this->get_parameter("tx_retry_timeout_ms").as_int());
     try
     {
         this->can_bridge = std::make_unique<CanBridge>(
             this->Ifname,
-            this->socket_mode_);
+            this->socket_mode_,
+            tx_retry_timeout_ms);
     }
     catch(const std::exception& e)
     {
@@ -224,9 +237,9 @@ CanBridgenhk2026::CallbackReturn CanBridgenhk2026::on_activate(const rclcpp_life
     }
     RCLCPP_INFO(
         this->get_logger(),
-        "CAN socket TX mode: %s",
+        "CAN socket TX mode: %s, retry budget: %d ms",
         this->socket_mode_ == CanBridge::SocketMode::NonBlocking ?
-            "non-blocking" : "blocking");
+            "non-blocking" : "blocking", tx_retry_timeout_ms);
 
     rclcpp::QoS device = rclcpp::QoS(rclcpp::KeepLast(10))
         .reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE)

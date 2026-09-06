@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <chrono>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
@@ -29,7 +30,8 @@ public:
 
     CanBridge(
         const std::string &interface_name,
-        SocketMode socket_mode);
+        SocketMode socket_mode,
+        int tx_retry_timeout_ms = 5);
     ~CanBridge();
     void send_float(int canid, const std::vector<float> &txdata_f);
     void send_int(int canid, const std::vector<int> &txdata_i);
@@ -42,7 +44,9 @@ public:
     
 private:
     const std::string ifname;
+    const std::chrono::milliseconds tx_retry_timeout_;
     int sock;
+    void send_frame(const canfd_frame &frame);
     union Data
     {
         uint32_t data_ui32;
