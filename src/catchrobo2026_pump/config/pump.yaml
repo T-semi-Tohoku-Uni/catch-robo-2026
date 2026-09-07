@@ -7,9 +7,9 @@ pump_controller_node:
 
     # 論理ONに対応するCAN指令ビット。GPIOの電圧レベルではない。
     # マイコンは値1→GPIO Low、値0→GPIO High。GPIO Highで通電する解釈を採用。
-    pump_on_level: true
+    pump_on_level: false
     valve_on_level: true
 
     # 全機構の起動時状態: 開放=-1、オフ=0、吸引=1。
     # mainの起動値56（0b111000、全機構吸引）を維持する。
-    initial_state: 1
+    initial_state: 0
