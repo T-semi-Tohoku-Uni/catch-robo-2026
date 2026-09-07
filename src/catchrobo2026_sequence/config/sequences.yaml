@@ -80,8 +80,8 @@ sequences:
       - endeffector: '$place_endeffector_command'
   pick_common:
     steps:
-      - move: {relative: [0, 0, '$pick_approach_dz', 0]}
       - pump: suction
+      - move: {relative: [0, 0, '$pick_approach_dz', 0]}
       - move: {relative: [0, 0, '$pick_retreat_dz', 0]}
       - pump: off
       - endeffector: '$place_endeffector_command'
