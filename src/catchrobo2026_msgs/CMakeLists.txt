@@ -22,6 +22,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/ExecuteSequence.action"
   "srv/PumpControl.srv"
   "srv/EndeffectorControl.srv"
+  "srv/StateControl.srv"
   DEPENDENCIES action_msgs
 )
 

@@ -52,6 +52,12 @@ def generate_launch_description():
             output='screen'
         ),
 
+        Node(
+            package='catchrobo2026_state_machine',
+            executable='state_machine_node',
+            name='state_machine_node',
+            output='screen'
+        ),
         # 3. ポンプ・電磁弁制御ノード
         Node(
             package='catchrobo2026_pump',

@@ -16,6 +16,7 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>nav_director</exec_depend>
+  <exec_depend>catchrobo2026_state_machine</exec_depend>
   <exec_depend>catchrobo2026_ui</exec_depend>
   <exec_depend>catchrobo2026_pump</exec_depend>
   <exec_depend>catchrobo2026_endeffector</exec_depend>

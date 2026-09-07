@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>catchrobo2026_hand_operated</name>
+  <name>catchrobo2026_state_machine</name>
   <version>0.0.0</version>
   <description>TODO: Package description</description>
   <maintainer email="grafen1202@todo.todo">grafen1202</maintainer>
@@ -10,22 +10,8 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
-  <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>catchrobo2026_msgs</depend>
-  
-  <!-- 追加した依存関係 -->
-  <depend>geometry_msgs</depend>
-  <depend>tf2</depend>
-  <depend>tf2_geometry_msgs</depend>
-  <depend>inverse_kinematics_package</depend>
-
-  <exec_depend>ament_index_python</exec_depend>
-  <exec_depend>catchrobo2026_pump</exec_depend>
-  <exec_depend>catchrobo2026_endeffector</exec_depend>
-  <exec_depend>catchrobo2026_state_machine</exec_depend>
-  <exec_depend>launch</exec_depend>
-  <exec_depend>launch_ros</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

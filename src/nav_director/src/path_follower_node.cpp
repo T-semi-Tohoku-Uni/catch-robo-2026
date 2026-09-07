@@ -187,7 +187,7 @@ private:
                 double yaw_error = std::abs(std::atan2(std::sin(target_yaw - current_yaw), 
                                                        std::cos(target_yaw - current_yaw)));
 
-                const double POS_TOLERANCE = 10.0;
+                const double POS_TOLERANCE = 30.0;
                 const double YAW_TOLERANCE = 0.05;
 
                 if (pos_error <= POS_TOLERANCE && yaw_error <= YAW_TOLERANCE) {
