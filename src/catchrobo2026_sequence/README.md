@@ -1,6 +1,6 @@
 # シーケンスノード
 
-UIの開始操作と確定したPICK／PLACEを、YAMLに記述した移動・ポンプ・エンドエフェクタ・待機へ展開するROS 2ノードです。UIのC制御コアが計画・保持・配置状態の正本を維持し、`sequence_node` は一度に1動作を実行します。
+UIの初期化・開始・終了操作と確定したPICK／PLACEを、YAMLに記述した移動・ポンプ・エンドエフェクタ・待機へ展開するROS 2ノードです。UIのC制御コアが計画・保持・配置状態の正本を維持し、`sequence_node` は一度に1動作を実行します。
 
 設定形式・エイリアス・継承・共通値の参照は [CONFIG.md](CONFIG.md) を参照してください。
 
@@ -12,7 +12,7 @@ UIの開始操作と確定したPICK／PLACEを、YAMLに記述した移動・�
 幅指令はYAMLの `values.pick_endeffector_command: 0`／`place_endeffector_command: 1` に仮置きしています。0/1の広い／狭い対応は手動で確認し、必要なら両値を入れ替えてください。幅切替後の待ち時間は追加しておらず、ROSサービスの受理応答でそのPICK／PLACEを完了します。
 現在の相対Zはapproachが `-10 mm`、retreatが `+10 mm` で、直近の絶対姿勢を固定基準にそれぞれZ−10／Z＋10 mmへ移動します。実機の高さ・移動量・PLACEの操作順は実機確認済みの値ではありません。
 
-実機デバッグではワークスペースのルートから以下を実行し、編集するソースYAMLの絶対パスを指定します。`debug:=true` で開始シーケンス・各PICK／PLACEの実行前に読み直すため、YAMLの編集を次の動作へ反映できます。
+実機デバッグではワークスペースのルートから以下を実行し、編集するソースYAMLの絶対パスを指定します。`debug:=true` で初期化・開始・終了シーケンス・各PICK／PLACEの実行前に読み直すため、YAMLの編集を次の動作へ反映できます。
 
 ```bash
 source /opt/ros/jazzy/setup.bash
@@ -29,14 +29,22 @@ ros2 launch catchrobo2026_sequence automatic.launch.py \
 
 ## UIの開始シーケンス
 
-YAMLの `start_sequence: startup` で、`sequences.startup` を開始手順として指定します。同梱設定は `endeffector: '$place_endeffector_command'` の1手順です。ノード起動時には実行せず、UIの「開始」で実行します。初期化ボタンの既存処理とは独立しており、初期化はYAML手順へ含めません。
+YAMLの `start_sequence: startup` で、`sequences.startup` を開始手順として指定します。同梱設定は `endeffector: '$place_endeffector_command'` の1手順です。ノード起動時には実行せず、UIの「開始」で実行します。初期化シーケンスとは独立しており、開始手順に初期化命令は含めません。
 
 UIは開始中を「開始シーケンス」と表示し、完了後に通常のキューへ進みます。半自動でも開始手順は「開始」で実行し、その後のPICK／PLACEは「次へ」で進めます。開始手順の失敗・取消では終了状態へ移り、通常キューは実行しません。開始手順はワーク・保持・箱・PICK／PLACE履歴を更新しません。`start_sequence` を省略または `null` にすると、開始手順は何もせず完了します。
+
+## 初期化前後・終了シーケンス
+
+同梱YAMLの `sequences.before_initialization.steps` と `sequences.after_initialization.steps` に、初期化命令の前後に実行する手順を書けます。UIの「初期化」で前手順→初期化命令→後手順の順に実行し、全体成功後に初期化済みになります。初期化命令の応答は実機の原点復帰完了ではないため、必要な待機は後手順へ `wait` で設定してください。前後の相対移動は、それぞれの手順内の絶対移動を基準にします。
+
+UIの「終了」では現在動作の取消完了後に `sequences.ending.steps` を実行します。cancel／reset・動作失敗・Ctrl+Cでは実行しません。終了手順を中断する場合は取消ボタンを操作します。同梱設定では前手順は `steps: []`、後手順と終了手順は共通の `poses.lifecycle_pose: [670, -110, 220, 0]` への絶対移動です（x/y/zはmm、phiはrad）。参照先はトップレベルの `before_initialization_sequence`／`after_initialization_sequence`／`end_sequence` で変更できます。省略または `null` なら追加動作なしです。
+
+詳細と編集例は [CONFIG.md](CONFIG.md#初期化前後終了シーケンス) を参照してください。
 
 ## 設定の読込
 
 - `debug:=false`（既定）: 起動時に1回読み込み、終了までその内容を使用します。
-- `debug:=true`: 起動時の検証に加え、START／PICK／PLACEを受け取るたびにファイル全体を再読込・検証します。実行中の動作は開始時の展開結果を保持し、編集は次のSTART／PICK／PLACEから反映します。
+- `debug:=true`: 起動時の検証に加え、INITIALIZE／START／END／PICK／PLACEを受け取るたびにファイル全体を再読込・検証します。実行中の動作は開始時の展開結果を保持し、編集は次のINITIALIZE／START／END／PICK／PLACEから反映します。
 - 読込・参照解決・対象位置の展開に失敗した場合、その動作の指令を出さず失敗を返します。デバッグ時に古い設定へフォールバックして実行することはありません。
 
 編集対象は `sequence_file` に指定したファイルです。インストール済みコピーを既定で読む場合、ソース側ファイルだけの編集では反映されません。調整時は作業用YAMLの絶対パスを指定してください。
@@ -45,13 +53,13 @@ UIは開始中を「開始シーケンス」と表示し、完了後に通常の
 
 ## 実行とROSインターフェース
 
-`execute_sequence`（`catchrobo2026_msgs/action/ExecuteSequence`）の要求には `control_epoch`・`step_id`・種類・UI位置・`collector_mask` を含めます。種類はSTART=4／PICK=1／PLACE=2です。STARTは位置を使用せず `collector_mask=7` で送信します。PICKはrow=0..3／column=1..4、PLACEはbox=0..3／box_column=0..1です。機構選択はUIのbit0/1/2（L/C/R）で、設定ファイルには記述しません。
+`execute_sequence`（`catchrobo2026_msgs/action/ExecuteSequence`）の要求には `control_epoch`・`step_id`・種類・UI位置・`collector_mask` を含めます。種類はINITIALIZE=5／START=4／END=6／PICK=1／PLACE=2です。INITIALIZE／START／ENDは位置を使用せず `collector_mask=7` で送信します。PICKはrow=0..3／column=1..4、PLACEはbox=0..3／box_column=0..1です。機構選択はUIのbit0/1/2（L/C/R）で、設定ファイルには記述しません。
 
 各 `move` は既存の `generate_route`（`GenerateRoute`）へ絶対目標の `x,y,z,phi` を渡し、成功応答後に `follow_route`（`FollowRoute`）を `start=true` で開始します。追従成功の結果を待ってから次の手順へ進みます。各移動を独立した経路として扱うため、シーケンサから `waypoint` の蓄積は行いません。設定と生成サービスの位置単位はmm、角度はradです。生成ノードが配信する `route`（ROS Path）の位置単位はmです。
 
 `nav_director` と `FollowRoute` の定義は従来実装を使用します。生成サービスの応答と追従ノードによる `route` 受信の間には確認応答がないため、開始時に今回の経路を受信済みであることは保証できません。追従中も新しい `route` を受信すると経路が更新されます。自動実行時は他の `waypoint`／`generate_route`／`follow_route` クライアントと `route` 配信元を停止し、以前に蓄積した経由点も残っていない状態で経路ノードを使用してください。
 
-ポンプ手順では、UIで選択された機構に設定の指令値、選択されていない機構にオフ（0）を指定して、`set_pump_state` に全3状態を渡します。例えばLとRを選んで吸引する場合は `(left, center, right)=(1,0,1)` です。開始手順のポンプ操作は全3機構が対象です。ポンプの現在状態の読出しは行いません。
+ポンプ手順では、UIで選択された機構に設定の指令値、選択されていない機構にオフ（0）を指定して、`set_pump_state` に全3状態を渡します。例えばLとRを選んで吸引する場合は `(left, center, right)=(1,0,1)` です。初期化前後・開始・終了手順のポンプ操作は全3機構が対象です。ポンプの現在状態の読出しは行いません。
 
 姿勢の `phi` は経路追従の回転角です。`endeffector: 0`／`1` は回収機構の幅を切り替える既存の `set_endeffector_state` への指令です。0/1の広い／狭い対応は実機側で確認します。
 
@@ -71,7 +79,7 @@ UIのcancel／end／resetで現在動作を取り消します。UIは旧動作�
 |---|---:|---|
 | `service_timeout_sec` | 3 | サービス待ち・応答・追従ゴールの受理 |
 | `route_timeout_sec` | 30 | 各移動の追従 |
-| `sequence_timeout_sec` | 120 | START／PICK／PLACE全体 |
+| `sequence_timeout_sec` | 120 | INITIALIZE／START／END／PICK／PLACE全体 |
 | `stop_timeout_sec` | 3 | 取消・失敗後の未確定処理 |
 
 タイムアウトは0秒超〜86,400秒の有限値を指定します。`wait` の設定値にも0〜86,400秒の上限があり、動作全体には `sequence_timeout_sec` が適用されます。

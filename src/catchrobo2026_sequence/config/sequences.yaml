@@ -5,7 +5,10 @@
 # Relative Z offsets are provisional values for hardware tuning.
 version: 1
 
+before_initialization_sequence: before_initialization
+after_initialization_sequence: after_initialization
 start_sequence: startup
+end_sequence: ending
 
 values:
   # Provisional width commands; confirm the 0/1 mapping on hardware.
@@ -22,6 +25,7 @@ values:
   place_retreat_dz: 10
 
 poses:
+  lifecycle_pose: [670, -110, 220, 0]
   # PICK: UI row 0; CSV ID = row * 6 + column + 1.
   pick_0_1_above: [375, 138, '$work_above_z', -1.5707963267949]
   pick_0_2_above: [575, 138, '$work_above_z', -1.5707963267949]
@@ -62,6 +66,15 @@ poses:
   place_blue_3_1_above: [1145.98, -635.65, '$place_above_z', 1.5707963267949]
 
 sequences:
+  # Initialization and ending share the same target pose.
+  before_initialization:
+    steps: []
+  after_initialization:
+    steps:
+      - move: {absolute: lifecycle_pose}
+  ending:
+    steps:
+      - move: {absolute: lifecycle_pose}
   startup:
     steps:
       - endeffector: '$place_endeffector_command'

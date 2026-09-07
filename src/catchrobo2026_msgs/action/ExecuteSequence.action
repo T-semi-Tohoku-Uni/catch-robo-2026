@@ -5,6 +5,9 @@ uint8 PICK=1
 uint8 PLACE=2
 # Run the configured start sequence; positions are ignored and collector_mask must be 7.
 uint8 START=4
+# Lifecycle sequences also ignore positions and require collector_mask=7.
+uint8 INITIALIZE=5
+uint8 END=6
 uint8 kind
 uint8 row
 uint8 column

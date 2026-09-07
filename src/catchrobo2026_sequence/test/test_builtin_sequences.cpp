@@ -61,6 +61,20 @@ void for_each_binding(Callback callback)
   }
 }
 
+TEST(BuiltinSequences, InitializationAndEndMoveToTheSharedLifecyclePose)
+{
+  const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
+  const auto steps = config.compile_initialization();
+  ASSERT_EQ(steps.size(), 2u);
+  EXPECT_EQ(steps[0].type, StepType::INITIALIZE);
+  EXPECT_EQ(steps[1].type, StepType::MOVE);
+  EXPECT_EQ(steps[1].pose, (Pose{670, -110, 220, 0}));
+  const auto ending = config.compile_end();
+  ASSERT_EQ(ending.size(), 1u);
+  EXPECT_EQ(ending[0].type, StepType::MOVE);
+  EXPECT_EQ(ending[0].pose, steps[1].pose);
+}
+
 TEST(BuiltinSequences, EveryUiPositionIsConfigured)
 {
   const auto yaml = YAML::LoadFile(SEQUENCE_CONFIG_PATH);
