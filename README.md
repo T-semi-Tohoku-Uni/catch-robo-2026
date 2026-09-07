@@ -18,6 +18,24 @@ source install/setup.bash
 
 既存のチェックアウトでブランチを切り替えた後も、`git submodule update --init --recursive` で記録済みのコミットへ揃えます。UIの配信用ファイルは同梱しているため、通常のビルドにnpmは不要です。Humble向けにも開発していますが、上記手順のローカル検証環境はJazzyです。
 
+## 実機の本番起動（CANブリッジ込み）
+
+ルートの [run_production.sh](run_production.sh) でROS環境を読み直し、[production.launch.py](launch/production.launch.py) を起動します。スクリプトは実行場所に依存せず、このチェックアウトの `install` を使用します。
+
+```bash
+./run_production.sh team:=red
+# YAMLを動作ごとに読み直す実機調整時
+./run_production.sh team:=red debug:=true
+```
+
+ROSの選択順は `ROBOT_ROS_DISTRO`、現在の `ROS_DISTRO`、`/opt/ros` にある唯一の環境です。明示する場合は `ROBOT_ROS_DISTRO=humble ./run_production.sh team:=red` のように指定します。`sh run_production.sh ...` でも実行できます。スクリプト内部でBashへ切り替え、既存のROS検索パスをクリアしてROS本体と `install/local_setup.bash` を読み込みます。`ROS_DOMAIN_ID` や `RMW_IMPLEMENTATION` などの通信設定は引き継ぎます。
+
+本番launchは既存の `raspi_can.launch.py` でCANブリッジを起動し、activeへの遷移を確認してから自動操縦launch（UI・シーケンサ・経路生成／追従・Joy・機構ノード）を1回起動します。CANブリッジが終了すると全体も終了します。CANの設定は既存どおり `can0`、1 Mbps／CAN FD 2 Mbpsです。設定変更が必要な場合は既存launchの `sudo -n ip ...` が実行できる権限が必要です。
+
+既定のシーケンス・キュー・ポンプ設定は、このチェックアウトの `src/` 内のYAMLです。`sequence_file:=...`、`queue_config:=...`、`pump_config:=...`、`listen:=...`、`ipc_socket:=...`、`non_blocking:=...` を変更できます。`./run_production.sh --show-args` は引数を表示するだけで実機ノードを起動しません。起動後は `/current_joints` の実測値が届くことを確認してからUIで操作します。CANのactiveは関節角の受信確認ではありません。
+
+`install/_local_setup_util*.py` が欠損している場合、スクリプトは不完全な環境で起動を続けずエラーを表示します。新しい端末で対象ROS環境を読み込み、上のビルド手順で `install` を再生成してください。起動スクリプトはビルドを自動実行しません。フロントの同梱distを使用するためnpmは不要です。
+
 ## UIからの自動操縦
 
 [シーケンスノード](src/catchrobo2026_sequence/README.md) がUIのPICK／PLACEを経路生成・追従と機構操作へ変換します。[設定仕様](src/catchrobo2026_sequence/CONFIG.md) に従い、絶対座標・相対ウェイポイント・共通値・手順のエイリアス／継承をYAMLで指定します。
