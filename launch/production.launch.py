@@ -20,7 +20,7 @@ def is_can_bridge(action):
 
 
 def stop_on_bridge_exit(event, context):
-    if is_can_bridge(event.action):
+    if not context.is_shutdown and is_can_bridge(event.action):
         return [EmitEvent(event=Shutdown(reason='CAN bridge exited'))]
     return []
 
