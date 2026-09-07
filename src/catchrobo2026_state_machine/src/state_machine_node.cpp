@@ -2,7 +2,7 @@
 #include <chrono>
 
 #include "rclcpp/rclcpp.hpp"
-#include "std_msgs/msg/int32.hpp"
+#include "std_msgs/msg/int32_multi_array.hpp"
 // 新しいサービス型のヘッダーをインクルード
 #include "catchrobo2026_msgs/srv/state_control.hpp"
 
@@ -14,8 +14,8 @@ public:
   RepeaterNode()
   : Node("repeater_node"), current_value_(0)
   {
-    // パブリッシャーの設定 (トピック名: 'repeated_value')
-    publisher_ = this->create_publisher<std_msgs::msg::Int32>("init_state", 10);
+    // パブリッシャーの設定 (トピック名: 'init_state')
+    publisher_ = this->create_publisher<std_msgs::msg::Int32MultiArray>("init_state", 10);
     
     // StateControl サービスを使用するようにサーバーを設定
     service_ = this->create_service<catchrobo2026_msgs::srv::StateControl>(
@@ -45,13 +45,13 @@ private:
 
   void timer_callback()
   {
-    auto msg = std_msgs::msg::Int32();
-    msg.data = current_value_;
+    auto msg = std_msgs::msg::Int32MultiArray();
+    msg.data = {current_value_};
     publisher_->publish(msg);
   }
 
   int current_value_;
-  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr publisher_;
+  rclcpp::Publisher<std_msgs::msg::Int32MultiArray>::SharedPtr publisher_;
   rclcpp::Service<catchrobo2026_msgs::srv::StateControl>::SharedPtr service_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
