@@ -146,7 +146,7 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
       fail("config", "expected exactly one YAML document");
     }
     const YAML::Node root = documents.front();
-    keys(root, "config", {"version", "values", "poses", "sequences", "bindings"});
+    keys(root, "config", {"version", "values", "poses", "sequences", "bindings", "start_sequence"});
     if (scalar(root["version"], "version") != "1") {
       fail("version", "only version 1 is supported");
     }
@@ -353,6 +353,10 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
     for (const auto & entry : sequence_nodes) {
       resolve_sequence(entry.first.Scalar());
     }
+    if (root["start_sequence"] && !root["start_sequence"].IsNull()) {
+      config.start_sequence_ = scalar(root["start_sequence"], "start_sequence");
+      resolve_sequence(config.start_sequence_);
+    }
 
     const YAML::Node bindings = root["bindings"];
     keys(bindings, "bindings", {"red", "blue"});
@@ -386,6 +390,7 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
       }
     }
     // Validate every enabled entry before the first robot command.
+    config.compile_start();
     for (const auto & entry : config.bindings_) {
       if (!entry.second.empty()) {
         config.compile(
@@ -409,7 +414,21 @@ std::vector<Step> SequenceConfig::compile(
   if (binding == bindings_.end() || binding->second.empty()) {
     fail(where, "target is unconfigured (missing or null binding)");
   }
-  const auto & source = sequences_.at(binding->second);
+  return compile_sequence(binding->second, where);
+}
+
+std::vector<Step> SequenceConfig::compile_start() const
+{
+  if (start_sequence_.empty()) {
+    return {};
+  }
+  return compile_sequence(start_sequence_, "start_sequence");
+}
+
+std::vector<Step> SequenceConfig::compile_sequence(
+  const std::string & name, const std::string & where) const
+{
+  const auto & source = sequences_.at(name);
   Pose anchor{};
   bool has_anchor = false;
   std::vector<Step> result;

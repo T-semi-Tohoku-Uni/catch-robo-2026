@@ -38,6 +38,7 @@ public:
 
   std::vector<Step> compile(
     const std::string & team, const std::string & kind, int index1, int index2) const;
+  std::vector<Step> compile_start() const;
 
 private:
   struct RawStep
@@ -47,8 +48,12 @@ private:
   };
 
   using BindingKey = std::tuple<std::string, std::string, int, int>;
+  std::vector<Step> compile_sequence(
+    const std::string & name, const std::string & where) const;
+
   std::map<std::string, std::vector<RawStep>> sequences_;
   std::map<BindingKey, std::string> bindings_;
+  std::string start_sequence_;
 };
 
 }  // namespace catchrobo2026_sequence

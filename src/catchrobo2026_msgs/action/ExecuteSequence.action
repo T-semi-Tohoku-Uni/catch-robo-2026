@@ -3,6 +3,8 @@ uint64 control_epoch
 uint64 step_id
 uint8 PICK=1
 uint8 PLACE=2
+# Run the configured start sequence; positions are ignored and collector_mask must be 7.
+uint8 START=4
 uint8 kind
 uint8 row
 uint8 column

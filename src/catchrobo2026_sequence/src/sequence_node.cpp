@@ -75,7 +75,9 @@ public:
                 if (goal_ || faulted_ || stop_requested || goal->control_epoch == 0 || goal->step_id == 0 ||
                     goal->collector_mask == 0 || goal->collector_mask > 7 ||
                     (goal->kind != ExecuteSequence::Goal::PICK &&
-                     goal->kind != ExecuteSequence::Goal::PLACE) ||
+                     goal->kind != ExecuteSequence::Goal::PLACE &&
+                     goal->kind != ExecuteSequence::Goal::START) ||
+                    (goal->kind == ExecuteSequence::Goal::START && goal->collector_mask != 7) ||
                     (goal->kind == ExecuteSequence::Goal::PICK &&
                      (goal->row > 3 || goal->column < 1 || goal->column > 4)) ||
                     (goal->kind == ExecuteSequence::Goal::PLACE &&
@@ -147,11 +149,13 @@ private:
             // Compile the entire action before sending any hardware command.
             auto candidate = debug_ ? SequenceConfig::load(config_file_) : *config_;
             const auto request = goal_->get_goal();
+            const bool starting = request->kind == ExecuteSequence::Goal::START;
             const bool pick = request->kind == ExecuteSequence::Goal::PICK;
-            steps_ = candidate.compile(team_, pick ? "pick" : "place",
+            steps_ = starting ? candidate.compile_start() :
+                candidate.compile(team_, pick ? "pick" : "place",
                 pick ? request->row : request->box,
                 pick ? request->column : request->box_column);
-            if (steps_.empty()) {
+            if (steps_.empty() && !starting) {
                 throw std::runtime_error("the selected sequence has no steps");
             }
             if (debug_) {

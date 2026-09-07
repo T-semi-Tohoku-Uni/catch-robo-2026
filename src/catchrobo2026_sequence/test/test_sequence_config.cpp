@@ -88,6 +88,95 @@ TEST(SequenceConfig, ResolvesAliasesInheritanceAndFixedRelativeAnchor)
   EXPECT_EQ(steps[5].pose, steps[0].pose);
 }
 
+TEST(SequenceConfig, StartSequenceReusesReferencesAndFixedAbsoluteAnchors)
+{
+  const auto config = SequenceConfig::from_yaml(document(
+      "{above: [10, 20, '$height', 0]}", R"(
+  approach: {steps: [{move: {absolute: above}}]}
+  body:
+    steps:
+      - move: {relative: [0, 0, -5, 0]}
+      - pump: off
+      - endeffector: '$width'
+      - wait: '$settle'
+      - move: {relative: [0, 0, 5, 0]}
+  startup:
+    extends: approach
+    steps:
+      - call: body
+  startup_alias: startup
+)") + R"(
+start_sequence: startup_alias
+values: {height: 30, width: '$place_width', place_width: 1, settle: 0.25}
+)");
+  const auto steps = config.compile_start();
+  ASSERT_EQ(steps.size(), 6u);
+  EXPECT_EQ(steps[0].type, StepType::MOVE);
+  EXPECT_EQ(steps[0].pose, (Pose{10, 20, 30, 0}));
+  EXPECT_EQ(steps[1].pose, (Pose{10, 20, 25, 0}));
+  EXPECT_EQ(steps[2].type, StepType::PUMP);
+  EXPECT_EQ(steps[2].command, 0);
+  EXPECT_EQ(steps[3].type, StepType::ENDEFFECTOR);
+  EXPECT_EQ(steps[3].command, 1);
+  EXPECT_EQ(steps[4].type, StepType::WAIT);
+  EXPECT_DOUBLE_EQ(steps[4].seconds, 0.25);
+  EXPECT_EQ(steps[5].pose, (Pose{10, 20, 35, 0}));
+}
+
+TEST(SequenceConfig, MissingOrNullStartSequencePreservesExistingBindings)
+{
+  const auto yaml = document(
+    "{}", "{s: {steps: [{pump: suction}]}}", "{'0,1': s}");
+  for (const std::string setting : {"", "start_sequence: null\n"}) {
+    SCOPED_TRACE(setting);
+    const auto config = SequenceConfig::from_yaml(yaml + setting);
+    EXPECT_TRUE(config.compile_start().empty());
+    const auto steps = config.compile("red", "pick", 0, 1);
+    ASSERT_EQ(steps.size(), 1u);
+    EXPECT_EQ(steps[0].type, StepType::PUMP);
+    EXPECT_EQ(steps[0].command, 1);
+  }
+}
+
+TEST(SequenceConfig, RejectsInvalidStartSequenceBeforeExecution)
+{
+  const auto yaml = document("{}", "{s: {steps: [{pump: off}]}}");
+  for (const std::string reference : {"missing", "''", "[]", "{}", "[s]", "{name: s}"}) {
+    SCOPED_TRACE(reference);
+    EXPECT_THROW(
+      SequenceConfig::from_yaml(yaml + "start_sequence: " + reference + "\n"), ConfigError);
+  }
+  for (const std::string steps : {
+      "[{move: {relative: [0, 0, -10, 0]}}]",
+      "[{endeffector: 1}, {move: {relative: [0, 0, -10, 0]}}]",
+      "[{move: {absolute: [1.7e308, 0, 0, 0]}}, {move: {relative: [1.7e308, 0, 0, 0]}}]"})
+  {
+    SCOPED_TRACE(steps);
+    EXPECT_THROW(
+      SequenceConfig::from_yaml(document("{}", "{s: {steps: " + steps + "}}") +
+      "start_sequence: s\n"), ConfigError);
+  }
+}
+
+TEST(SequenceConfig, StartSequenceReloadUsesTheLatestValidSnapshot)
+{
+  TemporaryConfig file;
+  const auto yaml = document("{}", "{s: {steps: [{endeffector: '$width'}]}}") +
+    "start_sequence: s\n";
+  file.write(yaml + "values: {width: 1}\n");
+  auto config = SequenceConfig::load(file.path);
+  file.write(yaml + "values: {width: 0}\n");
+  EXPECT_EQ(config.compile_start().front().command, 1);
+  config = SequenceConfig::load(file.path);
+  EXPECT_EQ(config.compile_start().front().command, 0);
+  file.write(yaml + "values: {width: 2}\n");
+  EXPECT_THROW(config = SequenceConfig::load(file.path), ConfigError);
+  EXPECT_EQ(config.compile_start().front().command, 0);
+  file.write(document("{}", "{}") + "start_sequence: null\n");
+  config = SequenceConfig::load(file.path);
+  EXPECT_TRUE(config.compile_start().empty());
+}
+
 TEST(SequenceConfig, MultipleParentsAppendInOrderAndAbsoluteResetsAnchor)
 {
   const auto config = SequenceConfig::from_yaml(document("{}", R"(

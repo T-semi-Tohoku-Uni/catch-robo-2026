@@ -5,7 +5,12 @@
 # Relative Z offsets are provisional values for hardware tuning.
 version: 1
 
+start_sequence: startup
+
 values:
+  # Provisional width commands; confirm the 0/1 mapping on hardware.
+  pick_endeffector_command: 0
+  place_endeffector_command: 1
   # Initial CSV Z values; their physical clearance is not verified.
   work_above_z: 166.95
   common_work_above_z: 186.95
@@ -57,18 +62,23 @@ poses:
   place_blue_3_1_above: [1145.98, -635.65, '$place_above_z', 1.5707963267949]
 
 sequences:
+  startup:
+    steps:
+      - endeffector: '$place_endeffector_command'
   pick_common:
     steps:
       - move: {relative: [0, 0, '$pick_approach_dz', 0]}
       - pump: suction
       - move: {relative: [0, 0, '$pick_retreat_dz', 0]}
       - pump: off
+      - endeffector: '$place_endeffector_command'
   place_common:
     steps:
       - move: {relative: [0, 0, '$place_approach_dz', 0]}
       - pump: release
       - move: {relative: [0, 0, '$place_retreat_dz', 0]}
       - pump: off
+      - endeffector: '$pick_endeffector_command'
 
   pick_0_1:
     steps:
