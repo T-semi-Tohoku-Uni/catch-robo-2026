@@ -69,10 +69,10 @@ sequences:
   # Initialization and ending share the same target pose.
   before_initialization:
     steps:
-      - move: {absolute: lifecycle_pose}
+#      - move: {absolute: lifecycle_pose}
   after_initialization:
     steps:
-      - move: {absolute: lifecycle_pose}
+#      - move: {absolute: lifecycle_pose}
   ending:
     steps:
       - move: {absolute: lifecycle_pose}
