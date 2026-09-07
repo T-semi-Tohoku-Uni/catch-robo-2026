@@ -44,6 +44,8 @@ def generate_launch_description():
         # Existing Nodes
         Node(package='nav_director', executable='path_generator_3d', output='screen'),
         Node(package='nav_director', executable='path_follower_node', output='screen'),
+        Node(package='catchrobo2026_state_machine', executable='state_machine_node',
+             name='state_machine_node', output='screen'),
         Node(package='catchrobo2026_pump', executable='pump_controller_node',
              parameters=[LaunchConfiguration('pump_config')], output='screen'),
         Node(package='catchrobo2026_endeffector', executable='endeffector_state_node',
