@@ -155,23 +155,25 @@ TEST(BuiltinSequences, PlacementBindingsSelectDifferentTeamApproaches)
   }
 }
 
-TEST(BuiltinSequences, AllBindingsReachBothWaypointsAroundTheirPumpCommands)
+TEST(BuiltinSequences, AllBindingsUseTheConfiguredPumpAndWaypointOrder)
 {
   const auto yaml = YAML::LoadFile(SEQUENCE_CONFIG_PATH);
   const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
       const auto steps = config.compile(team, kind, first, second);
-      ASSERT_EQ(steps.size(), 6u);
+      ASSERT_EQ(steps.size(), kind == "pick" ? 5u : 6u);
       EXPECT_EQ(steps[0].type, StepType::MOVE);
-      EXPECT_EQ(steps[1].type, StepType::MOVE);
-      EXPECT_EQ(steps[2].type, StepType::PUMP);
-      EXPECT_EQ(steps[2].command, kind == "pick" ? 1 : -1);
+      EXPECT_EQ(steps[1].type, StepType::PUMP);
+      EXPECT_EQ(steps[1].command, kind == "pick" ? 1 : -1);
+      EXPECT_EQ(steps[2].type, StepType::MOVE);
       EXPECT_EQ(steps[3].type, StepType::MOVE);
-      EXPECT_EQ(steps[4].type, StepType::PUMP);
-      EXPECT_EQ(steps[4].command, 0);
-      EXPECT_EQ(steps[5].type, StepType::ENDEFFECTOR);
+      if (kind == "place") {
+        EXPECT_EQ(steps[4].type, StepType::PUMP);
+        EXPECT_EQ(steps[4].command, 0);
+      }
+      EXPECT_EQ(steps.back().type, StepType::ENDEFFECTOR);
       EXPECT_EQ(
-        steps[5].command,
+        steps.back().command,
         value(yaml, kind == "pick" ? "place_endeffector_command" : "pick_endeffector_command"));
     });
 }
@@ -182,9 +184,9 @@ TEST(BuiltinSequences, BothRelativeOffsetsUseTheFixedApproachAnchor)
   const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
       const auto steps = config.compile(team, kind, first, second);
-      ASSERT_EQ(steps.size(), 6u);
-      for (const auto index : {1u, 3u}) {
-        const std::string offset = kind + (index == 1 ? "_approach_dz" : "_retreat_dz");
+      ASSERT_EQ(steps.size(), kind == "pick" ? 5u : 6u);
+      for (const auto index : {2u, 3u}) {
+        const std::string offset = kind + (index == 2 ? "_approach_dz" : "_retreat_dz");
         for (const auto axis : {0u, 1u, 3u}) {
           EXPECT_DOUBLE_EQ(steps[index].pose[axis], steps[0].pose[axis]);
         }
@@ -225,8 +227,9 @@ TEST(BuiltinSequences, OneRelativeOffsetEditChangesOnlyItsWaypointAcrossTheMatch
 {
   const auto before = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   for (const std::string changed_kind : {"pick", "place"}) {
-    for (const auto index : {1u, 3u}) {
-      const std::string name = changed_kind + (index == 1 ? "_approach_dz" : "_retreat_dz");
+    for (const auto index : {2u, 3u}) {
+      const std::string name = changed_kind +
+        (index == 2 ? "_approach_dz" : "_retreat_dz");
       SCOPED_TRACE(name);
       auto yaml = YAML::LoadFile(SEQUENCE_CONFIG_PATH);
       constexpr double delta = 83.0;
@@ -234,7 +237,7 @@ TEST(BuiltinSequences, OneRelativeOffsetEditChangesOnlyItsWaypointAcrossTheMatch
       const auto after = SequenceConfig::from_yaml(YAML::Dump(yaml));
       for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
           auto expected = before.compile(team, kind, first, second);
-          ASSERT_EQ(expected.size(), 6u);
+          ASSERT_EQ(expected.size(), kind == "pick" ? 5u : 6u);
           if (kind == changed_kind) {
             expected[index].pose[2] += delta;
           }

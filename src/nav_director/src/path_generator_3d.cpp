@@ -96,7 +96,7 @@ private:
 
         // 3DスプラインとSlerpを用いた経路生成
         auto smoothed_path = generate3DSpline(route_points);
-        publishPath(smoothed_path);
+        res->path = publishPath(smoothed_path);
 
         // 次の生成に向けてウェイポイントをクリア
         waypoints_.clear();
@@ -198,7 +198,7 @@ private:
         return smoothed;
     }
 
-    void publishPath(const std::vector<Point3D>& path_points) {
+    nav_msgs::msg::Path publishPath(const std::vector<Point3D>& path_points) {
         nav_msgs::msg::Path path_msg;
         path_msg.header.stamp = this->now();
         path_msg.header.frame_id = "map";
@@ -246,6 +246,7 @@ private:
         }
         pub_path_->publish(path_msg);
         pub_marker_->publish(marker_array);
+        return path_msg;
     }
 
     Point3D cur_pose_;

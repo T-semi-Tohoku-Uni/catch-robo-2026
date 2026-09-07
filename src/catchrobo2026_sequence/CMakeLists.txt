@@ -32,6 +32,8 @@ install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_route_handoff test/test_route_handoff.py TIMEOUT 120)
   ament_add_gtest(test_sequence_config test/test_sequence_config.cpp)
   target_link_libraries(test_sequence_config sequence_config)
   ament_add_gtest(test_builtin_sequences test/test_builtin_sequences.cpp)

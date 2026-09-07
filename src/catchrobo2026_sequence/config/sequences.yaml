@@ -83,12 +83,11 @@ sequences:
       - pump: suction
       - move: {relative: [0, 0, '$pick_approach_dz', 0]}
       - move: {relative: [0, 0, '$pick_retreat_dz', 0]}
-      - pump: off
       - endeffector: '$place_endeffector_command'
   place_common:
     steps:
-      - move: {relative: [0, 0, '$place_approach_dz', 0]}
       - pump: release
+      - move: {relative: [0, 0, '$place_approach_dz', 0]}
       - move: {relative: [0, 0, '$place_retreat_dz', 0]}
       - pump: off
       - endeffector: '$pick_endeffector_command'

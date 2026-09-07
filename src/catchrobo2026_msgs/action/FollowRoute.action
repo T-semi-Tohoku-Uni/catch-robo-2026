@@ -1,5 +1,7 @@
 # Goal
 bool start
+# Explicit route; an empty path uses the latest received route.
+nav_msgs/Path path
 ---
 # Result
 bool success

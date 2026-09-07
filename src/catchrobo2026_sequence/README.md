@@ -55,9 +55,11 @@ UIの「終了」では現在動作の取消完了後に `sequences.ending.steps
 
 `execute_sequence`（`catchrobo2026_msgs/action/ExecuteSequence`）の要求には `control_epoch`・`step_id`・種類・UI位置・`collector_mask` を含めます。種類はINITIALIZE=5／START=4／END=6／PICK=1／PLACE=2です。INITIALIZE／START／ENDは位置を使用せず `collector_mask=7` で送信します。PICKはrow=0..3／column=1..4、PLACEはbox=0..3／box_column=0..1です。機構選択はUIのbit0/1/2（L/C/R）で、設定ファイルには記述しません。
 
-各 `move` は既存の `generate_route`（`GenerateRoute`）へ絶対目標の `x,y,z,phi` を渡し、成功応答後に `follow_route`（`FollowRoute`）を `start=true` で開始します。追従成功の結果を待ってから次の手順へ進みます。各移動を独立した経路として扱うため、シーケンサから `waypoint` の蓄積は行いません。設定と生成サービスの位置単位はmm、角度はradです。生成ノードが配信する `route`（ROS Path）の位置単位はmです。
+各 `move` は既存の `generate_route`（`GenerateRoute`）へ絶対目標の `x,y,z,phi` を渡し、成功応答の `path` を `follow_route`（`FollowRoute`）の `path` へ渡し、`start=true` で開始します。空の経路が返った場合は失敗とし、以前の経路を再利用しません。追従成功の結果を待ってから次の手順へ進みます。各移動を独立した経路として扱うため、シーケンサから `waypoint` の蓄積は行いません。設定と生成サービスの位置単位はmm、角度はradです。生成ノードが配信する `route`（ROS Path）の位置単位はmです。
 
-`nav_director` と `FollowRoute` の定義は従来実装を使用します。生成サービスの応答と追従ノードによる `route` 受信の間には確認応答がないため、開始時に今回の経路を受信済みであることは保証できません。追従中も新しい `route` を受信すると経路が更新されます。自動実行時は他の `waypoint`／`generate_route`／`follow_route` クライアントと `route` 配信元を停止し、以前に蓄積した経由点も残っていない状態で経路ノードを使用してください。
+初期化前後・開始・終了・PICK／PLACEのすべての移動で、生成した経路を追従アクションへ直接渡します。`route` トピックの受信順に依存せず、実行中の経路は固定されます。追従中の追加ゴールは拒否します。手動の `FollowRoute(start=true)` は `path` を省略した場合、受理時に受信済みの `route` を固定して使い、未受信なら拒否します。経路生成側の `waypoint` 蓄積は従来どおりなので、他クライアントの経由点を残した状態では実行しないでください。
+
+`GenerateRoute`／`FollowRoute` の型に `nav_msgs/Path path` を追加しています。更新時はワークスペース全体を再ビルドし、関係するノードをすべて再起動してください。
 
 ポンプ手順では、UIで選択された機構に設定の指令値、選択されていない機構にオフ（0）を指定して、`set_pump_state` に全3状態を渡します。例えばLとRを選んで吸引する場合は `(left, center, right)=(1,0,1)` です。初期化前後・開始・終了手順のポンプ操作は全3機構が対象です。ポンプの現在状態の読出しは行いません。
 
@@ -84,4 +86,4 @@ UIのcancel／end／resetで現在動作を取り消します。UIは旧動作�
 
 タイムアウトは0秒超〜86,400秒の有限値を指定します。`wait` の設定値にも0〜86,400秒の上限があり、動作全体には `sequence_timeout_sec` が適用されます。
 
-従来の経路生成・追従ノードには関節情報の鮮度検査、経路の到達可能性検査、重複ゴール拒否、追従ノード自身のタイムアウトはありません。シーケンサ側のタイムアウトと取消処理を使用します。
+従来の経路生成・追従ノードには関節情報の鮮度検査、経路の到達可能性検査、追従ノード自身のタイムアウトはありません。シーケンサ側のタイムアウトと取消処理を使用します。

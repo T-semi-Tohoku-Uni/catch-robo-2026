@@ -297,10 +297,11 @@ private:
                 transition(Phase::PLAN, "planning", service_timeout_);
                 request<GenerateRoute>(planner_, generate_request_,
                     [this](GenerateRoute::Response::SharedPtr reply) {
-                        if (!reply->success) {
-                            begin_stop("route generation failed");
+                        if (!reply->success || reply->path.poses.empty()) {
+                            begin_stop("route generation failed or returned an empty path");
                             return;
                         }
+                        planned_path_ = reply->path;
                         transition(Phase::WAIT_FOLLOW, "waiting for follower", service_timeout_);
                     });
             }
@@ -406,6 +407,7 @@ private:
     {
         FollowRoute::Goal goal;
         goal.start = true;
+        goal.path = planned_path_;
         route_pending_ = true;
         cancel_sent_ = false;
         transition(Phase::FOLLOW_GOAL, "sending route", service_timeout_);
@@ -466,6 +468,7 @@ private:
     std::unique_ptr<SequenceConfig> config_;
     std::vector<Step> steps_;
     size_t index_{0};
+    nav_msgs::msg::Path planned_path_;
     GenerateRoute::Request::SharedPtr generate_request_;
     PumpControl::Request::SharedPtr pump_request_;
     std::function<void()> abandon_request_;
