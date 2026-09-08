@@ -2,9 +2,14 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <nav_msgs/msg/path.hpp>
+#include <visualization_msgs/msg/marker.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp> // 追加: PoseStamped用
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <algorithm>
+#include <chrono>
+#include <limits>
+#include <stdexcept>
 #include <atomic>
 #include <thread>
 #include <cmath>
@@ -21,11 +26,26 @@ using GoalHandleFollowRoute = rclcpp_action::ServerGoalHandle<FollowRoute>;
 class PathFollowerNode : public rclcpp::Node {
 public:
     PathFollowerNode() : Node("path_follower_node") {
+        lookahead_near_mm_ = declare_parameter("lookahead_near_mm", 40.0);
+        lookahead_far_mm_ = declare_parameter("lookahead_far_mm", 150.0);
+        goal_distance_near_mm_ = declare_parameter("goal_distance_near_mm", 100.0);
+        goal_distance_far_mm_ = declare_parameter("goal_distance_far_mm", 500.0);
+        lookahead_smoothing_sec_ = declare_parameter("lookahead_smoothing_sec", 0.2);
+        if (!std::isfinite(lookahead_near_mm_) || !std::isfinite(lookahead_far_mm_) ||
+            !std::isfinite(goal_distance_near_mm_) || !std::isfinite(goal_distance_far_mm_) ||
+            !std::isfinite(lookahead_smoothing_sec_) || lookahead_near_mm_ <= 0.0 ||
+            lookahead_far_mm_ < lookahead_near_mm_ || goal_distance_near_mm_ < 0.0 ||
+            goal_distance_far_mm_ <= goal_distance_near_mm_ || lookahead_smoothing_sec_ <= 0.0) {
+            throw std::invalid_argument("Invalid lookahead parameters");
+        }
+
         // パブリッシャーとサブスクライバーの初期化
         pub_joints_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("target_joint_angles", 10);
         
         // 追加: target_pose用のパブリッシャー
         pub_target_pose_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("target_pose", 10);
+        pub_lookahead_marker_ = this->create_publisher<visualization_msgs::msg::Marker>(
+            "lookahead_marker", 10);
         
         sub_path_ = this->create_subscription<nav_msgs::msg::Path>(
             "route", 10, std::bind(&PathFollowerNode::pathCallback, this, std::placeholders::_1));
@@ -126,6 +146,10 @@ private:
         auto feedback = std::make_shared<FollowRoute::Feedback>();
         auto result = std::make_shared<FollowRoute::Result>();
 
+        bool lookahead_initialized = false;
+        double smoothed_lookahead = lookahead_near_mm_;
+        auto last_update = std::chrono::steady_clock::now();
+
         while (rclcpp::ok() && !stopping_) {
             if (goal_handle->is_canceling()) {
                 result->success = false;
@@ -154,87 +178,102 @@ private:
             double cy = current_posrot[1]; 
             double cz = current_posrot[2]; 
 
-            // 2. 100mm (0.1m) 先の目標経路探索
-            bool found_target = false;
-            for (size_t i = current_path_index; i < local_path.poses.size(); ++i) {
-                const auto& pose = local_path.poses[i].pose;
-                
-                // ターゲット座標を [m] から [mm] に変換
-                double target_x_mm = pose.position.x * 1000.0;
-                double target_y_mm = pose.position.y * 1000.0;
-                double target_z_mm = pose.position.z * 1000.0;
+            const auto& final_pose = local_path.poses.back().pose;
+            const double goal_distance = std::hypot(
+                std::hypot(final_pose.position.x * 1000.0 - cx,
+                           final_pose.position.y * 1000.0 - cy),
+                final_pose.position.z * 1000.0 - cz);
 
-                // [mm] 同士で差分を計算
-                double dx = target_x_mm - cx;
-                double dy = target_y_mm - cy;
-                double dz = target_z_mm - cz;
-                
-                // 3次元空間でのユークリッド距離 (単位: mm) を計算
-                double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+            // 終点までの直線距離を smoothstep で先読み距離に変換する。
+            const double ratio = std::max(0.0, std::min(1.0,
+                (goal_distance - goal_distance_near_mm_) /
+                (goal_distance_far_mm_ - goal_distance_near_mm_)));
+            const double blend = ratio * ratio * (3.0 - 2.0 * ratio);
+            const double desired_lookahead = lookahead_near_mm_ +
+                blend * (lookahead_far_mm_ - lookahead_near_mm_);
+            const auto now = std::chrono::steady_clock::now();
+            if (!lookahead_initialized) {
+                lookahead_initialized = true;
+                smoothed_lookahead = desired_lookahead;
+            } else {
+                const double dt = std::chrono::duration<double>(now - last_update).count();
+                smoothed_lookahead += (1.0 - std::exp(-dt / lookahead_smoothing_sec_)) *
+                    (desired_lookahead - smoothed_lookahead);
+            }
+            last_update = now;
 
-                // 距離が 100mm (0.1m) 以上離れたポイントを次の目標とする
-                if (distance >= 100.0) {
-                    target_posrot[0] = target_x_mm;
-                    target_posrot[1] = target_y_mm;
-                    target_posrot[2] = target_z_mm;
-
-                    // クォータニオンからPHI（ヨー角）を取得
-                    tf2::Quaternion q;
-                    tf2::fromMsg(pose.orientation, q);
-                    double roll, pitch, yaw;
-                    tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
-                    
-                    target_posrot[3] = static_cast<float>(yaw); // PHI
-                    target_posrot[4] = -M_PI / 2.0F;            // THE (robot_kinematicsの実装に依存)
-                    target_posrot[5] = 0.0F;                    // PSI
-
+            // 現在地を経路の線分に射影。先読み目標ではなく足元の線分を記録し、
+            // 先読み距離が短くなったときも適切な位置を選べるようにする。
+            double nearest_distance_sq = std::numeric_limits<double>::max();
+            double segment_fraction = 0.0;
+            for (size_t i = current_path_index; i + 1 < local_path.poses.size(); ++i) {
+                const auto& a = local_path.poses[i].pose.position;
+                const auto& b = local_path.poses[i + 1].pose.position;
+                const double vx = (b.x - a.x) * 1000.0;
+                const double vy = (b.y - a.y) * 1000.0;
+                const double vz = (b.z - a.z) * 1000.0;
+                const double length_sq = vx * vx + vy * vy + vz * vz;
+                const double t = length_sq > 0.0 ? std::max(0.0, std::min(1.0,
+                    ((cx - a.x * 1000.0) * vx + (cy - a.y * 1000.0) * vy +
+                     (cz - a.z * 1000.0) * vz) / length_sq)) : 0.0;
+                const double dx = a.x * 1000.0 + t * vx - cx;
+                const double dy = a.y * 1000.0 + t * vy - cy;
+                const double dz = a.z * 1000.0 + t * vz - cz;
+                const double distance_sq = dx * dx + dy * dy + dz * dz;
+                if (distance_sq < nearest_distance_sq) {
+                    nearest_distance_sq = distance_sq;
                     current_path_index = i;
-                    found_target = true;
-                    break;
+                    segment_fraction = t;
                 }
             }
 
-            // 目標が見つからなかった場合（終点到達など）は最終ウェイポイントを目標とする
-            if (!found_target) {
-                const auto& last_pose = local_path.poses.back().pose;
-                
-                // 最終ターゲット座標を [mm] に変換
-                double final_target_x_mm = last_pose.position.x * 1000.0;
-                double final_target_y_mm = last_pose.position.y * 1000.0;
-                double final_target_z_mm = last_pose.position.z * 1000.0;
-                
-                target_posrot[0] = final_target_x_mm;
-                target_posrot[1] = final_target_y_mm;
-                target_posrot[2] = final_target_z_mm;
-                
-                // 最終ターゲットの姿勢を取得
-                tf2::Quaternion q;
-                tf2::fromMsg(last_pose.orientation, q);
-                double r, p, target_yaw;
-                tf2::Matrix3x3(q).getRPY(r, p, target_yaw);
-                
-                target_posrot[3] = static_cast<float>(target_yaw);
-                target_posrot[4] = -M_PI / 2.0F;
-                target_posrot[5] = 0.0F;
-                
-                double pos_error = std::sqrt(std::pow(final_target_x_mm - cx, 2) + 
-                                             std::pow(final_target_y_mm - cy, 2) + 
-                                             std::pow(final_target_z_mm - cz, 2));
-
-                double current_yaw = current_posrot[3];
-                double yaw_error = std::abs(std::atan2(std::sin(target_yaw - current_yaw), 
-                                                       std::cos(target_yaw - current_yaw)));
-
-                const double POS_TOLERANCE = 30.0;
-                const double YAW_TOLERANCE = 0.05;
-
-                if (pos_error <= POS_TOLERANCE && yaw_error <= YAW_TOLERANCE) {
-                    result->success = true;
-                    busy_ = false;
-                    goal_handle->succeed(result);
-                    RCLCPP_INFO(this->get_logger(), "Reached the end of the path with correct position and orientation.");
-                    return;
+            // 経路に沿って先読み距離だけ進み、線分内の位置・姿勢を補間する。
+            auto target_pose = final_pose;
+            bool targeting_final = true;
+            double remaining = smoothed_lookahead;
+            for (size_t i = current_path_index; i + 1 < local_path.poses.size(); ++i) {
+                const auto& a = local_path.poses[i].pose;
+                const auto& b = local_path.poses[i + 1].pose;
+                const double length = 1000.0 * std::hypot(
+                    std::hypot(b.position.x - a.position.x, b.position.y - a.position.y),
+                    b.position.z - a.position.z);
+                const double start = i == current_path_index ? segment_fraction : 0.0;
+                const double available = length * (1.0 - start);
+                if (length > 0.0 && remaining < available) {
+                    const double t = start + remaining / length;
+                    target_pose.position.x = a.position.x + t * (b.position.x - a.position.x);
+                    target_pose.position.y = a.position.y + t * (b.position.y - a.position.y);
+                    target_pose.position.z = a.position.z + t * (b.position.z - a.position.z);
+                    tf2::Quaternion qa, qb;
+                    tf2::fromMsg(a.orientation, qa);
+                    tf2::fromMsg(b.orientation, qb);
+                    target_pose.orientation = tf2::toMsg(qa.slerp(qb, t));
+                    targeting_final = false;
+                    break;
                 }
+                remaining -= available;
+            }
+
+            target_posrot[0] = target_pose.position.x * 1000.0;
+            target_posrot[1] = target_pose.position.y * 1000.0;
+            target_posrot[2] = target_pose.position.z * 1000.0;
+            tf2::Quaternion q;
+            tf2::fromMsg(target_pose.orientation, q);
+            double roll, pitch, target_yaw;
+            tf2::Matrix3x3(q).getRPY(roll, pitch, target_yaw);
+            target_posrot[3] = static_cast<float>(target_yaw);
+            target_posrot[4] = -M_PI / 2.0F;
+            target_posrot[5] = 0.0F;
+
+            const double yaw_error = std::abs(std::atan2(
+                std::sin(target_yaw - current_posrot[3]),
+                std::cos(target_yaw - current_posrot[3])));
+            if (targeting_final && goal_distance <= 30.0 && yaw_error <= 0.05) {
+                result->success = true;
+                busy_ = false;
+                goal_handle->succeed(result);
+                RCLCPP_INFO(this->get_logger(), "Reached the end of the path with correct position and orientation.");
+                return;
             }
 
             // ===============================================================
@@ -290,6 +329,24 @@ private:
 
             pub_target_pose_->publish(target_pose_msg);
 
+            // 制御に使用した先読み目標位置を直径50mmの球で表示する。
+            visualization_msgs::msg::Marker marker;
+            marker.header = target_pose_msg.header;
+            marker.ns = "lookahead_target";
+            marker.id = 0;
+            marker.type = visualization_msgs::msg::Marker::SPHERE;
+            marker.action = visualization_msgs::msg::Marker::ADD;
+            marker.pose.position = target_pose_msg.pose.position;
+            marker.pose.orientation.w = 1.0;
+            marker.scale.x = marker.scale.y = marker.scale.z = 0.05;
+            marker.color.r = 1.0;
+            marker.color.g = 0.4;
+            marker.color.b = 0.0;
+            marker.color.a = 1.0;
+            // 完了・キャンセル・異常終了後に古い参照点を残さない。
+            marker.lifetime = rclcpp::Duration::from_seconds(0.3);
+            pub_lookahead_marker_->publish(marker);
+
             // フィードバックの送信
             feedback->distance_remaining = local_path.poses.size() - current_path_index;
             goal_handle->publish_feedback(feedback);
@@ -302,6 +359,7 @@ private:
     
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pub_joints_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_target_pose_; // 追加: ターゲット姿勢用
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_lookahead_marker_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr sub_path_;
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr sub_current_joints_;
     rclcpp_action::Server<FollowRoute>::SharedPtr action_server_;
@@ -314,6 +372,11 @@ private:
     std::atomic<bool> busy_{false};
     std::atomic<bool> stopping_{false};
     std::thread worker_;
+    double lookahead_near_mm_;
+    double lookahead_far_mm_;
+    double goal_distance_near_mm_;
+    double goal_distance_far_mm_;
+    double lookahead_smoothing_sec_;
 };
 
 int main(int argc, char** argv) {
