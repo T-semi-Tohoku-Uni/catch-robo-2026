@@ -77,43 +77,43 @@ values:
 poses:
   lifecycle_pose: [670, -110, 220, 0]
   # PICK: UI row 0; CSV ID = row * 6 + column + 1.
-  pick_0_1_above: [375, 138, '$work_above_z', -1.5707963267949]
-  pick_0_2_above: [575, 138, '$work_above_z', -1.5707963267949]
-  pick_0_3_above: [775, 138, '$work_above_z', -1.5707963267949]
-  pick_0_4_above: [975, 138, '$work_above_z', -1.5707963267949]
+  pick_0_1_above: [375, 138, '$work_above_z', -3.1415926535897]
+  pick_0_2_above: [575, 138, '$work_above_z', -3.14159265358979]
+  pick_0_3_above: [775, 138, '$work_above_z', -3.14159265358979]
+  pick_0_4_above: [975, 138, '$work_above_z', -3.14159265358979]
   # PICK: UI row 1; CSV ID = row * 6 + column + 1.
-  pick_1_1_above: [375, 338, '$work_above_z', -1.5707963267949]
-  pick_1_2_above: [575, 338, '$work_above_z', -1.5707963267949]
-  pick_1_3_above: [775, 338, '$work_above_z', -1.5707963267949]
-  pick_1_4_above: [975, 338, '$work_above_z', -1.5707963267949]
+  pick_1_1_above: [375, 338, '$work_above_z', -3.14159265358979]
+  pick_1_2_above: [575, 338, '$work_above_z', -3.14159265358979]
+  pick_1_3_above: [775, 338, '$work_above_z', -3.14159265358979]
+  pick_1_4_above: [975, 338, '$work_above_z', -3.14159265358979]
   # PICK: UI row 2; CSV ID = row * 6 + column + 1.
-  pick_2_1_above: [375, 538, '$work_above_z', -1.5707963267949]
-  pick_2_2_above: [575, 538, '$work_above_z', -1.5707963267949]
-  pick_2_3_above: [775, 538, '$work_above_z', -1.5707963267949]
-  pick_2_4_above: [975, 538, '$work_above_z', -1.5707963267949]
+  pick_2_1_above: [375, 538, '$work_above_z', -3.14159265358979]
+  pick_2_2_above: [575, 538, '$work_above_z', -3.14159265358979]
+  pick_2_3_above: [775, 538, '$work_above_z', -3.14159265358979]
+  pick_2_4_above: [975, 538, '$work_above_z', -3.14159265358979]
   # PICK: UI row 3; CSV ID = row * 6 + column + 1.
-  pick_3_1_above: [375, 457, '$common_work_above_z', 1.5707963267949]
-  pick_3_2_above: [575, 457, '$common_work_above_z', 1.5707963267949]
-  pick_3_3_above: [775, 457, '$common_work_above_z', 1.5707963267949]
-  pick_3_4_above: [975, 457, '$common_work_above_z', 1.5707963267949]
+  pick_3_1_above: [375, 457, '$common_work_above_z', 3.14159265358979]
+  pick_3_2_above: [575, 457, '$common_work_above_z', 3.14159265358979]
+  pick_3_3_above: [775, 457, '$common_work_above_z', 3.14159265358979]
+  pick_3_4_above: [975, 457, '$common_work_above_z', 3.14159265358979]
   # PLACE red: GroupIdx=box+1, RowIdx=box_column+1, ColIdx=2.
-  place_red_0_0_above: [167.28, -71.65, '$place_above_z', -1.5707963267949]
-  place_red_0_1_above: [204.02, -185.65, '$place_above_z', 1.5707963267949]
-  place_red_1_0_above: [167.28, -221.65, '$place_above_z', -1.5707963267949]
-  place_red_1_1_above: [204.02, -335.65, '$place_above_z', 1.5707963267949]
-  place_red_2_0_above: [167.28, -371.65, '$place_above_z', -1.5707963267949]
-  place_red_2_1_above: [204.02, -485.65, '$place_above_z', 1.5707963267949]
-  place_red_3_0_above: [167.28, -521.65, '$place_above_z', -1.5707963267949]
-  place_red_3_1_above: [204.02, -635.65, '$place_above_z', 1.5707963267949]
+  place_red_0_0_above: [167.28, -71.65, '$place_above_z', -3.14159265358979]
+  place_red_0_1_above: [204.02, -185.65, '$place_above_z', 3.14159265358979]
+  place_red_1_0_above: [167.28, -221.65, '$place_above_z', -3.14159265358979]
+  place_red_1_1_above: [204.02, -335.65, '$place_above_z', 3.14159265358979]
+  place_red_2_0_above: [167.28, -371.65, '$place_above_z', -3.14159265358979]
+  place_red_2_1_above: [204.02, -485.65, '$place_above_z', 3.14159265358979]
+  place_red_3_0_above: [167.28, -521.65, '$place_above_z', -3.14159265358979]
+  place_red_3_1_above: [204.02, -635.65, '$place_above_z', 3.14159265358979]
   # PLACE blue: GroupIdx=box+1, RowIdx=box_column+1, ColIdx=2.
-  place_blue_0_0_above: [1182.72, -71.65, '$place_above_z', -1.5707963267949]
-  place_blue_0_1_above: [1145.98, -185.65, '$place_above_z', 1.5707963267949]
-  place_blue_1_0_above: [1182.72, -221.65, '$place_above_z', -1.5707963267949]
-  place_blue_1_1_above: [1145.98, -335.65, '$place_above_z', 1.5707963267949]
-  place_blue_2_0_above: [1182.72, -371.65, '$place_above_z', -1.5707963267949]
-  place_blue_2_1_above: [1145.98, -485.65, '$place_above_z', 1.5707963267949]
-  place_blue_3_0_above: [1182.72, -521.65, '$place_above_z', -1.5707963267949]
-  place_blue_3_1_above: [1145.98, -635.65, '$place_above_z', 1.5707963267949]
+  place_blue_0_0_above: [1182.72, -71.65, '$place_above_z', -3.14159265358979]
+  place_blue_0_1_above: [1145.98, -185.65, '$place_above_z', 3.14159265358979]
+  place_blue_1_0_above: [1182.72, -221.65, '$place_above_z', -3.14159265358979]
+  place_blue_1_1_above: [1145.98, -335.65, '$place_above_z', 3.14159265358979]
+  place_blue_2_0_above: [1182.72, -371.65, '$place_above_z', -3.14159265358979]
+  place_blue_2_1_above: [1145.98, -485.65, '$place_above_z', 3.14159265358979]
+  place_blue_3_0_above: [1182.72, -521.65, '$place_above_z', -3.14159265358979]
+  place_blue_3_1_above: [1145.98, -635.65, '$place_above_z', 3.14159265358979]
 
 sequences:
   # Initialization and ending share the same target pose.
@@ -144,10 +144,10 @@ sequences:
       - endeffector: '$pick_endeffector_command'
   place_pre_red_waypoint:
     steps:
-      - move: [150, 0, 400, 0]
+      - move: [150, 0, 400, 3.14159265358979]
   place_pre_blue_waypoint:
     steps:
-      - move: [1200, 0, 400, 0]
+      - move: [1200, 0, 400, 3.14159265358979]
 
   pick_0_1:
     steps:
