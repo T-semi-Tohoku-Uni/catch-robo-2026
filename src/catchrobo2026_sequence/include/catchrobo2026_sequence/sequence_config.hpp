@@ -20,6 +20,8 @@ struct Step
 {
   StepType type{StepType::MOVE};
   Pose pose{};
+  bool waypoint{false};
+  std::vector<Pose> waypoints;
   int command{0};
   double seconds{0.0};
 };
@@ -43,10 +45,17 @@ public:
   std::vector<Step> compile_end() const;
 
 private:
+  struct RawPose
+  {
+    Pose pose{};
+    bool relative{false};
+  };
+
   struct RawStep
   {
     Step step;
     bool relative{false};
+    std::vector<RawPose> waypoints;
   };
 
   using BindingKey = std::tuple<std::string, std::string, int, int>;

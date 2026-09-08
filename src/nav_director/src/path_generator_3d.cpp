@@ -81,13 +81,34 @@ private:
 
     void genRouteCallback(const std::shared_ptr<GenRouteSrv::Request> req,
                           std::shared_ptr<GenRouteSrv::Response> res) {
-        // 目標地点をリストの最後に追加
-        waypoints_.push_back({req->x, req->y, req->z, req->phi});
-
-        // 経路生成元となる点群（現在地 + ウェイポイント群 + 目標地点）
-        std::vector<Point3D> route_points;
-        route_points.push_back(cur_pose_);
-        route_points.insert(route_points.end(), waypoints_.begin(), waypoints_.end());
+        // Build locally so rejected requests cannot alter the legacy queue.
+        res->success = false;
+        std::vector<Point3D> route_points{cur_pose_};
+        if (req->use_explicit_waypoints) {
+            for (const auto &pose : req->waypoints) {
+                const auto &q = pose.orientation;
+                const double norm = q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w;
+                if (!std::isfinite(norm) || norm < 1e-12) {
+                    RCLCPP_WARN(get_logger(), "Route waypoint has an invalid quaternion.");
+                    return;
+                }
+                tf2::Quaternion orientation(q.x, q.y, q.z, q.w);
+                orientation.normalize();
+                const tf2::Matrix3x3 rotation(orientation);
+                const double yaw = std::atan2(-rotation[0][1], rotation[1][1]);
+                route_points.push_back({pose.position.x * 1000.0,
+                    pose.position.y * 1000.0, pose.position.z * 1000.0, yaw});
+            }
+        } else {
+            route_points.insert(route_points.end(), waypoints_.begin(), waypoints_.end());
+        }
+        route_points.push_back({req->x, req->y, req->z, req->phi});
+        for (const auto &point : route_points) {
+            if (!finitePoint(point)) {
+                RCLCPP_WARN(get_logger(), "Route contains a non-finite position or angle.");
+                return;
+            }
+        }
 
         // 点数が4点未満の場合、区間を3等分して中間の2点（1/3, 2/3地点）を挿入し、絶対に4点以上にする
         while (route_points.size() < 4) {
@@ -96,12 +117,23 @@ private:
 
         // 3DスプラインとSlerpを用いた経路生成
         auto smoothed_path = generate3DSpline(route_points);
+        for (const auto &point : smoothed_path) {
+            if (!finitePoint(point)) {
+                RCLCPP_WARN(get_logger(), "Route generation produced a non-finite pose.");
+                return;
+            }
+        }
         res->path = publishPath(smoothed_path);
 
-        // 次の生成に向けてウェイポイントをクリア
-        waypoints_.clear();
+        // Explicit requests neither consume nor clear manual waypoints.
+        if (!req->use_explicit_waypoints) waypoints_.clear();
         res->success = true;
         RCLCPP_INFO(this->get_logger(), "Route generation completed and published.");
+    }
+
+    static bool finitePoint(const Point3D &point) {
+        return std::isfinite(point.x) && std::isfinite(point.y) &&
+               std::isfinite(point.z) && std::isfinite(point.phi);
     }
 
     // 隣接する点の間を3等分して2点を作り出し、点数を増やす関数

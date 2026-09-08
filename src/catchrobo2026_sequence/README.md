@@ -8,7 +8,7 @@ UIの初期化・開始・終了操作と確定したPICK／PLACEを、YAMLに�
 
 起動時の既定ファイルは [config/sequences.yaml](config/sequences.yaml) です。運動学パッケージのCSVから転記した赤青共通の16 PICK座標と、赤青それぞれ8 PLACE座標を持ち、デバッグ用の初期手順を読み込んで実行できます。[config/sequences.example.yaml](config/sequences.example.yaml) は全位置未設定の雛形として残しています。
 
-各位置の絶対姿勢へ移動後、PICKは「相対移動→吸引→相対移動→オフ→PLACE用の幅に切替」、PLACEは「相対移動→開放→相対移動→オフ→PICK用の幅に切替」を実行します。各動作の退避・ポンプオフ直後に、次の動作用の幅指令を出します。初回はUIの「開始」でYAMLの開始シーケンスを実行し、PLACE用の幅を指令します。
+各位置の絶対姿勢へ移動後、PICKは「吸引→相対接近→相対退避→PLACE用の幅に切替」、PLACEは「開放→相対接近→相対退避→オフ→PICK用の幅に切替」を実行します。PLACEでは赤 `[150, 0, 400, π]`／青 `[1200, 0, 400, π]` を経由して各位置へ1経路で移動します。初回はUIの「開始」でYAMLの開始シーケンスを実行し、PLACE用の幅を指令します。
 幅指令はYAMLの `values.pick_endeffector_command: 0`／`place_endeffector_command: 1` に仮置きしています。0/1の広い／狭い対応は手動で確認し、必要なら両値を入れ替えてください。幅切替後の待ち時間は追加しておらず、ROSサービスの受理応答でそのPICK／PLACEを完了します。
 現在の相対Zはapproachが `-10 mm`、retreatが `+10 mm` で、直近の絶対姿勢を固定基準にそれぞれZ−10／Z＋10 mmへ移動します。実機の高さ・移動量・PLACEの操作順は実機確認済みの値ではありません。
 
@@ -37,7 +37,7 @@ UIは開始中を「開始シーケンス」と表示し、完了後に通常の
 
 同梱YAMLの `sequences.before_initialization.steps` と `sequences.after_initialization.steps` に、初期化命令の前後に実行する手順を書けます。UIの「初期化」で前手順→初期化命令→後手順の順に実行し、全体成功後に初期化済みになります。初期化命令の応答は実機の原点復帰完了ではないため、必要な待機は後手順へ `wait` で設定してください。前後の相対移動は、それぞれの手順内の絶対移動を基準にします。
 
-UIの「終了」では現在動作の取消完了後に `sequences.ending.steps` を実行します。cancel／reset・動作失敗・Ctrl+Cでは実行しません。終了手順を中断する場合は取消ボタンを操作します。同梱設定では前手順は `steps: []`、後手順と終了手順は共通の `poses.lifecycle_pose: [670, -110, 220, 0]` への絶対移動です（x/y/zはmm、phiはrad）。参照先はトップレベルの `before_initialization_sequence`／`after_initialization_sequence`／`end_sequence` で変更できます。省略または `null` なら追加動作なしです。
+UIの「終了」では現在動作の取消完了後に `sequences.ending.steps` を実行します。cancel／reset・動作失敗・Ctrl+Cでは実行しません。終了手順を中断する場合は取消ボタンを操作します。同梱設定では初期化の前後手順は `steps: []`、終了手順は `[675, 200, 300, 0]` を経由して `poses.lifecycle_pose: [670, -110, 220, 0]` へ向かう1経路です（x/y/zはmm、phiはrad）。最初の点を `waypoint: {absolute: ...}` で指定しており、その点での個別の到達待ちを省きます。参照先はトップレベルの `before_initialization_sequence`／`after_initialization_sequence`／`end_sequence` で変更できます。省略または `null` なら追加動作なしです。
 
 詳細と編集例は [CONFIG.md](CONFIG.md#初期化前後終了シーケンス) を参照してください。
 
@@ -55,11 +55,13 @@ UIの「終了」では現在動作の取消完了後に `sequences.ending.steps
 
 `execute_sequence`（`catchrobo2026_msgs/action/ExecuteSequence`）の要求には `control_epoch`・`step_id`・種類・UI位置・`collector_mask` を含めます。種類はINITIALIZE=5／START=4／END=6／PICK=1／PLACE=2です。INITIALIZE／START／ENDは位置を使用せず `collector_mask=7` で送信します。PICKはrow=0..3／column=1..4、PLACEはbox=0..3／box_column=0..1です。機構選択はUIのbit0/1/2（L/C/R）で、設定ファイルには記述しません。
 
-各 `move` は既存の `generate_route`（`GenerateRoute`）へ絶対目標の `x,y,z,phi` を渡し、成功応答の `path` を `follow_route`（`FollowRoute`）の `path` へ渡し、`start=true` で開始します。空の経路が返った場合は失敗とし、以前の経路を再利用しません。追従成功の結果を待ってから次の手順へ進みます。各移動を独立した経路として扱うため、シーケンサから `waypoint` の蓄積は行いません。設定と生成サービスの位置単位はmm、角度はradです。生成ノードが配信する `route`（ROS Path）の位置単位はmです。
+通常の `move` は `generate_route`（`GenerateRoute`）へ絶対目標の `x,y,z,phi` を渡し、成功応答の `path` を `follow_route`（`FollowRoute`）の `path` へ渡し、`start=true` で開始します。連続する `waypoint` は次の通常 `move` と一つの経路にまとめ、中間点での個別の到達待ちを省きます。`move` の `waypoints` オプションでも経由点列を指定でき、従来の `move.waypoint: true` も使用できます。経由点1件だけの共通手順を `call`／`extends` し、同じ実行シーケンス内の後続 `move` へ接続できます。空の経路が返った場合は失敗とし、以前の経路を再利用しません。最後の移動先への追従成功を待ってから後続手順へ進みます。指定方法と制約は [経由点の設定](CONFIG.md#経由点waypoint) を参照してください。
 
-初期化前後・開始・終了・PICK／PLACEのすべての移動で、生成した経路を追従アクションへ直接渡します。`route` トピックの受信順に依存せず、実行中の経路は固定されます。追従中の追加ゴールは拒否します。手動の `FollowRoute(start=true)` は `path` を省略した場合、受理時に受信済みの `route` を固定して使い、未受信なら拒否します。経路生成側の `waypoint` 蓄積は従来どおりなので、他クライアントの経由点を残した状態では実行しないでください。
+シーケンサは毎回 `use_explicit_waypoints=true` とし、要求内の `waypoints` に経由点を列挙します。通常移動では空配列です。YAMLと要求の最終目標はmm／rad、要求内の経由点はROS Poseのm／Quaternionへ変換します。生成結果の `route`／`path` もmです。要求内で経由点と終点をまとめるため、取消や失敗で共有の `waypoint` 蓄積へ経由点が残りません。
 
-`GenerateRoute`／`FollowRoute` の型に `nav_msgs/Path path` を追加しています。更新時はワークスペース全体を再ビルドし、関係するノードをすべて再起動してください。
+初期化前後・開始・終了・PICK／PLACEのすべての移動で、生成した経路を追従アクションへ直接渡します。`route` トピックの受信順に依存せず、実行中の経路は固定されます。追従中の追加ゴールは拒否します。手動の `FollowRoute(start=true)` は `path` を省略した場合、受理時に受信済みの `route` を固定して使い、未受信なら拒否します。手動の `GenerateRoute` は `use_explicit_waypoints=false`（既定）で従来の `waypoint` 蓄積を使います。明示要求はこの蓄積を参照・消費しません。
+
+`GenerateRoute`／`FollowRoute` の `nav_msgs/Path path` に加えて、`GenerateRoute` 要求に経由点指定を追加しています。更新時はワークスペース全体を再ビルドし、関係するノードをすべて再起動してください。
 
 ポンプ手順では、UIで選択された機構に設定の指令値、選択されていない機構にオフ（0）を指定して、`set_pump_state` に全3状態を渡します。例えばLとRを選んで吸引する場合は `(left, center, right)=(1,0,1)` です。初期化前後・開始・終了手順のポンプ操作は全3機構が対象です。ポンプの現在状態の読出しは行いません。
 
@@ -80,7 +82,7 @@ UIのcancel／end／resetで現在動作を取り消します。UIは旧動作�
 | パラメータ | 既定秒 | 対象 |
 |---|---:|---|
 | `service_timeout_sec` | 3 | サービス待ち・応答・追従ゴールの受理 |
-| `route_timeout_sec` | 30 | 各移動の追従 |
+| `route_timeout_sec` | 30 | 経由点を含む1経路全体の追従 |
 | `sequence_timeout_sec` | 120 | INITIALIZE／START／END／PICK／PLACE全体 |
 | `stop_timeout_sec` | 3 | 取消・失敗後の未確定処理 |
 

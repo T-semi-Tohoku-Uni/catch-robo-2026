@@ -14,8 +14,8 @@ import rclpy
 from rclpy.action import ActionClient
 from rclpy.executors import SingleThreadedExecutor
 from catchrobo2026_msgs.action import ExecuteSequence, FollowRoute
-from catchrobo2026_msgs.srv import GenerateRoute
-from geometry_msgs.msg import PoseStamped
+from catchrobo2026_msgs.srv import GenerateRoute, Waypoint
+from geometry_msgs.msg import Pose, PoseStamped
 from nav_msgs.msg import Path as RosPath
 from std_srvs.srv import Trigger
 import yaml
@@ -122,6 +122,14 @@ def xyz(pose):
 
 def assert_at(pose, expected):
     assert math.dist(xyz(pose), expected) <= 31.0, (xyz(pose), expected)
+
+
+def waypoint_pose(position, yaw=0.0):
+    pose = Pose()
+    pose.position.x, pose.position.y, pose.position.z = (value / 1000 for value in position)
+    pose.orientation.z = math.sin(yaw / 2)
+    pose.orientation.w = math.cos(yaw / 2)
+    return pose
 
 
 def test_lifecycle_route_handoff(rig, tmp_path):
@@ -237,3 +245,138 @@ def test_lifecycle_route_handoff(rig, tmp_path):
     # A subsequent move must be accepted after cancellation has terminated.
     rig.execute(ExecuteSequence.Goal.END)
     assert_at(rig.poses[-1], ending)
+
+
+def test_sequence_waypoints_share_one_route(rig, tmp_path):
+    start, waypoint, ending = (600, 200, 200), (675, 200, 300), (670, -110, 220)
+    config = yaml.load((Path(__file__).parents[1] / 'config/sequences.yaml').read_text(),
+                       Loader=yaml.BaseLoader)
+    moves = [{'move': {'absolute': [*position, 0]}} for position in (waypoint, ending)]
+    config['sequences']['ending'] = {'steps': moves}
+    config['end_sequence'] = 'ending'
+    config_file = tmp_path / 'sequences.yaml'
+    config_file.write_text(yaml.safe_dump(config))
+    rig.launch('nav_director', 'path_generator_3d')
+    rig.launch('nav_director', 'path_follower_node', remaps=('route:=follower_route',))
+    rig.launch('nav_director', 'dummy_robot_node')
+    rig.launch('catchrobo2026_hand_operated', 'joy_controller_node')
+    rig.launch('catchrobo2026_sequence', 'sequence_node', {
+        'team': 'red', 'debug': 'true', 'sequence_file': config_file,
+        'route_timeout_sec': 12.0})
+    assert rig.sequence.wait_for_server(timeout_sec=15)
+    assert rig.follow.wait_for_server(timeout_sec=15)
+    assert rig.generate.wait_for_service(timeout_sec=15)
+    rig.until(lambda: len(rig.poses) >= 10)
+    rig.observe()
+
+    route_count = len(rig.routes)
+    rig.execute(ExecuteSequence.Goal.END)
+    assert len(rig.routes) == route_count + 2
+    assert_at(rig.routes[-2].poses[-1], waypoint)
+    assert_at(rig.poses[-1], ending)
+
+    config['sequences']['ending_waypoint'] = {
+        'steps': [{'waypoint': {'absolute': [*waypoint, 0]}}]}
+    variants = [
+        [
+            {'move': {'absolute': [*waypoint, 0], 'waypoint': True}},
+            {'move': {'absolute': [*ending, 0]}},
+        ],
+        [{'call': 'ending_waypoint'}, {'move': {'absolute': [*ending, 0]}}],
+        [{'move': {'absolute': [*ending, 0], 'waypoints': [[*waypoint, 0]]}}],
+    ]
+    for steps in variants:
+        # Restore the same starting pose before exercising each syntax.
+        response = rig.resolve(rig.generate.call_async(GenerateRoute.Request(
+            x=float(start[0]), y=float(start[1]), z=float(start[2]), phi=0.0,
+            use_explicit_waypoints=True)))
+        assert response.success
+        handle = rig.resolve(rig.follow.send_goal_async(
+            FollowRoute.Goal(start=True, path=response.path)))
+        assert handle.accepted
+        assert rig.resolve(handle.get_result_async()).result.success
+        rig.observe()
+        assert_at(rig.poses[-1], start)
+
+        config['sequences']['ending'] = {'steps': steps}
+        config_file.write_text(yaml.safe_dump(config))
+        route_count, pose_count = len(rig.routes), len(rig.poses)
+        rig.execute(ExecuteSequence.Goal.END)
+        assert len(rig.routes) == route_count + 1
+        route = rig.routes[-1]
+        assert math.dist(xyz(route.poses[-1]), ending) < 0.01
+        assert min(math.dist(xyz(pose), waypoint) for pose in route.poses) < 3.0
+        # The ideal robot passes nearby without requiring a waypoint arrival result.
+        assert min(math.dist(xyz(pose), waypoint) for pose in rig.poses[pose_count:]) < 90.0
+        assert_at(rig.poses[-1], ending)
+
+
+def test_explicit_waypoints_preserve_manual_queue(rig):
+    rig.launch('nav_director', 'path_generator_3d')
+    rig.launch('nav_director', 'dummy_robot_node')
+    manual = rig.node.create_client(Waypoint, 'waypoint')
+    assert rig.generate.wait_for_service(timeout_sec=15)
+    assert manual.wait_for_service(timeout_sec=15)
+    rig.until(lambda: len(rig.poses) >= 10)
+    rig.observe()
+    manual_point = (1200, 600, 300)
+    queued = rig.resolve(manual.call_async(Waypoint.Request(
+        x=1200.0, y=600.0, z=300.0, phi=0.5)))
+    assert queued.success
+
+    def generate(request):
+        count = len(rig.routes)
+        response = rig.resolve(rig.generate.call_async(request))
+        assert response.success and response.path.poses
+        rig.until(lambda: len(rig.routes) > count)
+        assert len(rig.routes) == count + 1
+        return response.path
+
+    target = dict(x=600.0, y=-100.0, z=220.0, phi=0.0)
+    empty = generate(GenerateRoute.Request(**target, use_explicit_waypoints=True))
+    assert max(xyz(pose)[0] for pose in empty.poses) < 610.0
+    points = [((650, 200, 300), 0.3), ((650, 50, 260), -0.2)]
+    request = GenerateRoute.Request(**target, use_explicit_waypoints=True,
+        waypoints=[waypoint_pose(position, yaw) for position, yaw in points])
+    explicit = generate(request)
+    assert max(xyz(pose)[0] for pose in explicit.poses) < 800.0
+    indices = []
+    for position, yaw in points:
+        index = min(range(len(explicit.poses)),
+                    key=lambda i: math.dist(xyz(explicit.poses[i]), position))
+        indices.append(index)
+        assert math.dist(xyz(explicit.poses[index]), position) < 5.0
+        quaternion = explicit.poses[index].pose.orientation
+        actual_yaw = 2 * math.atan2(quaternion.z, quaternion.w)
+        assert abs(actual_yaw - yaw) < 0.03
+    assert indices[0] < indices[1]
+
+    # Rejected requests publish nothing and must not consume queued manual points.
+    invalid = []
+    bad = copy.deepcopy(request)
+    bad.x = float('nan')
+    invalid.append(bad)
+    bad = copy.deepcopy(request)
+    bad.phi = float('inf')
+    invalid.append(bad)
+    bad = copy.deepcopy(request)
+    bad.waypoints[0].position.z = float('nan')
+    invalid.append(bad)
+    bad = copy.deepcopy(request)
+    bad.waypoints[0].orientation.z = 0.0
+    bad.waypoints[0].orientation.w = 0.0
+    invalid.append(bad)
+    bad = copy.deepcopy(request)
+    bad.waypoints[0].orientation.x = float('nan')
+    invalid.append(bad)
+    count = len(rig.routes)
+    for bad in invalid:
+        response = rig.resolve(rig.generate.call_async(bad))
+        assert not response.success and not response.path.poses
+    rig.observe()
+    assert len(rig.routes) == count
+
+    legacy = generate(GenerateRoute.Request(**target))
+    assert min(math.dist(xyz(pose), manual_point) for pose in legacy.poses) < 3.0
+    consumed = generate(GenerateRoute.Request(**target))
+    assert max(xyz(pose)[0] for pose in consumed.poses) < 610.0

@@ -19,6 +19,16 @@ namespace
 constexpr std::size_t kMaxExpandedSteps = 10000;
 constexpr std::size_t kMaxReferenceDepth = 64;
 
+template<typename StepT>
+std::size_t expanded_size(const std::vector<StepT> & steps)
+{
+  std::size_t count = steps.size();
+  for (const auto & step : steps) {
+    count += step.waypoints.size();
+  }
+  return count;
+}
+
 [[noreturn]] void fail(const std::string & where, const std::string & message)
 {
   throw ConfigError(where + ": " + message);
@@ -240,6 +250,29 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
       resolve_pose(entry.first.Scalar());
     }
 
+    auto target_value = [&](const YAML::Node & node, const std::string & where) {
+        if (static_cast<bool>(node["absolute"]) == static_cast<bool>(node["relative"])) {
+          fail(where, "specify exactly one of absolute or relative");
+        }
+        RawPose target;
+        target.relative = static_cast<bool>(node["relative"]);
+        const YAML::Node value = target.relative ? node["relative"] : node["absolute"];
+        target.pose = !target.relative && value.IsScalar() ?
+          resolve_pose(scalar(value, where + ".absolute")) : pose_value(value, where, numeric);
+        return target;
+      };
+
+    auto waypoint_value = [&](const YAML::Node & node, const std::string & where) {
+        if (node.IsMap()) {
+          keys(node, where, {"absolute", "relative"});
+          return target_value(node, where);
+        }
+        RawPose target;
+        target.pose = node.IsScalar() ? resolve_pose(scalar(node, where)) :
+          pose_value(node, where, numeric);
+        return target;
+      };
+
     SequenceConfig config;
     std::set<std::string> visiting_sequences;
     std::function<const std::vector<RawStep> &(const std::string &)> resolve_sequence;
@@ -260,12 +293,15 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
           fail(where, "sequence reference depth exceeds 64");
         }
         std::vector<RawStep> result;
+        std::size_t expanded_count = 0;
         auto append = [&](const std::string & reference) {
             const auto & included = resolve_sequence(reference);
-            if (result.size() + included.size() > kMaxExpandedSteps) {
-              fail(where, "expanded sequence exceeds 10000 steps");
+            const auto count = expanded_size(included);
+            if (expanded_count + count > kMaxExpandedSteps) {
+              fail(where, "expanded sequence exceeds 10000 steps including waypoints");
             }
             result.insert(result.end(), included.begin(), included.end());
+            expanded_count += count;
           };
         if (node.IsScalar()) {
           append(scalar(node, where));
@@ -292,7 +328,7 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
             for (std::size_t i = 0; i < steps.size(); ++i) {
               const YAML::Node step = steps[i];
               const std::string at = where + ".steps[" + std::to_string(i) + "]";
-              keys(step, at, {"move", "call", "pump", "endeffector", "wait"});
+              keys(step, at, {"move", "waypoint", "call", "pump", "endeffector", "wait"});
               if (step.size() != 1) {
                 fail(at, "a step must contain exactly one operation");
               }
@@ -301,18 +337,39 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
                 continue;
               }
               RawStep raw;
-              if (step["move"]) {
-                const YAML::Node move = step["move"];
-                keys(move, at + ".move", {"absolute", "relative"});
-                if (move.size() != 1) {
-                  fail(at + ".move", "specify exactly one of absolute or relative");
-                }
+              if (step["move"] || step["waypoint"]) {
+                const bool standalone = static_cast<bool>(step["waypoint"]);
+                const auto key = standalone ? "waypoint" : "move";
+                const auto move_at = at + "." + key;
+                const YAML::Node move = step[key];
+                keys(move, move_at, standalone ? std::set<std::string>{"absolute", "relative"} :
+                  std::set<std::string>{"absolute", "relative", "waypoint", "waypoints"});
+                const auto target = target_value(move, move_at);
                 raw.step.type = StepType::MOVE;
-                raw.relative = static_cast<bool>(move["relative"]);
-                const YAML::Node value = raw.relative ? move["relative"] : move["absolute"];
-                raw.step.pose = !raw.relative && value.IsScalar() ?
-                  resolve_pose(scalar(value, at + ".move.absolute")) :
-                  pose_value(value, at + ".move", numeric);
+                raw.step.waypoint = standalone;
+                if (move["waypoint"]) {
+                  const auto waypoint = scalar(move["waypoint"], move_at + ".waypoint");
+                  if (waypoint != "true" && waypoint != "false") {
+                    fail(move_at + ".waypoint", "expected true or false");
+                  }
+                  raw.step.waypoint = waypoint == "true";
+                }
+                raw.relative = target.relative;
+                raw.step.pose = target.pose;
+                if (move["waypoints"]) {
+                  const auto points = move["waypoints"];
+                  if (!points.IsSequence()) {
+                    fail(move_at + ".waypoints", "expected a list");
+                  }
+                  if (points.size() >= kMaxExpandedSteps) {
+                    fail(move_at + ".waypoints",
+                      "expanded sequence exceeds 10000 steps including waypoints");
+                  }
+                  for (std::size_t j = 0; j < points.size(); ++j) {
+                    raw.waypoints.push_back(waypoint_value(
+                      points[j], move_at + ".waypoints[" + std::to_string(j) + "]"));
+                  }
+                }
               } else if (step["pump"]) {
                 const auto value = scalar(step["pump"], at + ".pump");
                 raw.step.type = StepType::PUMP;
@@ -339,8 +396,9 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
                   fail(at + ".wait", "wait must be within 0..86400 seconds");
                 }
               }
-              if (result.size() == kMaxExpandedSteps) {
-                fail(where, "expanded sequence exceeds 10000 steps");
+              expanded_count += 1 + raw.waypoints.size();
+              if (expanded_count > kMaxExpandedSteps) {
+                fail(where, "expanded sequence exceeds 10000 steps including waypoints");
               }
               result.push_back(raw);
             }
@@ -446,8 +504,8 @@ std::vector<Step> SequenceConfig::compile_initialization() const
   // Homing changes the pose; each hook needs its own absolute anchor.
   const auto after = after_initialization_sequence_.empty() ? std::vector<Step>{} :
     compile_sequence(after_initialization_sequence_, "after_initialization_sequence");
-  if (before.size() + 1 + after.size() > kMaxExpandedSteps) {
-    fail("initialization_sequence", "expanded sequence exceeds 10000 steps");
+  if (expanded_size(before) + 1 + expanded_size(after) > kMaxExpandedSteps) {
+    fail("initialization_sequence", "expanded sequence exceeds 10000 steps including waypoints");
   }
   Step initialization;
   initialization.type = StepType::INITIALIZE;
@@ -475,6 +533,22 @@ std::vector<Step> SequenceConfig::compile_sequence(
   for (const auto & raw : source) {
     Step step = raw.step;
     if (step.type == StepType::MOVE) {
+      // Inline points use the preceding anchor without changing the MOVE target's basis.
+      for (const auto & point : raw.waypoints) {
+        Pose resolved = point.pose;
+        if (point.relative) {
+          if (!has_anchor) {
+            fail(where, "relative waypoint needs a preceding absolute movement");
+          }
+          for (std::size_t i = 0; i < resolved.size(); ++i) {
+            resolved[i] += anchor[i];
+            if (!std::isfinite(resolved[i])) {
+              fail(where, "relative waypoint overflows a finite coordinate");
+            }
+          }
+        }
+        step.waypoints.push_back(resolved);
+      }
       if (raw.relative) {
         if (!has_anchor) {
           fail(where, "relative movement needs a preceding absolute movement");
@@ -491,6 +565,14 @@ std::vector<Step> SequenceConfig::compile_sequence(
       }
     }
     result.push_back(step);
+  }
+  for (std::size_t i = 0; i < result.size(); ++i) {
+    if (result[i].waypoint &&
+      (i + 1 == result.size() || result[i + 1].type != StepType::MOVE))
+    {
+      fail(where + ".steps[" + std::to_string(i) + "]",
+        "waypoint movement must be followed immediately by another movement");
+    }
   }
   return result;
 }

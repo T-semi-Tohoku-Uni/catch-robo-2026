@@ -13,6 +13,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "std_srvs/srv/trigger.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
+#include "geometry_msgs/msg/pose.hpp"
 #include "catchrobo2026_msgs/action/execute_sequence.hpp"
 #include "catchrobo2026_msgs/action/follow_route.hpp"
 #include "catchrobo2026_msgs/srv/endeffector_control.hpp"
@@ -370,13 +371,41 @@ private:
         switch (step.type) {
         case StepType::MOVE:
             generate_request_ = std::make_shared<GenerateRoute::Request>();
-            // Reach each waypoint before advancing to the next sequence step.
+            generate_request_->use_explicit_waypoints = true;
+            route_end_index_ = index_;
             {
-                const auto &target = step.pose;
+                auto append_waypoint = [this](const catchrobo2026_sequence::Pose &point) {
+                    geometry_msgs::msg::Pose waypoint;
+                    waypoint.position.x = point[0] / 1000.0;
+                    waypoint.position.y = point[1] / 1000.0;
+                    waypoint.position.z = point[2] / 1000.0;
+                    waypoint.orientation.z = std::sin(point[3] / 2.0);
+                    waypoint.orientation.w = std::cos(point[3] / 2.0);
+                    generate_request_->waypoints.push_back(waypoint);
+                };
+                // Configuration validation guarantees a final, non-waypoint MOVE.
+                while (true) {
+                    const auto &move = steps_[route_end_index_];
+                    for (const auto &point : move.waypoints) {
+                        append_waypoint(point);
+                    }
+                    if (!move.waypoint) {
+                        break;
+                    }
+                    append_waypoint(move.pose);
+                    ++route_end_index_;
+                }
+            }
+            {
+                const auto &target = steps_[route_end_index_].pose;
                 generate_request_->x = target[0];
                 generate_request_->y = target[1];
                 generate_request_->z = target[2];
                 generate_request_->phi = target[3];
+                RCLCPP_INFO(get_logger(),
+                    "MOVE steps %zu..%zu: %zu waypoints -> [%.2f, %.2f, %.2f, %.3f]",
+                    index_, route_end_index_, generate_request_->waypoints.size(),
+                    target[0], target[1], target[2], target[3]);
             }
             transition(Phase::WAIT_PLAN, "waiting for planner", service_timeout_);
             break;
@@ -450,7 +479,7 @@ private:
                 return;
             }
             try {
-                ++index_;
+                index_ = route_end_index_ + 1;
                 transition(Phase::READY, "ready", service_timeout_);
             } catch (const std::exception &error) {
                 begin_stop(std::string("route result: ") + error.what());
@@ -468,6 +497,7 @@ private:
     std::unique_ptr<SequenceConfig> config_;
     std::vector<Step> steps_;
     size_t index_{0};
+    size_t route_end_index_{0};
     nav_msgs::msg::Path planned_path_;
     GenerateRoute::Request::SharedPtr generate_request_;
     PumpControl::Request::SharedPtr pump_request_;

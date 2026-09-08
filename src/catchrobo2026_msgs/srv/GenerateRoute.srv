@@ -2,6 +2,10 @@ float64 x
 float64 y
 float64 z
 float64 phi
+# Use only this request's waypoints; leave the legacy waypoint queue untouched.
+bool use_explicit_waypoints
+# Intermediate poses in map coordinates (m and quaternion), before the mm/rad goal above.
+geometry_msgs/Pose[] waypoints
 ---
 bool success
 # Generated route for the corresponding follow request.

@@ -36,6 +36,8 @@ void expect_same_steps(const std::vector<Step> & actual, const std::vector<Step>
   for (std::size_t index = 0; index < actual.size(); ++index) {
     SCOPED_TRACE(index);
     EXPECT_EQ(actual[index].type, expected[index].type);
+    EXPECT_EQ(actual[index].waypoint, expected[index].waypoint);
+    EXPECT_EQ(actual[index].waypoints, expected[index].waypoints);
     for (std::size_t axis = 0; axis < actual[index].pose.size(); ++axis) {
       EXPECT_DOUBLE_EQ(actual[index].pose[axis], expected[index].pose[axis]);
     }
@@ -61,16 +63,20 @@ void for_each_binding(Callback callback)
   }
 }
 
-TEST(BuiltinSequences, InitializationOnlySendsCommandAndEndUsesTheLifecyclePose)
+TEST(BuiltinSequences, InitializationOnlySendsCommandAndEndPassesWaypointToLifecyclePose)
 {
   const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   const auto steps = config.compile_initialization();
   ASSERT_EQ(steps.size(), 1u);
   EXPECT_EQ(steps[0].type, StepType::INITIALIZE);
   const auto ending = config.compile_end();
-  ASSERT_EQ(ending.size(), 1u);
+  ASSERT_EQ(ending.size(), 2u);
   EXPECT_EQ(ending[0].type, StepType::MOVE);
-  EXPECT_EQ(ending[0].pose, (Pose{670, -110, 220, 0}));
+  EXPECT_EQ(ending[0].pose, (Pose{675, 200, 300, 0}));
+  EXPECT_TRUE(ending[0].waypoint);
+  EXPECT_EQ(ending[1].type, StepType::MOVE);
+  EXPECT_EQ(ending[1].pose, (Pose{670, -110, 220, 0}));
+  EXPECT_FALSE(ending[1].waypoint);
 }
 
 TEST(BuiltinSequences, EveryUiPositionIsConfigured)
@@ -146,13 +152,19 @@ TEST(BuiltinSequences, PlacementBindingsSelectDifferentTeamApproaches)
         yaml["bindings"]["blue"]["place"][binding].as<std::string>());
       const auto red = config.compile("red", "place", box, column);
       const auto blue = config.compile("blue", "place", box, column);
-      ASSERT_FALSE(red.empty());
-      ASSERT_FALSE(blue.empty());
+      ASSERT_GE(red.size(), 2u);
+      ASSERT_GE(blue.size(), 2u);
       EXPECT_EQ(red.front().type, StepType::MOVE);
       EXPECT_EQ(blue.front().type, StepType::MOVE);
       EXPECT_EQ(red.front().pose, (Pose{150, 0, 400, 3.14159265358979}));
       EXPECT_EQ(blue.front().pose, (Pose{1200, 0, 400, 3.14159265358979}));
       EXPECT_NE(red.front().pose, blue.front().pose);
+      EXPECT_TRUE(red.front().waypoint);
+      EXPECT_TRUE(blue.front().waypoint);
+      EXPECT_EQ(red[1].type, StepType::MOVE);
+      EXPECT_EQ(blue[1].type, StepType::MOVE);
+      EXPECT_FALSE(red[1].waypoint);
+      EXPECT_FALSE(blue[1].waypoint);
     }
   }
 }
@@ -166,7 +178,9 @@ TEST(BuiltinSequences, AllBindingsUseTheConfiguredPumpAndWaypointOrder)
       ASSERT_EQ(steps.size(), kind == "pick" ? 5u : 7u);
       const auto anchor_index = kind == "pick" ? 0u : 1u;
       EXPECT_EQ(steps[0].type, StepType::MOVE);
+      EXPECT_EQ(steps[0].waypoint, kind == "place");
       EXPECT_EQ(steps[anchor_index].type, StepType::MOVE);
+      EXPECT_FALSE(steps[anchor_index].waypoint);
       EXPECT_EQ(steps[anchor_index + 1].type, StepType::PUMP);
       EXPECT_EQ(steps[anchor_index + 1].command, kind == "pick" ? 1 : -1);
       EXPECT_EQ(steps[anchor_index + 2].type, StepType::MOVE);

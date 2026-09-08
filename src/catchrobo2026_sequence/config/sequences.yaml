@@ -20,12 +20,22 @@
 # Step syntax examples (choose positions and wait times for your hardware):
 #   - move: {absolute: lifecycle_pose}
 #   - move: {absolute: [670, -110, 220, 0]}
+#   - waypoint: {absolute: [675, 200, 300, 0]}
+#   - move: {absolute: lifecycle_pose, waypoints: [[675, 200, 300, 0]]}
 #   - move: {relative: [0, 0, '$pick_approach_dz', 0]}
 #   - pump: suction                 # suction / off / release
 #   - endeffector: '$place_endeffector_command'  # 0 or 1; width, not angle
 #   - wait: 0.5                     # seconds
 #   - call: pick_common             # inline another sequence here
 # Relative moves use the last absolute target as a FIXED anchor, not the last move.
+# waypoint joins the next MOVE into one route, without an arrival wait here.
+# A waypoint-only common sequence can precede a MOVE through call or extends.
+# Consecutive waypoints must end in a normal MOVE before any other operation.
+# Waypoints never carry over to a separate UI action or initialization hook.
+# move.waypoints accepts pose names, [x,y,z,phi], {absolute: ...}, {relative: ...}.
+# Inline waypoints run before the move target and do not change its fixed anchor.
+# Inline relative entries use the absolute anchor BEFORE this move.
+# Legacy move: {absolute: ..., waypoint: true} remains supported.
 # Each lifecycle hook needs its own absolute anchor before any relative move.
 # PICK/PLACE pumps use the UI-selected collectors; other collectors receive off.
 # Lifecycle pump steps address all three collectors.
@@ -125,7 +135,7 @@ sequences:
     # - move: {absolute: lifecycle_pose}
   ending:
     steps:
-      - move: {absolute: [675, 200, 300, 0]}
+      - waypoint: {absolute: [675, 200, 300, 0]}
       - move: {absolute: lifecycle_pose}
   startup:
     steps:
@@ -145,10 +155,10 @@ sequences:
       - endeffector: '$pick_endeffector_command'
   place_pre_red_waypoint:
     steps:
-      - move: {absolute: [150, 0, 400, 3.14159265358979]}
+      - waypoint: {absolute: [150, 0, 400, 3.14159265358979]}
   place_pre_blue_waypoint:
     steps:
-      - move: {absolute: [1200, 0, 400, 3.14159265358979]}
+      - waypoint: {absolute: [1200, 0, 400, 3.14159265358979]}
 
   pick_0_1:
     steps:
