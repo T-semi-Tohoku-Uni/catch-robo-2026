@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -211,6 +212,10 @@ private:
         // 2. ローカルで逆運動学(IK)を計算
         float target_joints[4] = {0.0f};
         kin_.inverse_kinematics(current_pose_, target_joints);
+
+        // 第4関節の目標角度を [-2π, 0] [rad] に制限する。
+        target_joints[3] = std::max(-2.0f * static_cast<float>(M_PI),
+                                    std::min(target_joints[3], 0.0f));
 
         // 3. 計算結果をパブリッシュ
         std_msgs::msg::Float32MultiArray msg_out;
