@@ -1,3 +1,53 @@
+# Sequence configuration guide (full reference: ../CONFIG.md).
+# Use spaces for indentation. Each step contains exactly one operation.
+#
+# Sections:
+#   values:    Shared numbers, referenced as '$name' (no expressions).
+#   poses:     Named [x, y, z, phi] targets; position in mm, angle in rad.
+#   sequences: Named step lists, executed from top to bottom.
+#   bindings:  Team-specific UI locations mapped to sequence names.
+#              pick: 'row,column'; place: 'box,box_column'; indices start at 0.
+#              PICK centers use columns 1..4. A null binding disables a location.
+#
+# UI lifecycle hooks (values are names under sequences):
+#   before_initialization_sequence -> before the initialization command.
+#   after_initialization_sequence  -> after the command is accepted.
+#   start_sequence                 -> UI Start, before PICK/PLACE processing.
+#   end_sequence                   -> UI End, after the active action is canceled.
+# Initialization acceptance is not hardware homing completion; add wait if needed.
+# End does not run on queue exhaustion, cancel, reset, failure, or Ctrl+C.
+#
+# Step syntax examples (choose positions and wait times for your hardware):
+#   - move: {absolute: lifecycle_pose}
+#   - move: {absolute: [670, -110, 220, 0]}
+#   - move: {relative: [0, 0, '$pick_approach_dz', 0]}
+#   - pump: suction                 # suction / off / release
+#   - endeffector: '$place_endeffector_command'  # 0 or 1; width, not angle
+#   - wait: 0.5                     # seconds
+#   - call: pick_common             # inline another sequence here
+# Relative moves use the last absolute target as a FIXED anchor, not the last move.
+# Each lifecycle hook needs its own absolute anchor before any relative move.
+# PICK/PLACE pumps use the UI-selected collectors; other collectors receive off.
+# Lifecycle pump steps address all three collectors.
+#
+# Reuse:
+#   poses: {alias: lifecycle_pose, raised: {extends: lifecycle_pose, z: 250}}
+#   sequences: {alias: ending, combined: {extends: ending, steps: [{wait: 0.5}]}}
+# Sequence extends runs parent steps first, then appends its own steps.
+#
+# Disable all steps with an EMPTY LIST, not a bare "steps:" (which is null):
+#   after_initialization:
+#     steps: []
+#     # - move: {absolute: lifecycle_pose}
+# When restoring the move, change "steps: []" back to "steps:" and uncomment it.
+# A lifecycle hook reference may be omitted or null, but every sequence definition
+# is still validated. Do not leave null steps or references to deleted definitions.
+# PICK/PLACE bindings must expand to at least one step; use a null binding to disable.
+#
+# Reload: debug:=true reloads this file before each action, never during an action.
+# Otherwise restart the node after edits. Set sequence_file to the file being edited;
+# if using the installed copy, rebuild to copy source edits into install/.
+#
 # Coordinates transcribed from CatchRobo2026_kinematics/config/flange_targets.
 # PICK: pick_pose_red.csv; pick_pose_blue.csv has identical coordinates by ID.
 # PLACE: shooting_pose_red.csv and shooting_pose_blue.csv, central column.
@@ -68,11 +118,11 @@ poses:
 sequences:
   # Initialization and ending share the same target pose.
   before_initialization:
-    steps:
-#      - move: {absolute: lifecycle_pose}
+    steps: []
+    # - move: {absolute: lifecycle_pose}
   after_initialization:
-    steps:
-#      - move: {absolute: lifecycle_pose}
+    steps: []
+    # - move: {absolute: lifecycle_pose}
   ending:
     steps:
       - move: {absolute: lifecycle_pose}
