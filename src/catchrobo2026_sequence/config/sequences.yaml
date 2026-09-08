@@ -144,10 +144,10 @@ sequences:
       - endeffector: '$pick_endeffector_command'
   place_pre_red_waypoint:
     steps:
-      - move: [150, 0, 400, 3.14159265358979]
+      - move: {absolute: [150, 0, 400, 3.14159265358979]}
   place_pre_blue_waypoint:
     steps:
-      - move: [1200, 0, 400, 3.14159265358979]
+      - move: {absolute: [1200, 0, 400, 3.14159265358979]}
 
   pick_0_1:
     steps:
@@ -255,7 +255,7 @@ sequences:
       - call: place_common
   place_blue_0_0:
     steps:
-      - call: place_pre_red_waypoint
+      - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_0_0_above}
       - call: place_common
   place_blue_0_1:
