@@ -259,16 +259,21 @@ private:
             target_posrot[2] = target_pose.position.z * 1000.0;
             tf2::Quaternion q;
             tf2::fromMsg(target_pose.orientation, q);
-            double roll, pitch, target_yaw;
-            tf2::Matrix3x3(q).getRPY(roll, pitch, target_yaw);
+            // roll = 0 の姿勢規約では、手先の Y 軸は pitch によらず
+            // (-sin(yaw), cos(yaw), 0)。pitch = -PI/2 で RPY が一意に
+            // 定まらない場合も、この軸から同じ物理的な向きを取り出せる。
+            const tf2::Matrix3x3 target_rotation(q);
+            const double target_yaw = std::atan2(
+                -target_rotation[0][1], target_rotation[1][1]);
             target_posrot[3] = static_cast<float>(target_yaw);
             target_posrot[4] = -M_PI / 2.0F;
             target_posrot[5] = 0.0F;
 
-            const double yaw_error = std::abs(std::atan2(
+            // 2PI の整数倍だけ異なる角度を同一視した最短の符号付き角度差。
+            const double err_yaw = std::atan2(
                 std::sin(target_yaw - current_posrot[3]),
-                std::cos(target_yaw - current_posrot[3])));
-            if (targeting_final && goal_distance <= 30.0 && yaw_error <= 0.05) {
+                std::cos(target_yaw - current_posrot[3]));
+            if (targeting_final && goal_distance <= 20.0 && std::abs(err_yaw) <= 0.05) {
                 result->success = true;
                 busy_ = false;
                 goal_handle->succeed(result);
@@ -284,10 +289,6 @@ private:
             double err_z = target_posrot[2] - current_posrot[2];
             double err_dist = std::sqrt(err_x * err_x + err_y * err_y + err_z * err_z);
             
-            // Yaw角の誤差 (-PI ~ PI の範囲で計算)
-            double err_yaw = std::atan2(std::sin(target_posrot[3] - current_posrot[3]), 
-                                        std::cos(target_posrot[3] - current_posrot[3]));
-
             // 1秒(1000ms)に1回だけ出力 (スパム防止)
             RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                 "Error -> Dist: %6.2f [mm] (X:%6.2f, Y:%6.2f, Z:%6.2f) | Yaw: %6.4f [rad]",

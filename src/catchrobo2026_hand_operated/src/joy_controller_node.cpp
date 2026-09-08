@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -211,6 +212,16 @@ private:
         // 2. ローカルで逆運動学(IK)を計算
         float target_joints[4] = {0.0f};
         kin_.inverse_kinematics(current_pose_, target_joints);
+
+        // 同じ向きを保ったまま第4関節を [-2π, 0] [rad] に収める。
+        // 例: +π は 0 に切り詰めず -π とする。範囲内の値は端点も保持する。
+        const float full_turn = 2.0f * static_cast<float>(M_PI);
+        if (target_joints[3] > 0.0f || target_joints[3] < -full_turn) {
+            target_joints[3] = std::fmod(target_joints[3], full_turn);
+            if (target_joints[3] > 0.0f) {
+                target_joints[3] -= full_turn;
+            }
+        }
 
         // 3. 計算結果をパブリッシュ
         std_msgs::msg::Float32MultiArray msg_out;
