@@ -154,8 +154,10 @@ sequences:
     # - move: {absolute: lifecycle_pose}
   ending:
     steps:
+      - rotation_group: start
       - move: {absolute: [675, 200, 300, 0]}
       - move: {absolute: lifecycle_pose}
+      - rotation_group: end
   startup:
     steps:
       - endeffector: '$place_endeffector_command'
