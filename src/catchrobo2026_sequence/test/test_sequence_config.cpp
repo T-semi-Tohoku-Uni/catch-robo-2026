@@ -60,6 +60,36 @@ public:
   std::string path;
 };
 
+TEST(SequenceConfig, OptionalRouteTimeoutResolvesValuesAndValidBounds)
+{
+  const auto yaml = document("{}", "{}");
+  EXPECT_FALSE(SequenceConfig::from_yaml(yaml).route_timeout_sec().has_value());
+  const auto config = SequenceConfig::from_yaml(yaml +
+      "route_timeout_sec: '$route_limit'\nvalues: {route_limit: '$limit', limit: 60}\n");
+  ASSERT_TRUE(config.route_timeout_sec().has_value());
+  EXPECT_DOUBLE_EQ(config.route_timeout_sec().value(), 60.0);
+  for (const double value : {0.01, 86400.0}) {
+    EXPECT_DOUBLE_EQ(SequenceConfig::from_yaml(yaml +
+        "route_timeout_sec: " + std::to_string(value) + "\n").route_timeout_sec().value(), value);
+  }
+}
+
+TEST(SequenceConfig, RejectsInvalidRouteTimeoutBeforeExecution)
+{
+  const auto yaml = document("{}", "{}");
+  for (const std::string value : {
+      "0", "-1", "86400.1", ".nan", ".inf", "null", "true", "[]", "{}", "'$missing'"})
+  {
+    SCOPED_TRACE(value);
+    EXPECT_THROW(SequenceConfig::from_yaml(yaml + "route_timeout_sec: " + value + "\n"),
+      ConfigError);
+  }
+  EXPECT_THROW(SequenceConfig::from_yaml(yaml +
+      "route_timeout_sec: 30\nroute_timeout_sec: 60\n"), ConfigError);
+  EXPECT_THROW(SequenceConfig::from_yaml(yaml +
+      "route_timeout_sec: '$limit'\nvalues: {limit: 0}\n"), ConfigError);
+}
+
 TEST(SequenceConfig, ResolvesAliasesInheritanceAndFixedRelativeAnchor)
 {
   const auto config = SequenceConfig::from_yaml(document(R"(

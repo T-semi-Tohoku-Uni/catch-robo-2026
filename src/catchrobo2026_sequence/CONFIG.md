@@ -48,7 +48,19 @@ bindings:
   blue: {pick: {}, place: {}}
 ```
 
-`version`、`poses`、`sequences`、`bindings` は必須。`values` と `before_initialization_sequence`／`after_initialization_sequence`／`start_sequence`／`end_sequence` は省略可能。`bindings` には赤青両方と各 `pick`／`place` のマップを用意する。マップは空でもよい。未知キー・重複キー・複数YAMLドキュメントは拒否する。
+`version`、`poses`、`sequences`、`bindings` は必須。`values`、`route_timeout_sec` と `before_initialization_sequence`／`after_initialization_sequence`／`start_sequence`／`end_sequence` は省略可能。`bindings` には赤青両方と各 `pick`／`place` のマップを用意する。マップは空でもよい。未知キー・重複キー・複数YAMLドキュメントは拒否する。
+
+## 経路追従のタイムアウト
+
+トップレベルの `route_timeout_sec` で、`following route timeout` までの秒数を設定する。同梱設定は `30.0`。例えば60秒にする場合は次のように編集する。
+
+```yaml
+route_timeout_sec: 60.0
+```
+
+経由点を含む1経路全体に適用する。値は0秒超〜86,400秒の有限数で、`'$名前'` による `values` 参照も使用できる。指定時は同名のROSパラメータより優先し、省略時はROSパラメータ（既定30秒）を使う。
+
+`debug:=true` は次のINITIALIZE／START／END／PICK／PLACE開始時に再読込し、実行中の動作では開始時の値を使い続ける。通常モードでは編集後にノードを再起動する。インストール済みYAMLを読む構成ではソースの編集後に再ビルドが必要。シーケンス全体の上限は別のROSパラメータ `sequence_timeout_sec`（既定120秒）のままで、経路のタイムアウトを延ばしても自動では変更しない。
 
 ## 開始シーケンス
 

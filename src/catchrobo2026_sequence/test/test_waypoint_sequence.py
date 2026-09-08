@@ -131,22 +131,26 @@ class Harness:
                 entry['gate'].set_result(False)
         return CancelResponse.ACCEPT
 
-    def launch(self, steps, recovery_steps=None, *, sequences=None, poses=None):
+    def launch(self, steps, recovery_steps=None, *, sequences=None, poses=None,
+               config_options=None, debug=False, route_timeout_sec=15.0):
         config = yaml.safe_load(
             (Path(__file__).parents[1] / 'config/sequences.example.yaml').read_text())
         config['sequences'] = {**(sequences or {}), 'tested': {'steps': steps}}
         config['poses'] = poses or {}
         config['end_sequence'] = 'tested'
+        config.update(config_options or {})
         if recovery_steps is not None:
             config['sequences']['recovery'] = {'steps': recovery_steps}
             config['start_sequence'] = 'recovery'
         filename = self.directory / 'sequences.yaml'
+        self.config_file = filename
         filename.write_text(yaml.safe_dump(config))
         prefix = Path(get_package_prefix('catchrobo2026_sequence'))
         args = [str(prefix / 'lib/catchrobo2026_sequence/sequence_node'), '--ros-args',
                 '-r', f'__ns:={self.node.get_namespace()}',
                 '-p', 'team:=red', '-p', f'sequence_file:={filename}',
-                '-p', 'service_timeout_sec:=5.0', '-p', 'route_timeout_sec:=15.0',
+                '-p', f'debug:={str(debug).lower()}',
+                '-p', 'service_timeout_sec:=5.0', '-p', f'route_timeout_sec:={route_timeout_sec}',
                 '-p', 'sequence_timeout_sec:=30.0', '-p', 'stop_timeout_sec:=2.0']
         self.children.append(subprocess.Popen(
             args, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True))
@@ -380,3 +384,51 @@ def test_failed_generation_never_starts_follow_or_later_commands(rig, plan_mode)
     rig.observe()
     assert len(rig.plans) == 1
     assert not rig.follows and not rig.pumps and not rig.endeffectors
+
+
+@pytest.mark.parametrize('debug', [False, True])
+def test_config_route_timeout_is_fixed_during_action_and_reloads_between_actions(rig, debug):
+    rig.launch([
+        move([600, 200, 300, 0.0]), move([670, -110, 220, 0.0]), {'pump': 'suction'},
+    ], config_options={'route_timeout_sec': 1.5}, debug=debug, route_timeout_sec=0.15)
+    _, result = rig.start()
+    rig.until(lambda: len(rig.follows) == 1)
+    rig.observe(0.4)
+    assert not result.done() and rig.cancel_count == 0
+
+    config = yaml.safe_load(rig.config_file.read_text())
+    config['route_timeout_sec'] = 0.1
+    rig.config_file.write_text(yaml.safe_dump(config))
+    rig.complete_follow(0)
+    rig.until(lambda: len(rig.follows) == 2)
+    rig.observe(0.4)
+    assert not result.done() and rig.cancel_count == 0
+    rig.complete_follow(1)
+    rig.assert_succeeded(result)
+    assert len(rig.pumps) == 1
+
+    _, next_result = rig.start()
+    rig.until(lambda: len(rig.follows) == 3)
+    if debug:
+        outcome = rig.resolve(next_result)
+        assert outcome.status == GoalStatus.STATUS_ABORTED
+        assert 'following route timeout' in outcome.result.message
+        assert rig.cancel_count == 1 and len(rig.plans) == 3
+        assert len(rig.pumps) == 1
+    else:
+        rig.observe(0.4)
+        assert not next_result.done() and rig.cancel_count == 0
+        rig.complete_follow(2)
+        rig.until(lambda: len(rig.follows) == 4)
+        rig.complete_follow(3)
+        rig.assert_succeeded(next_result)
+
+
+def test_missing_config_route_timeout_uses_ros_parameter(rig):
+    rig.launch([move([670, -110, 220, 0.0]), {'pump': 'suction'}], route_timeout_sec=0.15)
+    _, result = rig.start()
+    outcome = rig.resolve(result)
+    assert outcome.status == GoalStatus.STATUS_ABORTED
+    assert 'following route timeout' in outcome.result.message
+    assert rig.cancel_count == 1 and len(rig.follows) == 1
+    assert not rig.pumps

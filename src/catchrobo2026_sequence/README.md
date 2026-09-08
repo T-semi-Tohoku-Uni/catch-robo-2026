@@ -82,10 +82,12 @@ UIのcancel／end／resetで現在動作を取り消します。UIは旧動作�
 | パラメータ | 既定秒 | 対象 |
 |---|---:|---|
 | `service_timeout_sec` | 3 | サービス待ち・応答・追従ゴールの受理 |
-| `route_timeout_sec` | 30 | 経由点を含む1経路全体の追従 |
+| `route_timeout_sec` | 30 | 経由点を含む1経路全体の追従。YAMLで指定した場合はそちらを優先 |
 | `sequence_timeout_sec` | 120 | INITIALIZE／START／END／PICK／PLACE全体 |
 | `stop_timeout_sec` | 3 | 取消・失敗後の未確定処理 |
 
 タイムアウトは0秒超〜86,400秒の有限値を指定します。`wait` の設定値にも0〜86,400秒の上限があり、動作全体には `sequence_timeout_sec` が適用されます。
+
+`following route timeout` は `sequences.yaml` のトップレベルに `route_timeout_sec: 60.0` のように書いて変更できます。同梱値は30秒です。省略時はROSパラメータを使います。`debug:=true` では次の動作から反映し、実行中の動作の値は固定します。通常モードではノード再起動が必要です。詳しくは [設定方法](CONFIG.md#経路追従のタイムアウト) を参照してください。
 
 従来の経路生成・追従ノードには関節情報の鮮度検査、経路の到達可能性検査、追従ノード自身のタイムアウトはありません。シーケンサ側のタイムアウトと取消処理を使用します。
