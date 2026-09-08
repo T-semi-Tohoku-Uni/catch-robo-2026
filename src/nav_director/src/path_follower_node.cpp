@@ -268,7 +268,7 @@ private:
             const double yaw_error = std::abs(std::atan2(
                 std::sin(target_yaw - current_posrot[3]),
                 std::cos(target_yaw - current_posrot[3])));
-            if (targeting_final && goal_distance <= 30.0 && yaw_error <= 0.04) {
+            if (targeting_final && goal_distance <= 15.0 && yaw_error <= 0.02) {
                 result->success = true;
                 busy_ = false;
                 goal_handle->succeed(result);
