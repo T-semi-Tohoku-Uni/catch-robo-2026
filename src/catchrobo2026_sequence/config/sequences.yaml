@@ -142,6 +142,12 @@ sequences:
       - move: {relative: [0, 0, '$place_retreat_dz', 0]}
       - pump: off
       - endeffector: '$pick_endeffector_command'
+  place_pre_red_waypoint:
+    steps:
+      - move: [150, 0, 400, 0]
+  place_pre_blue_waypoint:
+    steps:
+      - move: [1200, 0, 400, 0]
 
   pick_0_1:
     steps:
@@ -209,66 +215,82 @@ sequences:
       - call: pick_common
   place_red_0_0:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_red_0_0_above}
       - call: place_common
   place_red_0_1:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_red_0_1_above}
       - call: place_common
   place_red_1_0:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_red_1_0_above}
       - call: place_common
   place_red_1_1:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_red_1_1_above}
       - call: place_common
   place_red_2_0:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_red_2_0_above}
       - call: place_common
   place_red_2_1:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_red_2_1_above}
       - call: place_common
   place_red_3_0:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_red_3_0_above}
       - call: place_common
   place_red_3_1:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_red_3_1_above}
       - call: place_common
   place_blue_0_0:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_blue_0_0_above}
       - call: place_common
   place_blue_0_1:
     steps:
+      - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_0_1_above}
       - call: place_common
   place_blue_1_0:
     steps:
+      - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_1_0_above}
       - call: place_common
   place_blue_1_1:
     steps:
+      - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_1_1_above}
       - call: place_common
   place_blue_2_0:
     steps:
+      - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_2_0_above}
       - call: place_common
   place_blue_2_1:
     steps:
+      - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_2_1_above}
       - call: place_common
   place_blue_3_0:
     steps:
+      - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_3_0_above}
       - call: place_common
   place_blue_3_1:
     steps:
+      - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_3_1_above}
       - call: place_common
 
