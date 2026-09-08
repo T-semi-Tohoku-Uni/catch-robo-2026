@@ -273,7 +273,7 @@ private:
             const double err_yaw = std::atan2(
                 std::sin(target_yaw - current_posrot[3]),
                 std::cos(target_yaw - current_posrot[3]));
-            if (targeting_final && goal_distance <= 15.0 && std::abs(err_yaw) <= 0.02) {
+            if (targeting_final && goal_distance <= 20.0 && std::abs(err_yaw) <= 0.05) {
                 result->success = true;
                 busy_ = false;
                 goal_handle->succeed(result);
