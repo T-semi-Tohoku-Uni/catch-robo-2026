@@ -33,6 +33,17 @@ struct Step
   std::optional<double> max_phi_travel;
 };
 
+struct PreparedSequence
+{
+  std::vector<Step> steps;
+  std::vector<Pose> deferred_waypoints;
+  std::size_t consumed_pending_waypoints{0};
+};
+
+// Accepts compiled steps; deferred poses retain their original absolute anchor.
+PreparedSequence prepare_sequence(
+  std::vector<Step> steps, const std::vector<Pose> & pending = {});
+
 struct SequenceBinding
 {
   std::string team;
@@ -80,7 +91,8 @@ private:
 
   using BindingKey = std::tuple<std::string, std::string, int, int>;
   std::vector<Step> compile_sequence(
-    const std::string & name, const std::string & where) const;
+    const std::string & name, const std::string & where,
+    bool allow_deferred_waypoints = true) const;
 
   std::map<std::string, std::vector<RawStep>> sequences_;
   std::map<std::string, Pose> poses_;

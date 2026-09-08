@@ -158,6 +158,15 @@ private:
     void start(const std::shared_ptr<SequenceGoal> &goal)
     {
         goal_ = goal;
+        const auto request = goal_->get_goal();
+        const bool lifecycle = request->kind == ExecuteSequence::Goal::START ||
+            request->kind == ExecuteSequence::Goal::INITIALIZE ||
+            request->kind == ExecuteSequence::Goal::END;
+        if (lifecycle || request->control_epoch != pending_epoch_ ||
+            request->step_id <= pending_step_id_) {
+            clear_pending_waypoints();
+        }
+        staged_waypoints_.clear();
         index_ = 0;
         stopping_ = false;
         stop_message_.clear();
@@ -169,10 +178,6 @@ private:
         try {
             // Compile the entire action before sending any hardware command.
             auto candidate = debug_ ? SequenceConfig::load(config_file_) : *config_;
-            const auto request = goal_->get_goal();
-            const bool lifecycle = request->kind == ExecuteSequence::Goal::START ||
-                request->kind == ExecuteSequence::Goal::INITIALIZE ||
-                request->kind == ExecuteSequence::Goal::END;
             const bool pick = request->kind == ExecuteSequence::Goal::PICK;
             switch (request->kind) {
             case ExecuteSequence::Goal::INITIALIZE:
@@ -193,6 +198,16 @@ private:
             if (steps_.empty() && !lifecycle) {
                 throw std::runtime_error("the selected sequence has no steps");
             }
+            auto prepared = catchrobo2026_sequence::prepare_sequence(
+                std::move(steps_), pending_waypoints_);
+            steps_ = std::move(prepared.steps);
+            staged_waypoints_ = std::move(prepared.deferred_waypoints);
+            clear_pending_waypoints();
+            if (prepared.consumed_pending_waypoints != 0 || !staged_waypoints_.empty()) {
+                RCLCPP_INFO(get_logger(),
+                    "Deferred waypoints: %zu added to the first MOVE, %zu retained after success",
+                    prepared.consumed_pending_waypoints, staged_waypoints_.size());
+            }
             active_route_timeout_ = candidate.route_timeout_sec().value_or(route_timeout_);
             if (debug_) {
                 *config_ = std::move(candidate);
@@ -208,6 +223,8 @@ private:
         if (stopping_) {
             return;
         }
+        clear_pending_waypoints();
+        staged_waypoints_.clear();
         stopping_ = true;
         stop_message_ = message;
         stop_deadline_ = after(stop_timeout_);
@@ -217,10 +234,19 @@ private:
     void finish(bool success, const std::string &message)
     {
         auto result = std::make_shared<ExecuteSequence::Result>();
-        result->success = success;
+        result->success = success && !goal_->is_canceling();
         result->message = message;
+        if (result->success &&
+            (goal_->get_goal()->kind == ExecuteSequence::Goal::PICK ||
+             goal_->get_goal()->kind == ExecuteSequence::Goal::PLACE)) {
+            pending_waypoints_ = std::move(staged_waypoints_);
+            pending_epoch_ = goal_->get_goal()->control_epoch;
+            pending_step_id_ = goal_->get_goal()->step_id;
+        } else {
+            clear_pending_waypoints();
+        }
+        staged_waypoints_.clear();
         if (goal_->is_canceling()) {
-            result->success = false;
             goal_->canceled(result);
         } else if (success) {
             goal_->succeed(result);
@@ -231,6 +257,13 @@ private:
                     message.c_str());
         goal_.reset();
         steps_.clear();
+    }
+
+    void clear_pending_waypoints()
+    {
+        pending_waypoints_.clear();
+        pending_epoch_ = 0;
+        pending_step_id_ = 0;
     }
 
     bool interrupted() const
@@ -412,7 +445,9 @@ private:
                 begin_stop("sequence group was not released");
                 return;
             }
-            finish(true, "sequence completed");
+            finish(true, staged_waypoints_.empty() ? "sequence completed" :
+                "sequence completed; " + std::to_string(staged_waypoints_.size()) +
+                " waypoints deferred to the next MOVE");
             return;
         }
         const auto &step = steps_[index_];
@@ -718,6 +753,8 @@ private:
     Clock::time_point deadline_, sequence_deadline_, stop_deadline_;
     std::unique_ptr<SequenceConfig> config_;
     std::vector<Step> steps_;
+    std::vector<catchrobo2026_sequence::Pose> pending_waypoints_, staged_waypoints_;
+    uint64_t pending_epoch_{0}, pending_step_id_{0};
     struct GroupRoute {
         size_t end_index{0};
         catchrobo2026_msgs::msg::RotationGroupRoute route;

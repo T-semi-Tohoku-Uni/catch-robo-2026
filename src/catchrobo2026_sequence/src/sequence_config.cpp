@@ -2,6 +2,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <fstream>
@@ -545,16 +546,16 @@ std::vector<Step> SequenceConfig::compile_start() const
   if (start_sequence_.empty()) {
     return {};
   }
-  return compile_sequence(start_sequence_, "start_sequence");
+  return compile_sequence(start_sequence_, "start_sequence", false);
 }
 
 std::vector<Step> SequenceConfig::compile_initialization() const
 {
   auto before = before_initialization_sequence_.empty() ? std::vector<Step>{} :
-    compile_sequence(before_initialization_sequence_, "before_initialization_sequence");
+    compile_sequence(before_initialization_sequence_, "before_initialization_sequence", false);
   // Homing changes the pose; each hook needs its own absolute anchor.
   const auto after = after_initialization_sequence_.empty() ? std::vector<Step>{} :
-    compile_sequence(after_initialization_sequence_, "after_initialization_sequence");
+    compile_sequence(after_initialization_sequence_, "after_initialization_sequence", false);
   if (expanded_size(before) + 1 + expanded_size(after) > kMaxExpandedSteps) {
     fail("initialization_sequence", "expanded sequence exceeds 10000 steps including waypoints");
   }
@@ -570,7 +571,7 @@ std::vector<Step> SequenceConfig::compile_end() const
   if (end_sequence_.empty()) {
     return {};
   }
-  return compile_sequence(end_sequence_, "end_sequence");
+  return compile_sequence(end_sequence_, "end_sequence", false);
 }
 
 std::vector<SequenceBinding> SequenceConfig::configured_bindings(const std::string & team) const
@@ -606,7 +607,7 @@ Pose SequenceConfig::named_pose(const std::string & name) const
 }
 
 std::vector<Step> SequenceConfig::compile_sequence(
-  const std::string & name, const std::string & where) const
+  const std::string & name, const std::string & where, bool allow_deferred_waypoints) const
 {
   const auto & source = sequences_.at(name);
   Pose anchor{};
@@ -653,7 +654,9 @@ std::vector<Step> SequenceConfig::compile_sequence(
   bool sequence_group_has_move = false;
   for (std::size_t i = 0; i < result.size(); ++i) {
     const auto at = where + ".steps[" + std::to_string(i) + "]";
-    if (result[i].waypoint &&
+    const bool deferred_tail = i + 1 == result.size() &&
+      allow_deferred_waypoints && !in_sequence_group;
+    if (result[i].waypoint && !deferred_tail &&
       (i + 1 == result.size() || result[i + 1].type != StepType::MOVE))
     {
       fail(at,
@@ -682,6 +685,42 @@ std::vector<Step> SequenceConfig::compile_sequence(
   if (in_sequence_group) {
     fail(where, "sequence_group start needs a matching end in the same action or hook");
   }
+  return result;
+}
+
+PreparedSequence prepare_sequence(std::vector<Step> steps, const std::vector<Pose> & pending)
+{
+  if (pending.size() > kMaxExpandedSteps ||
+    expanded_size(steps) > kMaxExpandedSteps - pending.size())
+  {
+    fail("continuation", "expanded sequence including pending waypoints exceeds 10000 points");
+  }
+  for (const auto & point : pending) {
+    if (!std::all_of(point.begin(), point.end(), [](double value) {return std::isfinite(value);})) {
+      fail("continuation", "pending waypoint must contain finite coordinates");
+    }
+  }
+  PreparedSequence result;
+  std::size_t end = steps.size();
+  while (end > 0 && steps[end - 1].type == StepType::MOVE && steps[end - 1].waypoint) {
+    --end;
+  }
+  for (std::size_t i = end; i < steps.size(); ++i) {
+    result.deferred_waypoints.insert(result.deferred_waypoints.end(),
+      steps[i].waypoints.begin(), steps[i].waypoints.end());
+    result.deferred_waypoints.push_back(steps[i].pose);
+  }
+  steps.resize(end);
+  const auto first_move = std::find_if(steps.begin(), steps.end(), [](const Step & step) {
+      return step.type == StepType::MOVE;
+    });
+  if (first_move == steps.end()) {
+    result.deferred_waypoints.insert(result.deferred_waypoints.begin(), pending.begin(), pending.end());
+  } else {
+    first_move->waypoints.insert(first_move->waypoints.begin(), pending.begin(), pending.end());
+    result.consumed_pending_waypoints = pending.size();
+  }
+  result.steps = std::move(steps);
   return result;
 }
 

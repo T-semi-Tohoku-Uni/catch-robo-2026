@@ -811,7 +811,7 @@ TEST(SequenceConfig, RejectsWaypointBeforeNonMovementAfterReferenceExpansion)
   }
 }
 
-TEST(SequenceConfig, TerminalWaypointsAreAllowedOnlyInUnboundFragments)
+TEST(SequenceConfig, TerminalWaypointsAreDeferredInBindingsButForbiddenInLifecycleHooks)
 {
   for (const std::string operation : {
       "move: {absolute: [1, 2, 3, 0], waypoint: true}",
@@ -823,8 +823,10 @@ TEST(SequenceConfig, TerminalWaypointsAreAllowedOnlyInUnboundFragments)
       "  empty: {steps: []}\n"
       "  alias: {extends: waypoint, steps: [{call: empty}]}\n";
     EXPECT_NO_THROW(SequenceConfig::from_yaml(document("{}", fragments)));
-    EXPECT_THROW(SequenceConfig::from_yaml(document(
-        "{}", fragments, "{'0,1': alias}")), ConfigError);
+    const auto config = SequenceConfig::from_yaml(document(
+        "{}", fragments, "{'0,1': alias}"));
+    EXPECT_TRUE(config.compile("red", "pick", 0, 1).back().waypoint);
+    EXPECT_TRUE(config.compile_named("alias").back().waypoint);
     for (const std::string entry : {
         "start_sequence", "before_initialization_sequence", "after_initialization_sequence",
         "end_sequence"})
@@ -834,6 +836,86 @@ TEST(SequenceConfig, TerminalWaypointsAreAllowedOnlyInUnboundFragments)
           document("{}", fragments) + entry + ": alias\n"), ConfigError);
     }
   }
+}
+
+TEST(SequenceConfig, DeferredWaypointsKeepTheirOriginalAnchorAndInlineOrder)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  old:
+    steps:
+      - move: {absolute: [100, 200, 300, 0]}
+      - move:
+          relative: [10, 0, 0, 0]
+          waypoint: true
+          waypoints: [{relative: [5, 0, 0, 0]}]
+      - waypoint: {relative: [20, 0, 0, 0]}
+  next:
+    steps:
+      - pump: suction
+      - move: {absolute: [900, 200, 300, 0], waypoints: [[850, 200, 300, 0]]}
+      - move: {relative: [0, 0, -10, 0]}
+)", "{'0,1': old, '0,2': next}"));
+  const auto old = catchrobo2026_sequence::prepare_sequence(config.compile_named("old"));
+  ASSERT_EQ(old.steps.size(), 1u);
+  EXPECT_EQ(old.deferred_waypoints, (std::vector<Pose>{
+      {105, 200, 300, 0}, {110, 200, 300, 0}, {120, 200, 300, 0}}));
+  const auto next = catchrobo2026_sequence::prepare_sequence(
+    config.compile_named("next"), old.deferred_waypoints);
+  EXPECT_EQ(next.consumed_pending_waypoints, 3u);
+  EXPECT_TRUE(next.deferred_waypoints.empty());
+  ASSERT_EQ(next.steps.size(), 3u);
+  EXPECT_EQ(next.steps[0].type, StepType::PUMP);
+  EXPECT_EQ(next.steps[1].waypoints, (std::vector<Pose>{
+      {105, 200, 300, 0}, {110, 200, 300, 0}, {120, 200, 300, 0}, {850, 200, 300, 0}}));
+  EXPECT_EQ(next.steps[2].pose, (Pose{900, 200, 290, 0}));
+}
+
+TEST(SequenceConfig, DeferredWaypointsEnterTheFirstRouteInsideTheNextGroup)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  s:
+    steps:
+      - sequence_group: {start: true, max_phi_travel: 1}
+      - pump: off
+      - waypoint: {absolute: [100, 200, 300, 0]}
+      - move: {absolute: [200, 200, 300, 0]}
+      - sequence_group: end
+      - waypoint: {absolute: [300, 200, 300, 0]}
+)", "{'0,1': s}"));
+  const std::vector<Pose> pending{{50, 200, 300, 0}};
+  const auto prepared = catchrobo2026_sequence::prepare_sequence(config.compile_named("s"), pending);
+  ASSERT_EQ(prepared.steps.size(), 5u);
+  EXPECT_EQ(prepared.steps[0].type, StepType::SEQUENCE_START);
+  EXPECT_EQ(prepared.steps[2].waypoints, pending);
+  EXPECT_EQ(prepared.steps[4].type, StepType::SEQUENCE_END);
+  EXPECT_EQ(prepared.deferred_waypoints, (std::vector<Pose>{{300, 200, 300, 0}}));
+}
+
+TEST(SequenceConfig, WaypointOnlyActionsAccumulateWithoutInventingAMovement)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  s:
+    steps:
+      - pump: off
+      - waypoint: {absolute: [300, 200, 300, 0]}
+)", "{'0,1': s}"));
+  const auto prepared = catchrobo2026_sequence::prepare_sequence(
+    config.compile_named("s"), {{100, 200, 300, 0}, {200, 200, 300, 0}});
+  ASSERT_EQ(prepared.steps.size(), 1u);
+  EXPECT_EQ(prepared.steps[0].type, StepType::PUMP);
+  EXPECT_EQ(prepared.consumed_pending_waypoints, 0u);
+  EXPECT_EQ(prepared.deferred_waypoints, (std::vector<Pose>{
+      {100, 200, 300, 0}, {200, 200, 300, 0}, {300, 200, 300, 0}}));
+}
+
+TEST(SequenceConfig, PendingWaypointsCountTowardTheExpandedLimit)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}",
+      "{s: {steps: [" + movement_with_waypoints(9998) + "]}}", "{'0,1': s}"));
+  const auto steps = config.compile_named("s");
+  EXPECT_NO_THROW(catchrobo2026_sequence::prepare_sequence(steps, {{1, 2, 3, 0}}));
+  EXPECT_THROW(catchrobo2026_sequence::prepare_sequence(
+      steps, {{1, 2, 3, 0}, {4, 5, 6, 0}}), ConfigError);
 }
 
 TEST(SequenceConfig, WaypointsCannotContinueAcrossInitializationCommand)

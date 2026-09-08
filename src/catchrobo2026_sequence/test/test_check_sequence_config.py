@@ -53,6 +53,37 @@ bindings:
     return path
 
 
+@pytest.fixture
+def continuation_file(config_file):
+    additions = """  defer:
+    steps:
+      - waypoint:
+          absolute: [720, 200, 300, 0]
+  defer_again:
+    steps:
+      - move: {absolute: [750, 200, 300, 0]}
+      - waypoint: {absolute: [760, 200, 300, 0]}
+  mechanism_only:
+    steps:
+      - endeffector: 0
+  finish:
+    steps:
+      - move: {absolute: [780, 200, 300, 0]}
+  far_waypoint:
+    steps:
+      - waypoint: {absolute: [5000, 200, 300, 0]}
+  relative_tail:
+    steps:
+      - move: {absolute: [720, 200, 300, 0]}
+      - waypoint: {relative: [0, 20, 0, 0]}
+"""
+    contents = config_file.read_text().replace(
+        'end_sequence: ending', additions + 'end_sequence: ending')
+    contents = contents.replace('place: {}', "place: {'0,0': defer}")
+    config_file.write_text(contents)
+    return config_file
+
+
 def run_check(checker, config_file, *args):
     result = subprocess.run(
         [str(checker), '--config', str(config_file), '--json', *map(str, args)],
@@ -228,3 +259,107 @@ def test_help_describes_no_ros_and_angle_units(checker):
     assert 'ROS通信には参加しません' in result.stdout
     assert 'rad' in result.stdout
     assert '--initial-wrist' in result.stdout
+
+
+def test_trailing_waypoint_alone_stays_unknown(checker, continuation_file):
+    code, report = run_check(
+        checker, continuation_file, '--team', 'red', '--sequence', 'defer', *starting_at_a(0))
+    assert code == 2
+    assert report['status'] == 'UNKNOWN'
+    entry = report['results'][0]
+    assert entry['final_joints'] == report['initial_joints']
+    assert entry['route_count'] == 0
+    assert entry['pending_waypoints'] == [[720, 200, 300, 0]]
+    assert entry['pending_resolution'] == ''
+    assert entry['diagnostics'][0]['code'] == 'pending_waypoints'
+
+
+def test_waypoint_continuation_is_checked_in_the_following_action(checker, continuation_file):
+    code, report = run_check(
+        checker, continuation_file, '--team', 'both', '--action', 'place:0,0',
+        '--sequence', 'finish', *starting_at_a(0))
+    assert code == 0
+    assert report['status'] == 'FEASIBLE'
+    for deferred, move in [report['results'][:2], report['results'][2:]]:
+        assert deferred['status'] == move['status'] == 'FEASIBLE'
+        assert deferred['route_count'] == 0
+        assert '検査済み' in deferred['pending_resolution']
+        assert move['initial_joints'] == deferred['final_joints']
+        assert move['initial_pending_waypoints'] == deferred['pending_waypoints']
+        assert move['consumed_pending_waypoints'] == 1
+        assert move['pending_waypoints'] == []
+        assert move['route_count'] == 1
+
+
+def test_pending_waypoints_survive_mechanism_only_actions(checker, continuation_file):
+    code, report = run_check(
+        checker, continuation_file, '--team', 'red', '--sequence',
+        'defer', 'mechanism_only', 'finish', *starting_at_a(0))
+    assert code == 0
+    deferred, mechanism, move = report['results']
+    assert mechanism['route_count'] == 0
+    assert mechanism['initial_pending_waypoints'] == deferred['pending_waypoints']
+    assert mechanism['pending_waypoints'] == deferred['pending_waypoints']
+    assert move['consumed_pending_waypoints'] == 1
+    assert all(entry['status'] == 'FEASIBLE' for entry in report['results'])
+
+
+def test_consumed_old_tail_and_new_tail_are_resolved_separately(checker, continuation_file):
+    args = ['--team', 'red', '--sequence', 'defer', 'defer_again', *starting_at_a(0)]
+    code, report = run_check(checker, continuation_file, *args)
+    assert code == 2
+    first, second = report['results']
+    assert first['status'] == 'FEASIBLE'
+    assert 'sequence:defer_again' in first['pending_resolution']
+    assert second['status'] == 'UNKNOWN'
+    assert second['consumed_pending_waypoints'] == 1
+    assert second['pending_waypoints'] == [[760, 200, 300, 0]]
+    code, report = run_check(checker, continuation_file, *args, '--sequence', 'finish')
+    assert code == 0
+    assert all(entry['status'] == 'FEASIBLE' for entry in report['results'])
+    assert report['results'][2]['initial_pending_waypoints'] == [[760, 200, 300, 0]]
+
+
+def test_unreachable_pending_route_fails_when_consumed(checker, continuation_file):
+    code, report = run_check(
+        checker, continuation_file, '--team', 'red', '--sequence',
+        'far_waypoint', 'finish', *starting_at_a(0))
+    assert code == 1
+    assert [entry['status'] for entry in report['results']] == ['UNKNOWN', 'INFEASIBLE']
+    assert report['results'][1]['initial_pending_waypoints'] == [[5000, 200, 300, 0]]
+    assert report['results'][1]['diagnostics'][0]['code'] == 'unreachable_sample'
+
+
+@pytest.mark.parametrize('action', ['start', 'end'])
+def test_lifecycle_boundary_discards_pending_without_visiting_it(
+        checker, continuation_file, action):
+    code, report = run_check(
+        checker, continuation_file, '--team', 'red', '--sequence', 'far_waypoint',
+        '--action', action, *starting_at_a(-2 * math.pi))
+    assert code == 0
+    deferred, lifecycle = report['results']
+    assert '破棄' in deferred['pending_resolution']
+    assert lifecycle['discarded_pending_waypoints'] == 1
+    assert lifecycle['consumed_pending_waypoints'] == 0
+    assert lifecycle['pending_waypoints'] == []
+
+
+def test_relative_tail_keeps_its_original_absolute_anchor(checker, continuation_file):
+    code, report = run_check(
+        checker, continuation_file, '--team', 'red', '--sequence',
+        'relative_tail', 'finish', *starting_at_a(0))
+    assert code == 0
+    before, after = report['results']
+    assert before['pending_waypoints'] == [[720, 220, 300, 0]]
+    assert before['diagnostics'][-1]['step_index'] == 1
+    assert after['initial_pending_waypoints'] == before['pending_waypoints']
+
+
+def test_independent_place_tail_is_not_marked_feasible(checker, continuation_file):
+    code, report = run_check(
+        checker, continuation_file, '--team', 'red', '--all', *starting_at_a(-2 * math.pi))
+    assert code == 2
+    entry = next(item for item in report['results'] if item['name'] == 'place:0,0')
+    assert entry['status'] == 'UNKNOWN'
+    assert entry['pending_waypoints']
+    assert not entry['pending_resolution']

@@ -32,6 +32,9 @@ struct SequenceCheckResult
   std::string message;
   std::vector<CheckDiagnostic> diagnostics;
   std::optional<CheckJoints> final_joints;
+  std::vector<Pose> pending_waypoints;
+  std::size_t consumed_pending_waypoints{0};
+  std::size_t discarded_pending_waypoints{0};
   double phi_travel{0.0};
   double max_wrist_step{0.0};
   std::size_t route_count{0};
@@ -41,6 +44,8 @@ struct SequenceCheckResult
 struct SequenceCheckOptions
 {
   std::optional<CheckJoints> after_initialization_joints;
+  std::vector<Pose> pending_waypoints;
+  bool clear_pending_waypoints{false};
 };
 
 // Checks ideal commanded paths without creating a ROS context or sending commands.

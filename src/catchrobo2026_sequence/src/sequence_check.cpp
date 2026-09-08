@@ -76,12 +76,28 @@ class Checker
 {
 public:
   SequenceCheckResult run(
-    const std::vector<Step> & steps, const std::optional<CheckJoints> & initial,
+    const std::vector<Step> & input_steps, const std::optional<CheckJoints> & initial,
     const SequenceCheckOptions & options)
   {
     if (initial && !set_joints(*initial, 0, "initial_state")) {
       return finish();
     }
+    PreparedSequence prepared;
+    try {
+      auto pending = options.pending_waypoints;
+      const auto initialize = std::find_if(input_steps.begin(), input_steps.end(),
+        [](const Step & step) {return step.type == StepType::INITIALIZE;});
+      if (options.clear_pending_waypoints || initialize != input_steps.end()) {
+        result_.discarded_pending_waypoints = pending.size();
+        pending.clear();
+      }
+      incoming_pending_ = pending.size();
+      prepared = prepare_sequence(input_steps, pending);
+    } catch (const std::exception & error) {
+      fail(0, "planning_error", error.what());
+      return finish();
+    }
+    const auto & steps = prepared.steps;
     for (std::size_t index = 0; index < steps.size(); ++index) {
       const auto & step = steps[index];
       try {
@@ -101,6 +117,7 @@ public:
             if (!check_route(route)) {
               break;
             }
+            consumed_pending();
           } else {
             unknown(index, "initial_state_unknown",
               "Motion requires initial joint angles, including the unwrapped wrist angle");
@@ -127,6 +144,7 @@ public:
             if (!check_group(step, index, routes)) {
               break;
             }
+            consumed_pending();
           } else {
             unknown(index, "initial_state_unknown",
               "Sequence group requires initial joint angles, including the unwrapped wrist angle");
@@ -140,10 +158,22 @@ public:
         break;
       }
     }
+    if (result_.status == CheckStatus::FEASIBLE && !prepared.deferred_waypoints.empty()) {
+      result_.pending_waypoints = std::move(prepared.deferred_waypoints);
+      unknown(steps.size() < input_steps.size() ? steps.size() :
+        steps.empty() ? 0 : steps.size() - 1, "pending_waypoints",
+        "Waypoints are deferred until a later action supplies a MOVE; their route is not checked");
+    }
     return finish();
   }
 
 private:
+  void consumed_pending()
+  {
+    result_.consumed_pending_waypoints += incoming_pending_;
+    incoming_pending_ = 0;
+  }
+
   bool set_joints(const CheckJoints & joints, std::size_t step, const std::string & code)
   {
     if (!std::all_of(joints.begin(), joints.end(), [](float value) {
@@ -303,7 +333,9 @@ private:
         result_.message = "A route or initial state failed the offline checks";
         break;
       case CheckStatus::UNKNOWN:
-        result_.message = "Motion feasibility is unknown because joint state is unspecified";
+        result_.message = result_.pending_waypoints.empty() ?
+          "Motion feasibility is unknown because joint state is unspecified" :
+          "Pending waypoints require a subsequent MOVE before feasibility can be determined";
         break;
     }
     return std::move(result_);
@@ -312,6 +344,7 @@ private:
   nav_director::RoutePlanner planner_;
   SequenceCheckResult result_;
   std::optional<CheckJoints> joints_;
+  std::size_t incoming_pending_{0};
 };
 
 }  // namespace

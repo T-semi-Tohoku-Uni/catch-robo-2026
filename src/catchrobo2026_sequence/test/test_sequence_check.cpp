@@ -217,4 +217,112 @@ TEST(SequenceCheck, InvalidGroupBoundaryDominatesUnknownState)
   EXPECT_FALSE(result.final_joints);
 }
 
+TEST(SequenceCheck, TrailingWaypointIsDeferredWithoutMovingToIt)
+{
+  auto waypoint = move_to({550, 180, 290, -kPi});
+  waypoint.waypoint = true;
+  waypoint.waypoints = {{530, 180, 290, -kPi}};
+  const auto initial = joints_at({500, 180, 290, -kPi});
+  const auto deferred = check_sequence_steps({waypoint}, initial);
+  EXPECT_EQ(deferred.status, CheckStatus::UNKNOWN);
+  EXPECT_TRUE(has_code(deferred, "pending_waypoints"));
+  EXPECT_EQ(deferred.final_joints, initial);
+  EXPECT_EQ(deferred.route_count, 0u);
+  ASSERT_EQ(deferred.pending_waypoints.size(), 2u);
+  EXPECT_EQ(deferred.pending_waypoints.front(), waypoint.waypoints.front());
+  EXPECT_EQ(deferred.pending_waypoints.back(), waypoint.pose);
+
+  SequenceCheckOptions options;
+  options.pending_waypoints = deferred.pending_waypoints;
+  const auto next = check_sequence_steps({move_to({600, 180, 290, -kPi})},
+    deferred.final_joints, options);
+  EXPECT_EQ(next.status, CheckStatus::FEASIBLE);
+  EXPECT_EQ(next.route_count, 1u);
+  EXPECT_EQ(next.consumed_pending_waypoints, 2u);
+  EXPECT_TRUE(next.pending_waypoints.empty());
+}
+
+TEST(SequenceCheck, PendingWaypointIsCheckedOnTheFollowingRoute)
+{
+  auto waypoint = move_to({5000, 180, 290, -kPi});
+  waypoint.waypoint = true;
+  const auto initial = joints_at({500, 180, 290, -kPi});
+  const auto deferred = check_sequence_steps({waypoint}, initial);
+  EXPECT_EQ(deferred.status, CheckStatus::UNKNOWN);
+  SequenceCheckOptions options;
+  options.pending_waypoints = deferred.pending_waypoints;
+  const auto next = check_sequence_steps({move_to({600, 180, 290, -kPi})}, initial, options);
+  EXPECT_EQ(next.status, CheckStatus::INFEASIBLE);
+  EXPECT_TRUE(has_code(next, "unreachable_sample"));
+  EXPECT_EQ(next.consumed_pending_waypoints, 0u);
+  EXPECT_FALSE(next.final_joints);
+}
+
+TEST(SequenceCheck, ConsumedIncomingAndNewDeferredWaypointsStayDistinct)
+{
+  auto tail = move_to({650, 180, 290, -kPi});
+  tail.waypoint = true;
+  SequenceCheckOptions options;
+  options.pending_waypoints = {{550, 180, 290, -kPi}};
+  const auto next = check_sequence_steps({move_to({600, 180, 290, -kPi}), tail},
+    joints_at({500, 180, 290, -kPi}), options);
+  EXPECT_EQ(next.status, CheckStatus::UNKNOWN);
+  EXPECT_EQ(next.consumed_pending_waypoints, 1u);
+  ASSERT_EQ(next.pending_waypoints.size(), 1u);
+  EXPECT_EQ(next.pending_waypoints[0], tail.pose);
+  ASSERT_TRUE(next.final_joints);
+  nav_director::RoutePlanner planner;
+  EXPECT_NEAR(planner.stateFromJoints(*next.final_joints).pose.x, 600, 0.01);
+}
+
+TEST(SequenceCheck, MechanismOnlyActionPreservesIncomingWaypoints)
+{
+  SequenceCheckOptions options;
+  options.pending_waypoints = {{550, 180, 290, -kPi}};
+  const auto initial = joints_at({500, 180, 290, -kPi});
+  const auto next = check_sequence_steps({flag(StepType::PUMP)}, initial, options);
+  EXPECT_EQ(next.status, CheckStatus::UNKNOWN);
+  EXPECT_EQ(next.final_joints, initial);
+  EXPECT_EQ(next.consumed_pending_waypoints, 0u);
+  EXPECT_EQ(next.pending_waypoints, options.pending_waypoints);
+}
+
+TEST(SequenceCheck, IncomingWaypointsAreIncludedInsideTheFirstGroup)
+{
+  SequenceCheckOptions options;
+  options.pending_waypoints = {{5000, 180, 290, -kPi}};
+  const auto next = check_sequence_steps({group(false, 0.01),
+      move_to({600, 180, 290, -kPi}), flag(StepType::SEQUENCE_END)},
+    joints_at({500, 180, 290, -kPi}), options);
+  EXPECT_EQ(next.status, CheckStatus::INFEASIBLE);
+  EXPECT_TRUE(has_code(next, "sequence_group_infeasible"));
+  EXPECT_EQ(next.route_count, 0u);
+}
+
+TEST(SequenceCheck, ExplicitBoundaryDiscardsPendingBeforeItsMotion)
+{
+  SequenceCheckOptions options;
+  options.pending_waypoints = {{5000, 180, 290, -kPi}};
+  options.clear_pending_waypoints = true;
+  const auto next = check_sequence_steps({move_to({600, 180, 290, -kPi})},
+    joints_at({500, 180, 290, -kPi}), options);
+  EXPECT_EQ(next.status, CheckStatus::FEASIBLE);
+  EXPECT_EQ(next.discarded_pending_waypoints, 1u);
+  EXPECT_EQ(next.consumed_pending_waypoints, 0u);
+  EXPECT_TRUE(next.pending_waypoints.empty());
+}
+
+TEST(SequenceCheck, InitializationStepAlsoDiscardsIncomingWaypoints)
+{
+  SequenceCheckOptions options;
+  options.pending_waypoints = {{5000, 180, 290, -kPi}};
+  options.after_initialization_joints = joints_at({500, 180, 290, -kPi});
+  const auto next = check_sequence_steps({move_to({525, 180, 290, -kPi}),
+      flag(StepType::INITIALIZE),
+      move_to({600, 180, 290, -kPi})}, options.after_initialization_joints, options);
+  EXPECT_EQ(next.status, CheckStatus::FEASIBLE);
+  EXPECT_EQ(next.discarded_pending_waypoints, 1u);
+  EXPECT_EQ(next.consumed_pending_waypoints, 0u);
+}
+
 }  // namespace

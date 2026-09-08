@@ -39,6 +39,8 @@ struct Entry
 {
   std::string team, name;
   std::optional<CheckJoints> initial_joints;
+  std::vector<Pose> initial_pending_waypoints;
+  std::string pending_resolution;
   SequenceCheckResult result;
 };
 struct Report
@@ -72,6 +74,9 @@ void help()
   --help                           この説明を表示
 
 --actionと--sequenceは引数順に連続して確認します。失敗後の対象はUNKNOWNとなります。
+末尾waypointは次対象の最初のMOVEへ持ち越し、最後まで未消化ならUNKNOWNとなります。
+--action start/initialize/endは持越しを破棄します。--sequenceは汎用の連続手順として扱います。
+連続PICK/PLACEは同じcontrol_epochでstep_idが増加する実行を想定します。
 --allと対象指定は併用できません。独立確認は対象間の連続実行を保証しません。
 初期状態を省略した場合は、姿勢を仮定せずUNKNOWNとします。
 0と−2πの両方が可能な初期姿勢では--initial-wristが必要です。
@@ -208,6 +213,21 @@ void write_joints(const std::optional<CheckJoints> & joints)
   std::cout << ']';
 }
 
+void write_poses(const std::vector<Pose> & poses)
+{
+  std::cout << '[';
+  for (std::size_t i = 0; i < poses.size(); ++i) {
+    if (i != 0) {std::cout << ',';}
+    std::cout << '[';
+    for (std::size_t axis = 0; axis < poses[i].size(); ++axis) {
+      if (axis != 0) {std::cout << ',';}
+      write_number(poses[i][axis]);
+    }
+    std::cout << ']';
+  }
+  std::cout << ']';
+}
+
 void write_json(const Report & report)
 {
   std::cout << "{\"status\":" << quote(status_name(report.status))
@@ -228,6 +248,13 @@ void write_json(const Report & report)
     write_joints(entry.initial_joints);
     std::cout << ",\"final_joints\":";
     write_joints(result.final_joints);
+    std::cout << ",\"initial_pending_waypoints\":";
+    write_poses(entry.initial_pending_waypoints);
+    std::cout << ",\"pending_waypoints\":";
+    write_poses(result.pending_waypoints);
+    std::cout << ",\"consumed_pending_waypoints\":" << result.consumed_pending_waypoints
+              << ",\"discarded_pending_waypoints\":" << result.discarded_pending_waypoints
+              << ",\"pending_resolution\":" << quote(entry.pending_resolution);
     std::cout << ",\"phi_travel\":";
     write_number(result.phi_travel);
     std::cout << ",\"max_wrist_step\":";
@@ -271,6 +298,16 @@ void write_text(const Report & report)
     std::cout << "  検査済み区間のphi総移動量=" << result.phi_travel << " rad、第4関節最大指令差="
               << result.max_wrist_step << " rad、経路=" << result.route_count
               << "、標本=" << result.sample_count << '\n';
+    if (!result.pending_waypoints.empty()) {
+      std::cout << "  この対象終了時の持越しwaypoint=" << result.pending_waypoints.size();
+      if (!entry.pending_resolution.empty()) {std::cout << "、" << entry.pending_resolution;}
+      else {std::cout << "（後続経路は未検査）";}
+      std::cout << '\n';
+    }
+    if (result.consumed_pending_waypoints || result.discarded_pending_waypoints) {
+      std::cout << "  先行waypoint: 経路へ連結=" << result.consumed_pending_waypoints
+                << "、境界で破棄=" << result.discarded_pending_waypoints << '\n';
+    }
     for (const auto & item : result.diagnostics) {
       std::cout << "  " << item.severity << ' ' << item.code;
       if (item.code != "INITIAL_STATE_UNKNOWN" && item.code != "SKIPPED_AFTER_FAILURE") {
@@ -390,6 +427,15 @@ std::vector<Step> compile_target(
   return config.compile(team, kind, first, second);
 }
 
+bool deferred_only(const SequenceCheckResult & result)
+{
+  return result.status == CheckStatus::UNKNOWN && result.final_joints &&
+         !result.pending_waypoints.empty() &&
+         std::none_of(result.diagnostics.begin(), result.diagnostics.end(),
+           [](const auto & item) {return item.severity == "unknown" &&
+                    item.code != "pending_waypoints";});
+}
+
 Report check(const Options & options)
 {
   Report report;
@@ -408,6 +454,8 @@ Report check(const Options & options)
     report.notes.push_back("各対象を同じ初期状態から独立に確認します。対象間の連続実行は保証しません。");
   } else {
     report.notes.push_back("指定した対象を引数順に連続して確認します。各陣営は同じ初期状態から始めます。");
+    report.notes.push_back("末尾waypointを持ち越します。連続PICK/PLACEは同epoch・step_id増加を想定し、"
+      "START/INITIALIZE/ENDでは持越しを破棄します。");
   }
   const auto teams = options.team == "both" ? std::vector<std::string>{"red", "blue"} :
     std::vector<std::string>{options.team};
@@ -424,12 +472,15 @@ Report check(const Options & options)
       }
     }
     auto current = report.initial_joints;
+    std::vector<Pose> pending;
+    std::vector<std::size_t> deferred_entries;
     bool blocked = false;
     for (const auto & target : targets) {
       Entry entry;
       entry.team = team;
       entry.name = target.kind == "sequence" ? "sequence:" + target.name : target.name;
       entry.initial_joints = independent ? report.initial_joints : current;
+      entry.initial_pending_waypoints = independent ? std::vector<Pose>{} : pending;
       // Validate every requested name even when an earlier target cannot finish.
       const auto steps = compile_target(config, team, target);
       if (blocked && !independent) {
@@ -441,25 +492,55 @@ Report check(const Options & options)
         entry.result.message = report.initial_message;
         entry.result.diagnostics.push_back({"info", "INITIAL_STATE_UNKNOWN", entry.result.message});
       } else {
+        engine_options.pending_waypoints = entry.initial_pending_waypoints;
+        engine_options.clear_pending_waypoints = target.kind == "action" &&
+          (target.name == "start" || target.name == "initialize" || target.name == "end");
         entry.result = catchrobo2026_sequence::check_sequence_steps(
           steps, entry.initial_joints, engine_options);
       }
       for (const auto & diagnostic : entry.result.diagnostics) {
         warnings = warnings || diagnostic.severity == "warning" || diagnostic.severity == "WARNING";
       }
-      if (entry.result.status == CheckStatus::INFEASIBLE) {report.status = CheckStatus::INFEASIBLE;}
-      else if (entry.result.status == CheckStatus::UNKNOWN &&
-        report.status == CheckStatus::FEASIBLE)
-      {
-        report.status = CheckStatus::UNKNOWN;
-      }
       if (!independent) {
-        if (entry.result.status != CheckStatus::FEASIBLE || !entry.result.final_joints) {
+        if (entry.result.consumed_pending_waypoints || entry.result.discarded_pending_waypoints) {
+          const std::string resolution = entry.result.consumed_pending_waypoints ?
+            "後続 " + entry.name + " の経路で検査済み" :
+            "後続 " + entry.name + " の境界で破棄（経由点移動は未実行）";
+          for (const auto previous : deferred_entries) {
+            auto & earlier = report.entries[previous];
+            earlier.pending_resolution = resolution;
+            earlier.result.status = CheckStatus::FEASIBLE;
+            earlier.result.message = resolution;
+            for (auto & diagnostic : earlier.result.diagnostics) {
+              if (diagnostic.code == "pending_waypoints") {
+                diagnostic.severity = "info";
+                diagnostic.code = "pending_waypoints_resolved";
+                diagnostic.message = resolution;
+              }
+            }
+          }
+          deferred_entries.clear();
+        }
+        const bool deferred = deferred_only(entry.result);
+        if ((entry.result.status != CheckStatus::FEASIBLE && !deferred) ||
+          !entry.result.final_joints)
+        {
           blocked = true;
           current.reset();
-        } else {current = entry.result.final_joints;}
+          pending.clear();
+        } else {
+          current = entry.result.final_joints;
+          pending = entry.result.pending_waypoints;
+          if (deferred) {deferred_entries.push_back(report.entries.size());}
+        }
       }
       report.entries.push_back(std::move(entry));
+    }
+  }
+  for (const auto & entry : report.entries) {
+    if (entry.result.status == CheckStatus::INFEASIBLE) {report.status = CheckStatus::INFEASIBLE;}
+    else if (entry.result.status == CheckStatus::UNKNOWN && report.status == CheckStatus::FEASIBLE) {
+      report.status = CheckStatus::UNKNOWN;
     }
   }
   report.exit_code = report.status == CheckStatus::INFEASIBLE ? 1 :

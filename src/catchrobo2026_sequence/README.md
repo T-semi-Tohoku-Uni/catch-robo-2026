@@ -41,6 +41,23 @@ UIの「終了」では現在動作の取消完了後に `sequences.ending.steps
 
 詳細と編集例は [CONFIG.md](CONFIG.md#初期化前後終了シーケンス) を参照してください。
 
+## 次のPICK／PLACEへ向かう経由点
+
+PICK／PLACEの末尾に`waypoint`を置くと、経由点を保留して現在の動作を完了します。次のPICK／PLACEが始まったとき、その最初の移動経路へ保留点を追加します。経由点へ単独では移動せず、次の動作がなければその場で待ちます。
+
+```yaml
+place_blue_0_0:
+  steps:
+    - call: place_pre_blue_waypoint
+    - move: {absolute: place_blue_0_0_above}
+    - call: place_common
+    - call: place_pre_blue_waypoint
+```
+
+この例の末尾の青側経由点は、次のPICKが選ばれた時点で「現在位置→青側経由点→PICK直上」の1経路に含まれます。次動作に経由点があればその前に追加し、通常MOVEの終点で到達を待ちます。現在のPLACE中に退避先へ到達させたい場合は、末尾を通常の`move`にしてください。
+
+保留点は元の動作で解決した絶対座標として保持し、次の動作の相対座標基準を変えません。`debug:=true`の再読込後も保留済み座標は維持します。引き継ぐのは同じepochの後続PICK／PLACEだけで、START／INITIALIZE／END、resetによるepoch変更、取消・失敗・再読込失敗・再起動では破棄します。ライフサイクル手順やgroup内部の末尾には未接続waypointを置けません。次の移動がgroup内なら保留点もそのgroupで事前計画します。詳しくは[末尾経由点の設定](CONFIG.md#pickplace末尾の経由点を次の動作へ持ち越す)を参照してください。
+
 ## シーケンスグループ
 
 `sequence_group`の開始・終了で区間を作り、`rotation_group: true`で第4関節角`q4`の一方向制約、`max_phi_travel`でフィールド基準の手先角`phi`の総移動量上限を指定します。両者は独立したオプションです。`phi = q0 + q4`なので、第4関節を一方向に動かす制約だけでは、手先の360°回転を防げません。
@@ -87,6 +104,8 @@ ros2 run catchrobo2026_sequence check_sequence_config \
 
 通常MOVEの第4関節角が経路サンプル間でπを超えて変化する場合は`wrist_wrap_jump`警告を出します。`--warnings-as-errors`で警告も終了コード1にできます。`--json`では対象名・失敗位置・予測最終関節角・回転量をJSONで出力します。
 
+PICK／PLACEの末尾に経由点が残る場合、その時点では次の通常MOVEが決まらないため`UNKNOWN`として保留点を表示します。`--action place:0,0 pick:0,1`のような連続検査では、保留点と到達済み関節角を次の対象へ引き継ぎ、実際に連結した経路を検査します。保留だけを理由とする途中の`UNKNOWN`は、次の移動で解決できれば全体判定を妨げません。対象列の最後に保留点が残る場合と、`--all`で個別確認したPLACEの保留経路は未判定のままです。開始姿勢不明・初期化後不明・経路失敗はこの例外に含めず、後続を成功扱いにしません。`--action start`／`initialize`／`end`への切替では実行時と同じく保留点を破棄します。`--sequence`は汎用の手順列として扱うため、名前が`ending`でもライフサイクル境界にはなりません。UIの終了動作を再現する場合は`--action end`を使ってください。
+
 これは目標に正確に到達すると仮定した経路計算上の判定です。通常MOVEは生成経路のサンプルを検査し、グループは本番と共通の計画処理で制約を検査します。衝突、吸着・機構動作、追従誤差、初期化の物理動作、実行時間やタイムアウトは判定対象外です。
 
 ## 設定の読込
@@ -103,7 +122,7 @@ ros2 run catchrobo2026_sequence check_sequence_config \
 
 `execute_sequence`（`catchrobo2026_msgs/action/ExecuteSequence`）の要求には `control_epoch`・`step_id`・種類・UI位置・`collector_mask` を含めます。種類はINITIALIZE=5／START=4／END=6／PICK=1／PLACE=2です。INITIALIZE／START／ENDは位置を使用せず `collector_mask=7` で送信します。PICKはrow=0..3／column=1..4、PLACEはbox=0..3／box_column=0..1です。機構選択はUIのbit0/1/2（L/C/R）で、設定ファイルには記述しません。
 
-シーケンスグループ外の `move` は `generate_route`（`GenerateRoute`）へ絶対目標の `x,y,z,phi` を渡し、成功応答の `path` を `follow_route`（`FollowRoute`）の `path` へ渡し、`start=true` で開始します。連続する `waypoint` は次の通常 `move` と一つの経路にまとめ、中間点での個別の到達待ちを省きます。`move` の `waypoints` オプションでも経由点列を指定でき、従来の `move.waypoint: true` も使用できます。経由点1件だけの共通手順を `call`／`extends` し、同じ実行シーケンス内の後続 `move` へ接続できます。空の経路が返った場合は失敗とし、以前の経路を再利用しません。最後の移動先への追従成功を待ってから後続手順へ進みます。指定方法と制約は [経由点の設定](CONFIG.md#経由点waypoint) を参照してください。
+シーケンスグループ外の `move` は `generate_route`（`GenerateRoute`）へ絶対目標の `x,y,z,phi` を渡し、成功応答の `path` を `follow_route`（`FollowRoute`）の `path` へ渡し、`start=true` で開始します。連続する `waypoint` は次の通常 `move` と一つの経路にまとめ、中間点での個別の到達待ちを省きます。`move` の `waypoints` オプションでも経由点列を指定でき、従来の `move.waypoint: true` も使用できます。経由点1件だけの共通手順を`call`／`extends`し、同じ動作内の後続`move`、またはPICK／PLACE末尾から次のUI動作の最初の移動へ接続できます。空の経路が返った場合は失敗とし、以前の経路を再利用しません。最後の移動先への追従成功を待ってから後続手順へ進みます。指定方法と制約は [経由点の設定](CONFIG.md#経由点waypoint) を参照してください。
 
 シーケンサからの `GenerateRoute` は毎回 `use_explicit_waypoints=true` とし、要求内の `waypoints` に経由点を列挙します。経由点なしの移動では空配列です。YAMLと要求の最終目標はmm／rad、要求内の経由点はROS Poseのm／Quaternionへ変換します。生成結果の `route`／`path` もmです。要求内で経由点と終点をまとめるため、取消や失敗で共有の `waypoint` 蓄積へ経由点が残りません。
 
@@ -123,7 +142,7 @@ ros2 run catchrobo2026_sequence check_sequence_config \
 
 UIのcancel／end／resetで現在動作を取り消します。UIは旧動作の終端結果を受けるまで次を送信せず、古い成功通知を新しいステップへ適用しません。動作失敗時は完了を記録せずUIをFINISHEDへ進め、原因をcontrol_nodeのログへ出します。
 
-シーケンサは待機・サービス応答・追従結果を非同期で処理します。取消時は後続手順を止め、実行中のFollowRouteを取り消します。シーケンスグループ外では従来どおり追従ループを終了し、実測角の保持指令は追加しません。シーケンスグループ内ではJoyのグループ解除も要求し、最後に有効だった4関節の指令を保持します。これはモータの非常停止や停止確認を意味しません。ポンプ／エンドエフェクタの指令は保持し、勝手に開放しません。既に送信したサービス要求は取り消せないため、応答を待ってから動作を終えます。
+シーケンサは待機・サービス応答・追従結果を非同期で処理します。取消時は後続手順を止め、実行中のFollowRouteを取り消し、次の動作用に保留した経由点も破棄します。シーケンスグループ外では従来どおり追従ループを終了し、実測角の保持指令は追加しません。シーケンスグループ内ではJoyのグループ解除も要求し、最後に有効だった4関節の指令を保持します。これはモータの非常停止や停止確認を意味しません。ポンプ／エンドエフェクタの指令は保持し、勝手に開放しません。既に送信したサービス要求は取り消せないため、応答を待ってから動作を終えます。
 
 停止待ち時間を超えて結果が不明な場合は失敗を返し、以降の動作を拒否します。接続先の状態を確認したうえでノードを再起動する必要があります。プロセス強制終了・通信断時の実機停止、原点復帰、衝突回避、手動との自動切替は別途必要です。
 
