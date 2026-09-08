@@ -310,3 +310,57 @@ def test_sequence_yaml_group_through_real_navigation(rotation_rig, tmp_path):
         wrist_angle=rig.joints[-1].data[3], target=rig.poses[-1])))
     assert released.success, released.message
     end(rig, next_id)
+
+
+@pytest.mark.parametrize('team', ['red', 'blue'])
+@pytest.mark.parametrize('grouped', [False, True])
+def test_first_pick_then_place_with_builtin_coordinates(rotation_rig, tmp_path, team, grouped):
+    from catchrobo2026_msgs.srv import EndeffectorControl, PumpControl
+
+    rig = rotation_rig
+
+    def mechanism_done(request, response):
+        response.success = True
+        return response
+
+    services = [
+        rig.node.create_service(PumpControl, 'set_pump_state', mechanism_done),
+        rig.node.create_service(EndeffectorControl, 'set_endeffector_state', mechanism_done),
+    ]
+    config_file = Path(__file__).parents[1] / 'config/sequences.yaml'
+    if grouped:
+        config = yaml.load(config_file.read_text(), Loader=yaml.BaseLoader)
+        place_name = config['bindings'][team]['place']['0,0']
+        steps = config['sequences'][place_name]['steps']
+        steps.insert(0, {'rotation_group': 'start'})
+        steps.append({'rotation_group': 'end'})
+        config_file = tmp_path / 'first_place_rotation_group.yaml'
+        config_file.write_text(yaml.safe_dump(config))
+    rig.launch('catchrobo2026_sequence', 'sequence_node', {
+        'team': team, 'sequence_file': config_file,
+    })
+    assert rig.sequence.wait_for_server(timeout_sec=15)
+
+    place_commands = []
+    for index, kind in enumerate([ExecuteSequence.Goal.PICK, ExecuteSequence.Goal.PLACE], 1):
+        if kind == ExecuteSequence.Goal.PLACE:
+            place_commands.append(rig.commands[-1].data[3])
+            command_start = len(rig.commands)
+        handle = rig.resolve(rig.sequence.send_goal_async(ExecuteSequence.Goal(
+            control_epoch=1, step_id=index, kind=kind, row=0, column=1,
+            box=0, box_column=0, collector_mask=7)))
+        assert handle.accepted
+        result = rig.resolve(handle.get_result_async())
+        assert result.result.success, result.result.message
+        rig.observe(0.1)
+    place_commands.extend(command.data[3] for command in rig.commands[command_start:])
+    assert len(place_commands) > 5
+    assert min(place_commands) >= -2 * math.pi - 1e-5
+    assert max(place_commands) <= 1e-5
+    assert max(abs(b-a) for a, b in zip(place_commands, place_commands[1:])) < math.pi
+    if grouped:
+        direction = 1 if team == 'red' else -1
+        assert min(direction*(b-a) for a, b in zip(place_commands, place_commands[1:])) >= -1e-5
+        assert max(abs(b-a) for a, b in zip(place_commands, place_commands[1:])) <= 0.051
+    for service in services:
+        rig.node.destroy_service(service)
