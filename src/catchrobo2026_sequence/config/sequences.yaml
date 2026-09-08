@@ -125,8 +125,7 @@ sequences:
     # - move: {absolute: lifecycle_pose}
   ending:
     steps:
-      - move: {
-          absolute: :[675, 200, 300, 0]}
+      - move: {absolute: [675, 200, 300, 0]}
       - move: {absolute: lifecycle_pose}
   startup:
     steps:
