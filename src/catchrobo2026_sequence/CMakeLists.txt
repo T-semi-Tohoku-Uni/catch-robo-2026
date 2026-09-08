@@ -47,6 +47,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_route_handoff test/test_route_handoff.py TIMEOUT 120)
+  ament_add_pytest_test(test_follower_arrival test/test_follower_arrival.py TIMEOUT 90)
+  ament_add_pytest_test(test_follower_joy_arrival test/test_follower_joy_arrival.py TIMEOUT 90)
   ament_add_pytest_test(test_waypoint_sequence test/test_waypoint_sequence.py TIMEOUT 120)
   ament_add_pytest_test(test_deferred_waypoint_sequence test/test_deferred_waypoint_sequence.py
     TIMEOUT 120)

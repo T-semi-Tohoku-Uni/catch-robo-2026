@@ -124,6 +124,8 @@ PICK／PLACEの末尾に経由点が残る場合、その時点では次の通�
 
 シーケンスグループ外の `move` は `generate_route`（`GenerateRoute`）へ絶対目標の `x,y,z,phi` を渡し、成功応答の `path` を `follow_route`（`FollowRoute`）の `path` へ渡し、`start=true` で開始します。連続する `waypoint` は次の通常 `move` と一つの経路にまとめ、中間点での個別の到達待ちを省きます。`move` の `waypoints` オプションでも経由点列を指定でき、従来の `move.waypoint: true` も使用できます。経由点1件だけの共通手順を`call`／`extends`し、同じ動作内の後続`move`、またはPICK／PLACE末尾から次のUI動作の最初の移動へ接続できます。空の経路が返った場合は失敗とし、以前の経路を再利用しません。最後の移動先への追従成功を待ってから後続手順へ進みます。指定方法と制約は [経由点の設定](CONFIG.md#経由点waypoint) を参照してください。
 
+到達判定では、最終的に送信する姿勢から計算した関節目標を固定し、送信後に受信した `current_joints` と比較します。通常MOVEはJoyと同じ第4関節の正規化を使い、groupは計画された巻き数を保持します。`target_joint_angles` の受信順や再配信には依存しません。位置30 mm・向き0.05 radに加え、関節0は0.05 rad、他の3関節は0.01 rad以内が既定の完了条件です。関節許容値はfollowerの `goal_joint_tolerance_first_rad`／`goal_joint_tolerance_remaining_rad` で設定でき、手動用launchでは全軸0.05 radを指定しています。手動補正は可能ですが、規定終点の許容範囲から外れたままなら完了を待ちます。
+
 シーケンサからの `GenerateRoute` は毎回 `use_explicit_waypoints=true` とし、要求内の `waypoints` に経由点を列挙します。経由点なしの移動では空配列です。YAMLと要求の最終目標はmm／rad、要求内の経由点はROS Poseのm／Quaternionへ変換します。生成結果の `route`／`path` もmです。要求内で経由点と終点をまとめるため、取消や失敗で共有の `waypoint` 蓄積へ経由点が残りません。
 
 シーケンスグループでは `plan_rotation_group`（`PlanRotationGroup`）へ全目標・通常MOVEの終点位置・グループの制約・phi計測区間を渡し、経路列と各点の第4関節角・方向をまとめて取得します。各経路を `FollowRoute` の `path`／`wrist_angles`／`wrist_direction`／`rotation_group_id` と、phi補間用の `phi_angles` へ渡して順に実行します。Joyの `wrist_control`（`WristControl`）はグループとphi計測区間それぞれの開始・終了、および姿勢と第4関節角を一緒にした指令を受け付けます。
