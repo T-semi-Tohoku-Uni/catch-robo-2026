@@ -3,6 +3,7 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/int32_multi_array.hpp"
+#include "std_srvs/srv/trigger.hpp"
 // 新しいサービス型のヘッダーをインクルード
 #include "catchrobo2026_msgs/srv/state_control.hpp"
 
@@ -22,6 +23,17 @@ public:
       "set_value",
       std::bind(&RepeaterNode::service_callback, this, std::placeholders::_1, std::placeholders::_2)
     );
+    initialization_service_ = this->create_service<std_srvs::srv::Trigger>(
+      "request_initialization",
+      [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+        // Share the toggle state between UI and joystick requests.
+        current_value_ = current_value_ == 0 ? 1 : 0;
+        timer_callback();
+        response->success = true;
+        response->message = "Initialization requested";
+        RCLCPP_INFO(this->get_logger(), "Initialization requested: %d", current_value_);
+      });
     
     // タイマーの設定 (100ms = 10Hz)
     timer_ = this->create_wall_timer(
@@ -53,6 +65,7 @@ private:
   int current_value_;
   rclcpp::Publisher<std_msgs::msg::Int32MultiArray>::SharedPtr publisher_;
   rclcpp::Service<catchrobo2026_msgs::srv::StateControl>::SharedPtr service_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr initialization_service_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 

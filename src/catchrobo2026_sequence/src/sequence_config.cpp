@@ -146,7 +146,9 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
       fail("config", "expected exactly one YAML document");
     }
     const YAML::Node root = documents.front();
-    keys(root, "config", {"version", "values", "poses", "sequences", "bindings"});
+    keys(root, "config", {"version", "values", "poses", "sequences", "bindings",
+      "start_sequence", "before_initialization_sequence", "after_initialization_sequence",
+      "end_sequence"});
     if (scalar(root["version"], "version") != "1") {
       fail("version", "only version 1 is supported");
     }
@@ -344,8 +346,8 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
             }
           }
         }
-        if (result.empty()) {
-          fail(where, "sequence must contain at least one step");
+        if (result.empty() && node.IsMap() && !node["steps"] && !node["extends"]) {
+          fail(where, "sequence must declare steps or extends");
         }
         visiting_sequences.erase(name);
         return config.sequences_.emplace(name, std::move(result)).first->second;
@@ -353,6 +355,16 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
     for (const auto & entry : sequence_nodes) {
       resolve_sequence(entry.first.Scalar());
     }
+    auto lifecycle_reference = [&](const std::string & key, std::string & target) {
+        if (root[key] && !root[key].IsNull()) {
+          target = scalar(root[key], key);
+          resolve_sequence(target);
+        }
+      };
+    lifecycle_reference("start_sequence", config.start_sequence_);
+    lifecycle_reference("before_initialization_sequence", config.before_initialization_sequence_);
+    lifecycle_reference("after_initialization_sequence", config.after_initialization_sequence_);
+    lifecycle_reference("end_sequence", config.end_sequence_);
 
     const YAML::Node bindings = root["bindings"];
     keys(bindings, "bindings", {"red", "blue"});
@@ -386,6 +398,9 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
       }
     }
     // Validate every enabled entry before the first robot command.
+    config.compile_start();
+    config.compile_initialization();
+    config.compile_end();
     for (const auto & entry : config.bindings_) {
       if (!entry.second.empty()) {
         config.compile(
@@ -409,7 +424,50 @@ std::vector<Step> SequenceConfig::compile(
   if (binding == bindings_.end() || binding->second.empty()) {
     fail(where, "target is unconfigured (missing or null binding)");
   }
-  const auto & source = sequences_.at(binding->second);
+  auto result = compile_sequence(binding->second, where);
+  if (result.empty()) {
+    fail(where, "PICK/PLACE sequence must contain at least one step");
+  }
+  return result;
+}
+
+std::vector<Step> SequenceConfig::compile_start() const
+{
+  if (start_sequence_.empty()) {
+    return {};
+  }
+  return compile_sequence(start_sequence_, "start_sequence");
+}
+
+std::vector<Step> SequenceConfig::compile_initialization() const
+{
+  auto before = before_initialization_sequence_.empty() ? std::vector<Step>{} :
+    compile_sequence(before_initialization_sequence_, "before_initialization_sequence");
+  // Homing changes the pose; each hook needs its own absolute anchor.
+  const auto after = after_initialization_sequence_.empty() ? std::vector<Step>{} :
+    compile_sequence(after_initialization_sequence_, "after_initialization_sequence");
+  if (before.size() + 1 + after.size() > kMaxExpandedSteps) {
+    fail("initialization_sequence", "expanded sequence exceeds 10000 steps");
+  }
+  Step initialization;
+  initialization.type = StepType::INITIALIZE;
+  before.push_back(initialization);
+  before.insert(before.end(), after.begin(), after.end());
+  return before;
+}
+
+std::vector<Step> SequenceConfig::compile_end() const
+{
+  if (end_sequence_.empty()) {
+    return {};
+  }
+  return compile_sequence(end_sequence_, "end_sequence");
+}
+
+std::vector<Step> SequenceConfig::compile_sequence(
+  const std::string & name, const std::string & where) const
+{
+  const auto & source = sequences_.at(name);
   Pose anchor{};
   bool has_anchor = false;
   std::vector<Step> result;

@@ -4,3 +4,5 @@ float64 z
 float64 phi
 ---
 bool success
+# Generated route for the corresponding follow request.
+nav_msgs/Path path

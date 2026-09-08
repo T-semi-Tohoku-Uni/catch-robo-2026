@@ -11,6 +11,7 @@
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "rcl_interfaces/msg/parameter_descriptor.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "std_srvs/srv/trigger.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "catchrobo2026_msgs/action/execute_sequence.hpp"
 #include "catchrobo2026_msgs/action/follow_route.hpp"
@@ -19,6 +20,7 @@
 #include "catchrobo2026_msgs/srv/pump_control.hpp"
 #include "catchrobo2026_sequence/sequence_config.hpp"
 
+using Trigger = std_srvs::srv::Trigger;
 using ExecuteSequence = catchrobo2026_msgs::action::ExecuteSequence;
 using FollowRoute = catchrobo2026_msgs::action::FollowRoute;
 using GenerateRoute = catchrobo2026_msgs::srv::GenerateRoute;
@@ -65,6 +67,7 @@ public:
             }
         }
         config_ = std::make_unique<SequenceConfig>(SequenceConfig::load(config_file_));
+        initialization_ = create_client<Trigger>("request_initialization");
         planner_ = create_client<GenerateRoute>("generate_route");
         pump_writer_ = create_client<PumpControl>("set_pump_state");
         endeffector_ = create_client<EndeffectorControl>("set_endeffector_state");
@@ -75,7 +78,13 @@ public:
                 if (goal_ || faulted_ || stop_requested || goal->control_epoch == 0 || goal->step_id == 0 ||
                     goal->collector_mask == 0 || goal->collector_mask > 7 ||
                     (goal->kind != ExecuteSequence::Goal::PICK &&
-                     goal->kind != ExecuteSequence::Goal::PLACE) ||
+                     goal->kind != ExecuteSequence::Goal::PLACE &&
+                     goal->kind != ExecuteSequence::Goal::START &&
+                     goal->kind != ExecuteSequence::Goal::INITIALIZE &&
+                     goal->kind != ExecuteSequence::Goal::END) ||
+                    ((goal->kind == ExecuteSequence::Goal::START ||
+                      goal->kind == ExecuteSequence::Goal::INITIALIZE ||
+                      goal->kind == ExecuteSequence::Goal::END) && goal->collector_mask != 7) ||
                     (goal->kind == ExecuteSequence::Goal::PICK &&
                      (goal->row > 3 || goal->column < 1 || goal->column > 4)) ||
                     (goal->kind == ExecuteSequence::Goal::PLACE &&
@@ -112,7 +121,7 @@ public:
 private:
     enum class Phase {
         READY, WAIT_PLAN, PLAN, WAIT_FOLLOW, FOLLOW_GOAL, FOLLOWING,
-        WAIT_PUMP_SET, PUMP_SET, WAIT_END, END, DELAY
+        WAIT_PUMP_SET, PUMP_SET, WAIT_END, END, WAIT_INITIALIZE, INITIALIZE, DELAY
     };
 
     static Clock::time_point after(double seconds)
@@ -147,11 +156,27 @@ private:
             // Compile the entire action before sending any hardware command.
             auto candidate = debug_ ? SequenceConfig::load(config_file_) : *config_;
             const auto request = goal_->get_goal();
+            const bool lifecycle = request->kind == ExecuteSequence::Goal::START ||
+                request->kind == ExecuteSequence::Goal::INITIALIZE ||
+                request->kind == ExecuteSequence::Goal::END;
             const bool pick = request->kind == ExecuteSequence::Goal::PICK;
-            steps_ = candidate.compile(team_, pick ? "pick" : "place",
-                pick ? request->row : request->box,
-                pick ? request->column : request->box_column);
-            if (steps_.empty()) {
+            switch (request->kind) {
+            case ExecuteSequence::Goal::INITIALIZE:
+                steps_ = candidate.compile_initialization();
+                break;
+            case ExecuteSequence::Goal::END:
+                steps_ = candidate.compile_end();
+                break;
+            case ExecuteSequence::Goal::START:
+                steps_ = candidate.compile_start();
+                break;
+            default:
+                steps_ = candidate.compile(team_, pick ? "pick" : "place",
+                    pick ? request->row : request->box,
+                    pick ? request->column : request->box_column);
+                break;
+            }
+            if (steps_.empty() && !lifecycle) {
                 throw std::runtime_error("the selected sequence has no steps");
             }
             if (debug_) {
@@ -272,10 +297,11 @@ private:
                 transition(Phase::PLAN, "planning", service_timeout_);
                 request<GenerateRoute>(planner_, generate_request_,
                     [this](GenerateRoute::Response::SharedPtr reply) {
-                        if (!reply->success) {
-                            begin_stop("route generation failed");
+                        if (!reply->success || reply->path.poses.empty()) {
+                            begin_stop("route generation failed or returned an empty path");
                             return;
                         }
+                        planned_path_ = reply->path;
                         transition(Phase::WAIT_FOLLOW, "waiting for follower", service_timeout_);
                     });
             }
@@ -302,6 +328,15 @@ private:
                 request<EndeffectorControl>(endeffector_, value,
                     [this](EndeffectorControl::Response::SharedPtr reply) {
                         command_done(reply->success, "endeffector command rejected");
+                    });
+            }
+            break;
+        case Phase::WAIT_INITIALIZE:
+            if (initialization_->service_is_ready()) {
+                transition(Phase::INITIALIZE, "requesting initialization", service_timeout_);
+                request<Trigger>(initialization_, std::make_shared<Trigger::Request>(),
+                    [this](Trigger::Response::SharedPtr reply) {
+                        command_done(reply->success, "initialization rejected: " + reply->message);
                     });
             }
             break;
@@ -359,6 +394,9 @@ private:
         case StepType::ENDEFFECTOR:
             transition(Phase::WAIT_END, "waiting for endeffector", service_timeout_);
             break;
+        case StepType::INITIALIZE:
+            transition(Phase::WAIT_INITIALIZE, "waiting for initialization", service_timeout_);
+            break;
         case StepType::WAIT:
             transition(Phase::DELAY, "waiting", step.seconds);
             break;
@@ -369,6 +407,7 @@ private:
     {
         FollowRoute::Goal goal;
         goal.start = true;
+        goal.path = planned_path_;
         route_pending_ = true;
         cancel_sent_ = false;
         transition(Phase::FOLLOW_GOAL, "sending route", service_timeout_);
@@ -429,11 +468,13 @@ private:
     std::unique_ptr<SequenceConfig> config_;
     std::vector<Step> steps_;
     size_t index_{0};
+    nav_msgs::msg::Path planned_path_;
     GenerateRoute::Request::SharedPtr generate_request_;
     PumpControl::Request::SharedPtr pump_request_;
     std::function<void()> abandon_request_;
     std::shared_ptr<SequenceGoal> goal_;
     RouteGoal::SharedPtr route_goal_;
+    rclcpp::Client<Trigger>::SharedPtr initialization_;
     rclcpp::Client<GenerateRoute>::SharedPtr planner_;
     rclcpp::Client<PumpControl>::SharedPtr pump_writer_;
     rclcpp::Client<EndeffectorControl>::SharedPtr endeffector_;
