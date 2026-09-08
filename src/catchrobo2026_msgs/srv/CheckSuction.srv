@@ -1,0 +1,15 @@
+# Select collectors with L/C/R in bits 0/1/2; zero and other bits are invalid.
+uint8 collector_mask
+# Wait for a fresh successful sample, for at most this many seconds (0 < t <= 86400).
+float64 timeout_sec
+---
+# All selected collectors reached the threshold in one sample after acceptance.
+bool success
+# A valid request expired. Both flags false indicate a rejected request.
+bool timed_out
+# Threshold result for all three collectors in the reported sample.
+uint8 suction_mask
+# L/C/R pressure from the last valid sample during this request.
+# All entries are INT32_MIN when no sample was received or the request was rejected.
+int32[3] pressure
+string message

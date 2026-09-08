@@ -27,11 +27,19 @@
 #   - endeffector: '$place_endeffector_command'  # 0 or 1; width, not angle
 #   - wait: 0.5                     # seconds
 #   - call: pick_common             # inline another sequence here
+#   - suction_check: {start: {timeout: 2.0}}
+#   - suction_check: wait           # save success or timeout for a later IF
+#   - if: {condition: suction_success, then: [{break: true}]}
+#   - for: {max_iterations: 3, steps: [{wait: 0.5}]}
+#   - fail: "Suction failed"
+# Match each suction start with wait; BREAK exits the innermost bounded FOR.
+# Put conditional branches around complete groups, never inside a preplanned group.
 # Relative moves use the last absolute target as a FIXED anchor, not the last move.
 # waypoint joins the next MOVE into one route, without an arrival wait here.
 # A waypoint-only common sequence can precede a MOVE through call or extends.
 # Consecutive waypoints must end in a normal MOVE before any other operation.
-# Waypoints never carry over to a separate UI action or initialization hook.
+# PICK/PLACE trailing waypoints carry to the next PICK/PLACE MOVE in the same epoch.
+# Lifecycle actions, reset, failure and cancel discard pending waypoints.
 # move.waypoints accepts pose names, [x,y,z,phi], {absolute: ...}, {relative: ...}.
 # Inline waypoints run before the move target and do not change its fixed anchor.
 # Inline relative entries use the absolute anchor BEFORE this move.
@@ -53,7 +61,7 @@
 # A group cannot cross a UI action or initialization hook, or split a waypoint route.
 # Put start before the first waypoint and end after its final normal MOVE.
 # Legacy rotation_group: start/end is equivalent to a group with rotation_group: true.
-# Ending below retains its previous direction constraint; its phi limit is not set yet.
+# Ending below limits phi travel only from A to B to 30 degrees.
 # Each lifecycle hook needs its own absolute anchor before any relative move.
 # PICK/PLACE pumps use the UI-selected collectors; other collectors receive off.
 # Lifecycle pump steps address all three collectors.
@@ -104,6 +112,9 @@ values:
   # Each offset is relative to the last absolute pose, not the preceding move.
   pick_approach_dz: -30
   pick_retreat_dz: 0
+  # Experimental retry settings; confirm pressure_comparison/indices in pump.yaml first.
+  pick_max_attempts: 3
+  pick_suction_timeout_sec: 2.0
   place_approach_dz: -10
   place_retreat_dz: 10
 
@@ -168,12 +179,39 @@ sequences:
     steps:
       - endeffector: '$place_endeffector_command'
   pick_common:
+    # Keep exactly one call active. Comment the experimental call to restore normal PICK.
+    # Swap these two comment markers to enable the experiment; no reindentation needed.
+    steps:
+      - call: pick_without_suction_check
+      # - call: pick_with_suction_check
+  pick_without_suction_check:
+    steps:
+      - call: pick_attempt
+      - endeffector: '$place_endeffector_command'
+  pick_with_suction_check:
+    steps:
+      - for:
+          max_iterations: '$pick_max_attempts'
+          steps:
+            - suction_check: {start: {timeout: '$pick_suction_timeout_sec'}}
+            - call: pick_attempt
+            - suction_check: wait
+            - if:
+                condition: suction_success
+                then:
+                  - break: true
+      - if:
+          condition: suction_failure
+          then:
+            - fail: "Suction failed after the maximum number of attempts"
+      - endeffector: '$place_endeffector_command'
+  pick_attempt:
+    # Shared motion preserves the current approach, Y correction, suction and retreat order.
     steps:
       - move: {relative: [0, 0, '$pick_approach_dz', 0]}
       - move: {relative: [0, -10, '$pick_approach_dz', 0]}
       - pump: suction
       - move: {relative: [0, 0, '$pick_retreat_dz', 0]}
-      - endeffector: '$place_endeffector_command'
   place_common:
     steps:
       - pump: release

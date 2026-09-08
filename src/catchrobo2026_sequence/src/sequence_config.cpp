@@ -285,6 +285,270 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
     }
     std::set<std::string> visiting_sequences;
     std::function<const std::vector<RawStep> &(const std::string &)> resolve_sequence;
+    auto push = [&](std::vector<RawStep> & result, RawStep raw, const std::string & where) {
+        if (expanded_size(result) + 1 + raw.waypoints.size() > kMaxExpandedSteps) {
+          fail(where, "expanded sequence exceeds 10000 steps including waypoints");
+        }
+        result.push_back(std::move(raw));
+      };
+    auto append = [&](
+        std::vector<RawStep> & result, const std::vector<RawStep> & included,
+        const std::string & where)
+      {
+        if (expanded_size(included) > kMaxExpandedSteps - expanded_size(result)) {
+          fail(where, "expanded sequence exceeds 10000 steps including waypoints");
+        }
+        const auto offset = result.size();
+        for (auto raw : included) {
+          if (raw.step.type == StepType::IF_SUCTION || raw.step.type == StepType::JUMP) {
+            raw.step.jump_index += offset;
+          }
+          result.push_back(std::move(raw));
+        }
+      };
+    std::size_t nesting_depth = 0;
+    std::function<void(
+        const YAML::Node &, const std::string &, std::vector<RawStep> &, bool)> parse_steps;
+    parse_steps = [&](
+        const YAML::Node & steps, const std::string & where,
+        std::vector<RawStep> & result, bool in_loop)
+      {
+        if (!steps.IsSequence()) {
+          fail(where, "expected a list");
+        }
+        if (++nesting_depth > kMaxReferenceDepth) {
+          fail(where, "step nesting depth exceeds 64");
+        }
+        for (std::size_t i = 0; i < steps.size(); ++i) {
+          const YAML::Node step = steps[i];
+          const std::string at = where + "[" + std::to_string(i) + "]";
+          keys(step, at, {"move", "waypoint", "call", "pump", "endeffector", "wait",
+            "rotation_group", "sequence_group", "phi_travel", "suction_check",
+            "if", "for", "break", "fail"});
+          if (step.size() != 1) {
+            fail(at, "a step must contain exactly one operation");
+          }
+          if (step["call"]) {
+            append(result, resolve_sequence(scalar(step["call"], at + ".call")), at);
+            continue;
+          }
+          if (step["for"]) {
+            const YAML::Node loop = step["for"];
+            keys(loop, at + ".for", {"max_iterations", "steps"});
+            const double count_value = numeric(loop["max_iterations"], at + ".for.max_iterations");
+            if (count_value < 1.0 || count_value > kMaxExpandedSteps ||
+              std::floor(count_value) != count_value)
+            {
+              fail(at + ".for.max_iterations", "expected an integer within 1..10000");
+            }
+            std::vector<RawStep> body;
+            parse_steps(loop["steps"], at + ".for.steps", body, true);
+            if (body.empty()) {
+              continue;
+            }
+            const auto count = static_cast<std::size_t>(count_value);
+            if (count > (kMaxExpandedSteps - expanded_size(result)) / expanded_size(body)) {
+              fail(at + ".for", "expanded sequence exceeds 10000 steps");
+            }
+            const auto loop_end = result.size() + count * body.size();
+            for (std::size_t iteration = 0; iteration < count; ++iteration) {
+              const auto offset = result.size();
+              for (auto raw : body) {
+                if (raw.loop_break) {
+                  raw.step.jump_index = loop_end;
+                  raw.loop_break = false;
+                } else if (raw.step.type == StepType::IF_SUCTION ||
+                  raw.step.type == StepType::JUMP)
+                {
+                  raw.step.jump_index += offset;
+                }
+                result.push_back(std::move(raw));
+              }
+            }
+            continue;
+          }
+          RawStep raw;
+          raw.where = at;
+          if (step["if"]) {
+            const YAML::Node branch = step["if"];
+            keys(branch, at + ".if", {"condition", "then", "else"});
+            const auto condition = scalar(branch["condition"], at + ".if.condition");
+            if (condition != "suction_success" && condition != "suction_failure") {
+              fail(at + ".if.condition", "expected suction_success or suction_failure");
+            }
+            raw.step.type = StepType::IF_SUCTION;
+            raw.step.condition_success = condition == "suction_success";
+            const auto branch_index = result.size();
+            push(result, std::move(raw), at);
+            parse_steps(branch["then"], at + ".if.then", result, in_loop);
+            if (branch["else"]) {
+              RawStep skip_else;
+              skip_else.step.type = StepType::JUMP;
+              skip_else.where = at;
+              const auto skip_index = result.size();
+              push(result, std::move(skip_else), at);
+              result[branch_index].step.jump_index = result.size();
+              parse_steps(branch["else"], at + ".if.else", result, in_loop);
+              result[skip_index].step.jump_index = result.size();
+            } else {
+              result[branch_index].step.jump_index = result.size();
+            }
+            continue;
+          }
+          if (step["move"] || step["waypoint"]) {
+            const bool standalone = static_cast<bool>(step["waypoint"]);
+            const auto key = standalone ? "waypoint" : "move";
+            const auto move_at = at + "." + key;
+            const YAML::Node move = step[key];
+            keys(move, move_at, standalone ? std::set<std::string>{"absolute", "relative"} :
+              std::set<std::string>{"absolute", "relative", "waypoint", "waypoints"});
+            const auto target = target_value(move, move_at);
+            raw.step.type = StepType::MOVE;
+            raw.step.waypoint = standalone;
+            if (move["waypoint"]) {
+              const auto waypoint = scalar(move["waypoint"], move_at + ".waypoint");
+              if (waypoint != "true" && waypoint != "false") {
+                fail(move_at + ".waypoint", "expected true or false");
+              }
+              raw.step.waypoint = waypoint == "true";
+            }
+            raw.relative = target.relative;
+            raw.step.pose = target.pose;
+            if (move["waypoints"]) {
+              const auto points = move["waypoints"];
+              if (!points.IsSequence()) {
+                fail(move_at + ".waypoints", "expected a list");
+              }
+              if (points.size() >= kMaxExpandedSteps) {
+                fail(move_at + ".waypoints",
+                  "expanded sequence exceeds 10000 steps including waypoints");
+              }
+              for (std::size_t j = 0; j < points.size(); ++j) {
+                raw.waypoints.push_back(waypoint_value(
+                  points[j], move_at + ".waypoints[" + std::to_string(j) + "]"));
+              }
+            }
+          } else if (step["sequence_group"]) {
+            const auto group = step["sequence_group"];
+            const auto group_at = at + ".sequence_group";
+            if (group.IsMap()) {
+              keys(group, group_at, {"start", "rotation_group", "max_phi_travel"});
+              if (scalar(group["start"], group_at + ".start") != "true") {
+                fail(group_at + ".start", "expected true");
+              }
+              raw.step.type = StepType::SEQUENCE_START;
+              if (group["rotation_group"]) {
+                const auto value = scalar(
+                  group["rotation_group"], group_at + ".rotation_group");
+                if (value != "true" && value != "false") {
+                  fail(group_at + ".rotation_group", "expected true or false");
+                }
+                raw.step.rotation_group = value == "true";
+              }
+              if (group["max_phi_travel"]) {
+                const double limit = numeric(
+                  group["max_phi_travel"], group_at + ".max_phi_travel");
+                if (limit < 0.0) {
+                  fail(group_at + ".max_phi_travel", "expected a nonnegative limit in radians");
+                }
+                raw.step.max_phi_travel = limit;
+              }
+            } else {
+              const auto value = scalar(group, group_at);
+              if (value != "start" && value != "end") {
+                fail(group_at, "expected start, end or a start options mapping");
+              }
+              raw.step.type = value == "start" ?
+                StepType::SEQUENCE_START : StepType::SEQUENCE_END;
+            }
+          } else if (step["phi_travel"]) {
+            const auto interval = step["phi_travel"];
+            const auto interval_at = at + ".phi_travel";
+            if (interval.IsMap()) {
+              keys(interval, interval_at, {"start", "limit"});
+              if (scalar(interval["start"], interval_at + ".start") != "true") {
+                fail(interval_at, "expected start: true and a limit in radians");
+              }
+              const double limit = numeric(interval["limit"], interval_at + ".limit");
+              if (limit < 0.0) {
+                fail(interval_at, "expected a nonnegative limit in radians");
+              }
+              raw.step.type = StepType::PHI_TRAVEL_START;
+              raw.step.max_phi_travel = limit;
+            } else {
+              if (scalar(interval, interval_at) != "end") {
+                fail(interval_at, "expected end or {start: true, limit: radians}");
+              }
+              raw.step.type = StepType::PHI_TRAVEL_END;
+            }
+          } else if (step["rotation_group"]) {
+            const auto value = scalar(step["rotation_group"], at + ".rotation_group");
+            if (value != "start" && value != "end") {
+              fail(at + ".rotation_group", "expected start or end");
+            }
+            raw.step.type = value == "start" ?
+              StepType::SEQUENCE_START : StepType::SEQUENCE_END;
+            raw.step.rotation_group = value == "start";
+          } else if (step["pump"]) {
+            const auto value = scalar(step["pump"], at + ".pump");
+            raw.step.type = StepType::PUMP;
+            if (value == "release") {
+              raw.step.command = -1;
+            } else if (value == "off") {
+              raw.step.command = 0;
+            } else if (value == "suction") {
+              raw.step.command = 1;
+            } else {
+              fail(at + ".pump", "expected release, off or suction");
+            }
+          } else if (step["endeffector"]) {
+            const auto value = numeric(step["endeffector"], at + ".endeffector");
+            if (value != 0.0 && value != 1.0) {
+              fail(at + ".endeffector", "expected command 0 or 1");
+            }
+            raw.step.type = StepType::ENDEFFECTOR;
+            raw.step.command = value == 1.0 ? 1 : 0;
+          } else if (step["suction_check"]) {
+            const YAML::Node check = step["suction_check"];
+            if (check.IsScalar()) {
+              if (scalar(check, at + ".suction_check") != "wait") {
+                fail(at + ".suction_check", "expected wait or {start: {timeout: seconds}}");
+              }
+              raw.step.type = StepType::SUCTION_CHECK_WAIT;
+            } else {
+              keys(check, at + ".suction_check", {"start"});
+              keys(check["start"], at + ".suction_check.start", {"timeout"});
+              raw.step.type = StepType::SUCTION_CHECK_START;
+              raw.step.seconds = numeric(
+                check["start"]["timeout"], at + ".suction_check.start.timeout");
+              if (raw.step.seconds <= 0.0 || raw.step.seconds > MAX_DURATION_SEC) {
+                fail(
+                  at + ".suction_check.start.timeout", "timeout must be within (0, 86400] seconds");
+              }
+            }
+          } else if (step["break"]) {
+            if (scalar(step["break"], at + ".break") != "true") {
+              fail(at + ".break", "expected true");
+            }
+            if (!in_loop) {
+              fail(at + ".break", "break needs an enclosing for in the same sequence");
+            }
+            raw.step.type = StepType::JUMP;
+            raw.loop_break = true;
+          } else if (step["fail"]) {
+            raw.step.type = StepType::FAIL;
+            raw.step.message = scalar(step["fail"], at + ".fail");
+          } else {
+            raw.step.type = StepType::WAIT;
+            raw.step.seconds = numeric(step["wait"], at + ".wait");
+            if (raw.step.seconds < 0.0 || raw.step.seconds > MAX_DURATION_SEC) {
+              fail(at + ".wait", "wait must be within 0..86400 seconds");
+            }
+          }
+          push(result, std::move(raw), at);
+        }
+        --nesting_depth;
+      };
     resolve_sequence = [&](const std::string & name) -> const std::vector<RawStep> & {
         const auto found = config.sequences_.find(name);
         if (found != config.sequences_.end()) {
@@ -302,18 +566,11 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
           fail(where, "sequence reference depth exceeds 64");
         }
         std::vector<RawStep> result;
-        std::size_t expanded_count = 0;
-        auto append = [&](const std::string & reference) {
-            const auto & included = resolve_sequence(reference);
-            const auto count = expanded_size(included);
-            if (expanded_count + count > kMaxExpandedSteps) {
-              fail(where, "expanded sequence exceeds 10000 steps including waypoints");
-            }
-            result.insert(result.end(), included.begin(), included.end());
-            expanded_count += count;
+        auto append_reference = [&](const std::string & reference) {
+            append(result, resolve_sequence(reference), where);
           };
         if (node.IsScalar()) {
-          append(scalar(node, where));
+          append_reference(scalar(node, where));
         } else {
           keys(node, where, {"extends", "steps"});
           if (node["extends"]) {
@@ -323,157 +580,14 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
                 fail(where + ".extends", "expected at least one parent");
               }
               for (const auto & parent : parents) {
-                append(scalar(parent, where + ".extends"));
+                append_reference(scalar(parent, where + ".extends"));
               }
             } else {
-              append(scalar(parents, where + ".extends"));
+              append_reference(scalar(parents, where + ".extends"));
             }
           }
           if (node["steps"]) {
-            const YAML::Node steps = node["steps"];
-            if (!steps.IsSequence()) {
-              fail(where + ".steps", "expected a list");
-            }
-            for (std::size_t i = 0; i < steps.size(); ++i) {
-              const YAML::Node step = steps[i];
-              const std::string at = where + ".steps[" + std::to_string(i) + "]";
-              keys(step, at, {
-                "move", "waypoint", "call", "pump", "endeffector", "wait", "rotation_group",
-                "sequence_group", "phi_travel"});
-              if (step.size() != 1) {
-                fail(at, "a step must contain exactly one operation");
-              }
-              if (step["call"]) {
-                append(scalar(step["call"], at + ".call"));
-                continue;
-              }
-              RawStep raw;
-              if (step["move"] || step["waypoint"]) {
-                const bool standalone = static_cast<bool>(step["waypoint"]);
-                const auto key = standalone ? "waypoint" : "move";
-                const auto move_at = at + "." + key;
-                const YAML::Node move = step[key];
-                keys(move, move_at, standalone ? std::set<std::string>{"absolute", "relative"} :
-                  std::set<std::string>{"absolute", "relative", "waypoint", "waypoints"});
-                const auto target = target_value(move, move_at);
-                raw.step.type = StepType::MOVE;
-                raw.step.waypoint = standalone;
-                if (move["waypoint"]) {
-                  const auto waypoint = scalar(move["waypoint"], move_at + ".waypoint");
-                  if (waypoint != "true" && waypoint != "false") {
-                    fail(move_at + ".waypoint", "expected true or false");
-                  }
-                  raw.step.waypoint = waypoint == "true";
-                }
-                raw.relative = target.relative;
-                raw.step.pose = target.pose;
-                if (move["waypoints"]) {
-                  const auto points = move["waypoints"];
-                  if (!points.IsSequence()) {
-                    fail(move_at + ".waypoints", "expected a list");
-                  }
-                  if (points.size() >= kMaxExpandedSteps) {
-                    fail(move_at + ".waypoints",
-                      "expanded sequence exceeds 10000 steps including waypoints");
-                  }
-                  for (std::size_t j = 0; j < points.size(); ++j) {
-                    raw.waypoints.push_back(waypoint_value(
-                      points[j], move_at + ".waypoints[" + std::to_string(j) + "]"));
-                  }
-                }
-              } else if (step["sequence_group"]) {
-                const auto group = step["sequence_group"];
-                const auto group_at = at + ".sequence_group";
-                if (group.IsMap()) {
-                  keys(group, group_at, {"start", "rotation_group", "max_phi_travel"});
-                  if (scalar(group["start"], group_at + ".start") != "true") {
-                    fail(group_at + ".start", "expected true");
-                  }
-                  raw.step.type = StepType::SEQUENCE_START;
-                  if (group["rotation_group"]) {
-                    const auto value = scalar(
-                      group["rotation_group"], group_at + ".rotation_group");
-                    if (value != "true" && value != "false") {
-                      fail(group_at + ".rotation_group", "expected true or false");
-                    }
-                    raw.step.rotation_group = value == "true";
-                  }
-                  if (group["max_phi_travel"]) {
-                    const double limit = numeric(
-                      group["max_phi_travel"], group_at + ".max_phi_travel");
-                    if (limit < 0.0) {
-                      fail(group_at + ".max_phi_travel", "expected a nonnegative limit in radians");
-                    }
-                    raw.step.max_phi_travel = limit;
-                  }
-                } else {
-                  const auto value = scalar(group, group_at);
-                  if (value != "start" && value != "end") {
-                    fail(group_at, "expected start, end or a start options mapping");
-                  }
-                  raw.step.type = value == "start" ?
-                    StepType::SEQUENCE_START : StepType::SEQUENCE_END;
-                }
-              } else if (step["phi_travel"]) {
-                const auto interval = step["phi_travel"];
-                const auto interval_at = at + ".phi_travel";
-                if (interval.IsMap()) {
-                  keys(interval, interval_at, {"start", "limit"});
-                  if (scalar(interval["start"], interval_at + ".start") != "true") {
-                    fail(interval_at, "expected start: true and a limit in radians");
-                  }
-                  const double limit = numeric(interval["limit"], interval_at + ".limit");
-                  if (limit < 0.0) {
-                    fail(interval_at, "expected a nonnegative limit in radians");
-                  }
-                  raw.step.type = StepType::PHI_TRAVEL_START;
-                  raw.step.max_phi_travel = limit;
-                } else {
-                  if (scalar(interval, interval_at) != "end") {
-                    fail(interval_at, "expected end or {start: true, limit: radians}");
-                  }
-                  raw.step.type = StepType::PHI_TRAVEL_END;
-                }
-              } else if (step["rotation_group"]) {
-                const auto value = scalar(step["rotation_group"], at + ".rotation_group");
-                if (value != "start" && value != "end") {
-                  fail(at + ".rotation_group", "expected start or end");
-                }
-                raw.step.type = value == "start" ?
-                  StepType::SEQUENCE_START : StepType::SEQUENCE_END;
-                raw.step.rotation_group = value == "start";
-              } else if (step["pump"]) {
-                const auto value = scalar(step["pump"], at + ".pump");
-                raw.step.type = StepType::PUMP;
-                if (value == "release") {
-                  raw.step.command = -1;
-                } else if (value == "off") {
-                  raw.step.command = 0;
-                } else if (value == "suction") {
-                  raw.step.command = 1;
-                } else {
-                  fail(at + ".pump", "expected release, off or suction");
-                }
-              } else if (step["endeffector"]) {
-                const auto value = numeric(step["endeffector"], at + ".endeffector");
-                if (value != 0.0 && value != 1.0) {
-                  fail(at + ".endeffector", "expected command 0 or 1");
-                }
-                raw.step.type = StepType::ENDEFFECTOR;
-                raw.step.command = value == 1.0 ? 1 : 0;
-              } else {
-                raw.step.type = StepType::WAIT;
-                raw.step.seconds = numeric(step["wait"], at + ".wait");
-                if (raw.step.seconds < 0.0 || raw.step.seconds > MAX_DURATION_SEC) {
-                  fail(at + ".wait", "wait must be within 0..86400 seconds");
-                }
-              }
-              expanded_count += 1 + raw.waypoints.size();
-              if (expanded_count > kMaxExpandedSteps) {
-                fail(where, "expanded sequence exceeds 10000 steps including waypoints");
-              }
-              result.push_back(raw);
-            }
+            parse_steps(node["steps"], where + ".steps", result, false);
           }
         }
         if (result.empty() && node.IsMap() && !node["steps"] && !node["extends"]) {
@@ -574,7 +688,7 @@ std::vector<Step> SequenceConfig::compile_initialization() const
   auto before = before_initialization_sequence_.empty() ? std::vector<Step>{} :
     compile_sequence(before_initialization_sequence_, "before_initialization_sequence", false);
   // Homing changes the pose; each hook needs its own absolute anchor.
-  const auto after = after_initialization_sequence_.empty() ? std::vector<Step>{} :
+  auto after = after_initialization_sequence_.empty() ? std::vector<Step>{} :
     compile_sequence(after_initialization_sequence_, "after_initialization_sequence", false);
   if (expanded_size(before) + 1 + expanded_size(after) > kMaxExpandedSteps) {
     fail("initialization_sequence", "expanded sequence exceeds 10000 steps including waypoints");
@@ -582,6 +696,11 @@ std::vector<Step> SequenceConfig::compile_initialization() const
   Step initialization;
   initialization.type = StepType::INITIALIZE;
   before.push_back(initialization);
+  for (auto & step : after) {
+    if (step.type == StepType::IF_SUCTION || step.type == StepType::JUMP) {
+      step.jump_index += before.size();
+    }
+  }
   before.insert(before.end(), after.begin(), after.end());
   return before;
 }
@@ -630,22 +749,90 @@ std::vector<Step> SequenceConfig::compile_sequence(
   const std::string & name, const std::string & where, bool allow_deferred_waypoints) const
 {
   const auto & source = sequences_.at(name);
-  Pose anchor{};
-  bool has_anchor = false;
+  struct Anchor
+  {
+    bool reachable{false};
+    bool has_value{false};
+    bool ambiguous{false};
+    Pose value{};
+  };
+  // Keep anchors correlated with the last check result across conditionals.
+  constexpr std::size_t no_result = 0;
+  constexpr std::size_t pending = 1;
+  constexpr std::size_t success = 2;
+  constexpr std::size_t failure = 3;
+  using Flow = std::array<Anchor, 4>;
+  auto merge_anchor = [](Anchor & target, const Anchor & incoming) {
+      if (!incoming.reachable) {
+        return;
+      }
+      if (!target.reachable) {
+        target = incoming;
+        return;
+      }
+      if (target.ambiguous || incoming.ambiguous ||
+        target.has_value != incoming.has_value ||
+        (target.has_value && target.value != incoming.value))
+      {
+        target.ambiguous = true;
+        target.has_value = false;
+      }
+    };
+  auto merge_flow = [&](Flow & target, const Flow & incoming) {
+      for (std::size_t state = 0; state < target.size(); ++state) {
+        merge_anchor(target[state], incoming[state]);
+      }
+    };
+  std::vector<Flow> incoming(source.size() + 1);
+  incoming.front()[no_result].reachable = true;
   std::vector<Step> result;
   result.reserve(source.size());
   for (const auto & raw : source) {
-    Step step = raw.step;
+    result.push_back(raw.step);
+  }
+  // Unrolled loops only jump forward, so one pass covers every incoming path.
+  for (std::size_t index = 0; index < source.size(); ++index) {
+    const auto & raw = source[index];
+    auto & step = result[index];
+    const auto & flow = incoming[index];
+    const auto at = where + " -> " + raw.where;
+    if ((step.type == StepType::IF_SUCTION || step.type == StepType::JUMP) &&
+      (step.jump_index <= index || step.jump_index > source.size()))
+    {
+      fail(at, "invalid forward jump target");
+    }
+    bool reachable = false;
+    for (const auto & anchor : flow) {
+      reachable = reachable || anchor.reachable;
+    }
+    if (!reachable) {
+      continue;
+    }
+    Flow next = flow;
     if (step.type == StepType::MOVE) {
+      const Anchor * anchor = nullptr;
+      if (raw.relative || std::any_of(raw.waypoints.begin(), raw.waypoints.end(),
+          [](const RawPose & point) {return point.relative;}))
+      {
+        for (const auto & candidate : flow) {
+          if (!candidate.reachable) {
+            continue;
+          }
+          if (!candidate.has_value || candidate.ambiguous) {
+            fail(at, "relative movement needs one preceding absolute anchor on every path");
+          }
+          if (anchor && anchor->value != candidate.value) {
+            fail(at, "relative movement has different branch anchors; add an absolute movement");
+          }
+          anchor = &candidate;
+        }
+      }
       // Inline points use the preceding anchor without changing the MOVE target's basis.
       for (const auto & point : raw.waypoints) {
         Pose resolved = point.pose;
         if (point.relative) {
-          if (!has_anchor) {
-            fail(where, "relative waypoint needs a preceding absolute movement");
-          }
           for (std::size_t i = 0; i < resolved.size(); ++i) {
-            resolved[i] += anchor[i];
+            resolved[i] += anchor->value[i];
             if (!std::isfinite(resolved[i])) {
               fail(where, "relative waypoint overflows a finite coordinate");
             }
@@ -654,27 +841,69 @@ std::vector<Step> SequenceConfig::compile_sequence(
         step.waypoints.push_back(resolved);
       }
       if (raw.relative) {
-        if (!has_anchor) {
-          fail(where, "relative movement needs a preceding absolute movement");
-        }
         for (std::size_t i = 0; i < step.pose.size(); ++i) {
-          step.pose[i] += anchor[i];
+          step.pose[i] += anchor->value[i];
           if (!std::isfinite(step.pose[i])) {
-            fail(where, "relative movement overflows a finite coordinate");
+            fail(at, "relative movement overflows a finite coordinate");
           }
         }
       } else {
-        anchor = step.pose;
-        has_anchor = true;
+        for (auto & anchor : next) {
+          if (anchor.reachable) {
+            anchor.has_value = true;
+            anchor.ambiguous = false;
+            anchor.value = step.pose;
+          }
+        }
       }
+    } else if (step.type == StepType::SUCTION_CHECK_START) {
+      if (flow[pending].reachable) {
+        fail(at, "suction_check start needs a wait for the pending check first");
+      }
+      next = Flow{};
+      for (const auto & anchor : flow) {
+        merge_anchor(next[pending], anchor);
+      }
+    } else if (step.type == StepType::SUCTION_CHECK_WAIT) {
+      if (flow[no_result].reachable || flow[success].reachable || flow[failure].reachable) {
+        fail(at, "suction_check wait needs a pending start on every path");
+      }
+      next = Flow{};
+      next[success] = flow[pending];
+      next[failure] = flow[pending];
+    } else if (step.type == StepType::IF_SUCTION) {
+      if (flow[no_result].reachable || flow[pending].reachable) {
+        fail(at, "suction condition needs a completed suction_check wait on every path");
+      }
+      for (const auto state : {success, failure}) {
+        const auto target = (state == success) == step.condition_success ?
+          index + 1 : step.jump_index;
+        merge_anchor(incoming[target][state], flow[state]);
+      }
+      continue;
+    } else if (step.type == StepType::JUMP) {
+      merge_flow(incoming[step.jump_index], flow);
+      continue;
+    } else if (step.type == StepType::FAIL) {
+      continue;
     }
-    result.push_back(step);
+    merge_flow(incoming[index + 1], next);
+  }
+  if (incoming.back()[pending].reachable) {
+    fail(where, "suction_check start must be followed by wait before sequence completion");
   }
   bool in_sequence_group = false;
   bool sequence_group_has_move = false;
   std::size_t group_start = 0;
+  std::vector<std::optional<std::size_t>> group_at(result.size() + 1);
   for (std::size_t i = 0; i < result.size(); ++i) {
     const auto at = where + ".steps[" + std::to_string(i) + "]";
+    if (in_sequence_group) {
+      group_at[i] = group_start;
+      if (result[i].type == StepType::IF_SUCTION || result[i].type == StepType::JUMP) {
+        fail(at, "conditions and break cannot run inside a preplanned sequence group");
+      }
+    }
     const bool deferred_tail = i + 1 == result.size() &&
       allow_deferred_waypoints && !in_sequence_group;
     if (result[i].waypoint && !deferred_tail &&
@@ -711,6 +940,28 @@ std::vector<Step> SequenceConfig::compile_sequence(
   }
   if (in_sequence_group) {
     fail(where, "sequence_group start needs a matching end in the same action or hook");
+  }
+  std::size_t tail_start = result.size();
+  while (tail_start > 0 && result[tail_start - 1].type == StepType::MOVE &&
+    result[tail_start - 1].waypoint)
+  {
+    --tail_start;
+  }
+  for (std::size_t i = 0; i < result.size(); ++i) {
+    const auto & step = result[i];
+    if (step.type != StepType::IF_SUCTION && step.type != StepType::JUMP) {
+      continue;
+    }
+    const auto at = where + ".steps[" + std::to_string(i) + "]";
+    if (group_at[step.jump_index]) {
+      fail(at, "a jump cannot enter an active sequence group");
+    }
+    if (tail_start < result.size() && step.jump_index > tail_start) {
+      fail(at, "a jump cannot skip deferred waypoints; put them after the conditional");
+    }
+    if (step.jump_index > 0 && result[step.jump_index - 1].waypoint) {
+      fail(at, "a jump cannot enter the middle of a waypoint route");
+    }
   }
   return result;
 }
@@ -772,12 +1023,31 @@ PreparedSequence prepare_sequence(std::vector<Step> steps, const std::vector<Pos
     result.deferred_waypoints.push_back(steps[i].pose);
   }
   steps.resize(end);
+  for (auto & step : steps) {
+    if (step.type == StepType::IF_SUCTION || step.type == StepType::JUMP) {
+      // Compiled control flow can enter the deferred tail only at its start.
+      if (step.jump_index > end) {
+        fail("continuation", "a jump cannot skip deferred waypoints");
+      }
+    }
+  }
   const auto first_move = std::find_if(steps.begin(), steps.end(), [](const Step & step) {
       return step.type == StepType::MOVE;
     });
   if (first_move == steps.end()) {
     result.deferred_waypoints.insert(result.deferred_waypoints.begin(), pending.begin(), pending.end());
   } else {
+    if (!pending.empty()) {
+      const auto first_index = static_cast<std::size_t>(first_move - steps.begin());
+      for (std::size_t i = 0; i < first_index; ++i) {
+        const auto & step = steps[i];
+        if ((step.type == StepType::IF_SUCTION || step.type == StepType::JUMP) &&
+          step.jump_index > first_index)
+        {
+          fail("continuation", "pending waypoints require an unconditional first MOVE");
+        }
+      }
+    }
     first_move->waypoints.insert(first_move->waypoints.begin(), pending.begin(), pending.end());
     result.consumed_pending_waypoints = pending.size();
   }

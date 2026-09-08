@@ -343,4 +343,147 @@ TEST(SequenceCheck, InitializationStepAlsoDiscardsIncomingWaypoints)
   EXPECT_EQ(next.consumed_pending_waypoints, 0u);
 }
 
+TEST(SequenceCheck, SuctionConditionStopsBeforeEitherBranchOrLaterMotion)
+{
+  for (const bool condition_success : {true, false}) {
+    auto condition = flag(StepType::IF_SUCTION);
+    condition.condition_success = condition_success;
+    condition.jump_index = 6;
+    auto skip_else = flag(StepType::JUMP);
+    skip_else.jump_index = 7;
+    auto failure = flag(StepType::FAIL);
+    failure.message = "Suction failed";
+    const auto result = check_sequence_steps({move_to(kEndingA),
+        flag(StepType::SUCTION_CHECK_START), flag(StepType::SUCTION_CHECK_WAIT),
+        condition, move_to({5000, 200, 300, 0}), skip_else, failure},
+      joints_at(kEndingA));
+    EXPECT_EQ(result.status, CheckStatus::UNKNOWN);
+    EXPECT_TRUE(has_code(result, "suction_result_unknown"));
+    EXPECT_FALSE(has_code(result, "explicit_fail"));
+    EXPECT_FALSE(has_code(result, "unreachable_sample"));
+    EXPECT_EQ(result.route_count, 1u);
+    EXPECT_FALSE(result.final_joints);
+    EXPECT_NE(result.message.find("live pressure"), std::string::npos);
+    ASSERT_FALSE(result.diagnostics.empty());
+    EXPECT_EQ(result.diagnostics.back().step_index, 3u);
+    EXPECT_EQ(result.diagnostics.back().severity, "unknown");
+  }
+}
+
+TEST(SequenceCheck, SuctionMonitoringWithoutBranchingKeepsFixedRouteChecks)
+{
+  const auto result = check_sequence_steps({flag(StepType::SUCTION_CHECK_START),
+      move_to(kEndingB), flag(StepType::SUCTION_CHECK_WAIT)}, joints_at(kEndingA));
+  EXPECT_EQ(result.status, CheckStatus::FEASIBLE);
+  EXPECT_EQ(result.route_count, 1u);
+  EXPECT_TRUE(result.final_joints);
+}
+
+TEST(SequenceCheck, ForwardJumpSkipsUnreachableMotionAndFailure)
+{
+  auto jump = flag(StepType::JUMP);
+  jump.jump_index = 3;
+  const auto result = check_sequence_steps({jump, move_to({5000, 200, 300, 0}),
+      flag(StepType::FAIL), move_to(kEndingB)}, joints_at(kEndingA));
+  EXPECT_EQ(result.status, CheckStatus::FEASIBLE);
+  EXPECT_EQ(result.route_count, 1u);
+  EXPECT_TRUE(result.final_joints);
+  EXPECT_FALSE(has_code(result, "explicit_fail"));
+
+  jump.jump_index = 2;
+  const auto completed = check_sequence_steps({jump, flag(StepType::FAIL)}, joints_at(kEndingA));
+  EXPECT_EQ(completed.status, CheckStatus::FEASIBLE);
+  EXPECT_EQ(completed.route_count, 0u);
+  EXPECT_EQ(completed.final_joints, joints_at(kEndingA));
+}
+
+TEST(SequenceCheck, InvalidJumpTargetsAreRejectedBeforePrediction)
+{
+  for (const auto type : {StepType::JUMP, StepType::IF_SUCTION}) {
+    for (const std::size_t target : {0u, 1u, 4u}) {
+      auto jump = flag(type);
+      jump.jump_index = target;
+      const auto result = check_sequence_steps({flag(StepType::WAIT), jump,
+          move_to(kEndingA)}, joints_at(kEndingA));
+      EXPECT_EQ(result.status, CheckStatus::INFEASIBLE);
+      EXPECT_TRUE(has_code(result, "planning_error"));
+      EXPECT_EQ(result.route_count, 0u);
+      EXPECT_FALSE(result.final_joints);
+    }
+  }
+}
+
+TEST(SequenceCheck, RawGroupStepsCannotHideConditionalsOrJumpsFromTheChecker)
+{
+  for (const auto type : {StepType::IF_SUCTION, StepType::JUMP}) {
+    auto control = flag(type);
+    control.jump_index = 3;
+    const std::vector<Step> steps{group(false), move_to(kEndingA),
+      control, flag(StepType::SEQUENCE_END)};
+    for (const auto initial : {std::optional<CheckJoints>{},
+      std::optional<CheckJoints>{joints_at(kEndingA)}})
+    {
+      const auto result = check_sequence_steps(steps, initial);
+      EXPECT_EQ(result.status, CheckStatus::INFEASIBLE);
+      EXPECT_TRUE(has_code(result, "planning_error"));
+      EXPECT_EQ(result.route_count, 0u);
+      EXPECT_FALSE(result.final_joints);
+    }
+  }
+}
+
+TEST(SequenceCheck, ReachedFailureStopsOrdinaryAndGroupPredictions)
+{
+  auto failure = flag(StepType::FAIL);
+  failure.message = "Suction retry limit reached";
+  for (const std::vector<Step> steps : {
+    std::vector<Step>{failure, move_to(kEndingA)},
+    std::vector<Step>{group(false), failure, move_to(kEndingA), flag(StepType::SEQUENCE_END)}})
+  {
+    const auto result = check_sequence_steps(steps, joints_at(kEndingA));
+    EXPECT_EQ(result.status, CheckStatus::INFEASIBLE);
+    EXPECT_TRUE(has_code(result, "explicit_fail"));
+    EXPECT_EQ(result.route_count, 0u);
+    EXPECT_FALSE(result.final_joints);
+    ASSERT_FALSE(result.diagnostics.empty());
+    EXPECT_EQ(result.diagnostics.back().message, failure.message);
+  }
+}
+
+TEST(SequenceCheck, UnknownSuctionDoesNotConfirmUnvisitedPendingWaypoints)
+{
+  SequenceCheckOptions options;
+  options.pending_waypoints = {{550, 180, 290, -kPi}};
+  auto condition = flag(StepType::IF_SUCTION);
+  condition.jump_index = 4;
+  const auto result = check_sequence_steps({flag(StepType::SUCTION_CHECK_START),
+      flag(StepType::SUCTION_CHECK_WAIT), condition, flag(StepType::PUMP)},
+    joints_at({500, 180, 290, -kPi}), options);
+  EXPECT_EQ(result.status, CheckStatus::UNKNOWN);
+  EXPECT_TRUE(has_code(result, "suction_result_unknown"));
+  EXPECT_FALSE(has_code(result, "pending_waypoints"));
+  EXPECT_EQ(result.consumed_pending_waypoints, 0u);
+  EXPECT_TRUE(result.pending_waypoints.empty());
+  EXPECT_FALSE(result.final_joints);
+}
+
+TEST(SequenceCheck, CheckedPrefixConsumptionDoesNotPredictTailAfterSuctionBranch)
+{
+  SequenceCheckOptions options;
+  options.pending_waypoints = {{550, 180, 290, -kPi}};
+  auto condition = flag(StepType::IF_SUCTION);
+  condition.jump_index = 5;
+  auto tail = move_to({650, 180, 290, -kPi});
+  tail.waypoint = true;
+  const auto result = check_sequence_steps({move_to({600, 180, 290, -kPi}),
+      flag(StepType::SUCTION_CHECK_START), flag(StepType::SUCTION_CHECK_WAIT),
+      condition, flag(StepType::PUMP), tail}, joints_at({500, 180, 290, -kPi}), options);
+  EXPECT_EQ(result.status, CheckStatus::UNKNOWN);
+  EXPECT_TRUE(has_code(result, "suction_result_unknown"));
+  EXPECT_EQ(result.route_count, 1u);
+  EXPECT_EQ(result.consumed_pending_waypoints, 1u);
+  EXPECT_TRUE(result.pending_waypoints.empty());
+  EXPECT_FALSE(result.final_joints);
+}
+
 }  // namespace

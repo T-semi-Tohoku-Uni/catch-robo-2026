@@ -1,15 +1,20 @@
 pump_controller_node:
   ros__parameters:
-    # L/C/Rの順。マイコンではbit0..2=Pump1..3、bit3..5=電磁弁1..3。
-    # 実機の配線対応を確認し、必要なら各リストを並べ替える。
+    # L/C/R order. MCU bits 0..2 are pumps, and bits 3..5 are valves.
+    # Reorder these lists after confirming the physical wiring.
     pump_bits: [0, 1, 2]
     valve_bits: [3, 4, 5]
 
-    # 論理ONに対応するCAN指令ビット。GPIOの電圧レベルではない。
-    # マイコンは値1→GPIO Low、値0→GPIO High。GPIO Highで通電する解釈を採用。
+    # CAN bit level for logical ON; the MCU maps 1 to GPIO Low and 0 to High.
     pump_on_level: false
     valve_on_level: true
 
-    # 全機構の起動時状態: 開放=-1、オフ=0、吸引=1。
-    # mainの起動値56（0b111000、全機構吸引）を維持する。
+    # Startup state for every collector: release=-1, off=0, suction=1.
     initial_state: 0
+
+    # Pressure sensor array indices in L/C/R order; confirm the physical mapping.
+    pressure_indices: [0, 1, 2]
+    pressure_threshold: 96  # 0x60
+    # Select ge (>=) or le (<=) after confirming the sensor direction.
+    pressure_comparison: unconfigured
+    max_pending_suction_checks: 8

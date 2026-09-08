@@ -27,6 +27,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/FollowRoute.action"
   "action/ExecuteSequence.action"
   "srv/PumpControl.srv"
+  "srv/CheckSuction.srv"
   "srv/EndeffectorControl.srv"
   "srv/StateControl.srv"
   DEPENDENCIES action_msgs nav_msgs geometry_msgs

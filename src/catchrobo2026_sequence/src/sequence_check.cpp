@@ -101,7 +101,24 @@ public:
     for (std::size_t index = 0; index < steps.size(); ++index) {
       const auto & step = steps[index];
       try {
-        if (step.type == StepType::INITIALIZE) {
+        if ((step.type == StepType::IF_SUCTION || step.type == StepType::JUMP) &&
+          (step.jump_index <= index || step.jump_index > steps.size()))
+        {
+          throw std::runtime_error("Invalid forward jump target");
+        }
+        if (step.type == StepType::IF_SUCTION) {
+          unknown(index, "suction_result_unknown",
+            "Suction-dependent branching requires live pressure results; "
+            "subsequent motion and sequence completion are unknown");
+          joints_.reset();
+          break;
+        } else if (step.type == StepType::JUMP) {
+          index = step.jump_index - 1;
+          continue;
+        } else if (step.type == StepType::FAIL) {
+          fail(index, "explicit_fail", step.message);
+          break;
+        } else if (step.type == StepType::INITIALIZE) {
           if (options.after_initialization_joints) {
             if (!set_joints(*options.after_initialization_joints, index, "initialization_state")) {
               break;
@@ -125,12 +142,19 @@ public:
           index = route.last;
         } else if (step.type == StepType::SEQUENCE_START) {
           std::vector<Route> routes;
+          std::optional<std::size_t> explicit_failure;
           std::size_t end = index + 1;
           for (; end < steps.size() && steps[end].type != StepType::SEQUENCE_END; ++end) {
             if (steps[end].type == StepType::SEQUENCE_START ||
               steps[end].type == StepType::INITIALIZE)
             {
               throw std::runtime_error("Sequence groups cannot nest or contain initialization");
+            }
+            if (steps[end].type == StepType::IF_SUCTION || steps[end].type == StepType::JUMP) {
+              throw std::runtime_error("Sequence groups cannot contain conditionals or jumps");
+            }
+            if (steps[end].type == StepType::FAIL && !explicit_failure) {
+              explicit_failure = end;
             }
             if (steps[end].type == StepType::MOVE) {
               routes.push_back(collect_route(steps, end));
@@ -141,6 +165,10 @@ public:
             throw std::runtime_error("Sequence group requires a closing flag and at least one MOVE");
           }
           const auto intervals = collect_phi_travel_intervals(steps, index, end);
+          if (explicit_failure) {
+            fail(*explicit_failure, "explicit_fail", steps[*explicit_failure].message);
+            break;
+          }
           if (joints_) {
             if (!check_group(step, index, routes, intervals)) {
               break;
@@ -355,9 +383,15 @@ private:
         result_.message = "A route or initial state failed the offline checks";
         break;
       case CheckStatus::UNKNOWN:
-        result_.message = result_.pending_waypoints.empty() ?
-          "Motion feasibility is unknown because joint state is unspecified" :
-          "Pending waypoints require a subsequent MOVE before feasibility can be determined";
+        if (!result_.pending_waypoints.empty()) {
+          result_.message =
+            "Pending waypoints require a subsequent MOVE before feasibility can be determined";
+        } else {
+          const auto reason = std::find_if(result_.diagnostics.begin(), result_.diagnostics.end(),
+            [](const auto & diagnostic) {return diagnostic.severity == "unknown";});
+          result_.message = reason != result_.diagnostics.end() ? reason->message :
+            "Motion feasibility is unknown because joint state is unspecified";
+        }
         break;
     }
     return std::move(result_);

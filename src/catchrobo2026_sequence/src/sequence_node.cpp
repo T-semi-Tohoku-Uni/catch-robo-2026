@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cmath>
 #include <csignal>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <map>
@@ -18,6 +19,7 @@
 #include "geometry_msgs/msg/pose.hpp"
 #include "catchrobo2026_msgs/action/execute_sequence.hpp"
 #include "catchrobo2026_msgs/action/follow_route.hpp"
+#include "catchrobo2026_msgs/srv/check_suction.hpp"
 #include "catchrobo2026_msgs/srv/endeffector_control.hpp"
 #include "catchrobo2026_msgs/srv/generate_route.hpp"
 #include "catchrobo2026_msgs/srv/plan_rotation_group.hpp"
@@ -32,6 +34,7 @@ using GenerateRoute = catchrobo2026_msgs::srv::GenerateRoute;
 using PlanRotationGroup = catchrobo2026_msgs::srv::PlanRotationGroup;
 using WristControl = catchrobo2026_msgs::srv::WristControl;
 using PumpControl = catchrobo2026_msgs::srv::PumpControl;
+using CheckSuction = catchrobo2026_msgs::srv::CheckSuction;
 using EndeffectorControl = catchrobo2026_msgs::srv::EndeffectorControl;
 using SequenceGoal = rclcpp_action::ServerGoalHandle<ExecuteSequence>;
 using RouteGoal = rclcpp_action::ClientGoalHandle<FollowRoute>;
@@ -79,6 +82,7 @@ public:
         group_planner_ = create_client<PlanRotationGroup>("plan_rotation_group");
         wrist_controller_ = create_client<WristControl>("wrist_control");
         pump_writer_ = create_client<PumpControl>("set_pump_state");
+        suction_checker_ = create_client<CheckSuction>("check_suction");
         endeffector_ = create_client<EndeffectorControl>("set_endeffector_state");
         follower_ = rclcpp_action::create_client<FollowRoute>(this, "follow_route");
         server_ = rclcpp_action::create_server<ExecuteSequence>(
@@ -133,7 +137,8 @@ private:
         WAIT_GROUP_PLAN, GROUP_PLAN, WAIT_WRIST_BEGIN, WRIST_BEGIN,
         WAIT_WRIST_END, WRIST_END,
         WAIT_PHI_TRAVEL, PHI_TRAVEL,
-        WAIT_PUMP_SET, PUMP_SET, WAIT_END, END, WAIT_INITIALIZE, INITIALIZE, DELAY
+        WAIT_PUMP_SET, PUMP_SET, WAIT_END, END, WAIT_INITIALIZE, INITIALIZE, DELAY,
+        WAIT_SUCTION_SERVICE, SUCTION_RESULT
     };
 
     static Clock::time_point after(double seconds)
@@ -227,6 +232,7 @@ private:
         clear_pending_waypoints();
         staged_waypoints_.clear();
         stopping_ = true;
+        abandon_suction_check();
         stop_message_ = message;
         stop_deadline_ = after(stop_timeout_);
         RCLCPP_WARN(get_logger(), "Stopping sequence: %s", message.c_str());
@@ -234,6 +240,7 @@ private:
 
     void finish(bool success, const std::string &message)
     {
+        abandon_suction_check();
         auto result = std::make_shared<ExecuteSequence::Result>();
         result->success = success && !goal_->is_canceling();
         result->message = message;
@@ -265,6 +272,72 @@ private:
         pending_waypoints_.clear();
         pending_epoch_ = 0;
         pending_step_id_ = 0;
+    }
+
+    void abandon_suction_check()
+    {
+        // Monitoring is read-only and must not delay motion cancellation.
+        ++suction_generation_;
+        if (abandon_suction_) {
+            abandon_suction_();
+            abandon_suction_ = {};
+        }
+        suction_pending_ = false;
+        suction_active_ = false;
+        suction_reply_.reset();
+    }
+
+    void start_suction_check()
+    {
+        if (suction_active_ || suction_pending_) {
+            throw std::logic_error("a suction check is already active");
+        }
+        auto value = std::make_shared<CheckSuction::Request>();
+        value->collector_mask = goal_->get_goal()->collector_mask;
+        value->timeout_sec = steps_[index_].seconds;
+        // The sensor deadline is independent of ordinary command deadlines.
+        suction_deadline_ = after(value->timeout_sec) +
+            std::chrono::duration_cast<Clock::duration>(
+                std::chrono::duration<double>(service_timeout_));
+        suction_active_ = true;
+        suction_pending_ = true;
+        suction_reply_.reset();
+        const auto generation = ++suction_generation_;
+        auto pending = suction_checker_->async_send_request(value,
+            [this, generation](rclcpp::Client<CheckSuction>::SharedFuture response) {
+                if (generation != suction_generation_) {
+                    return;
+                }
+                suction_pending_ = false;
+                abandon_suction_ = {};
+                if (interrupted()) {
+                    return;
+                }
+                try {
+                    const auto reply = response.get();
+                    const auto mask = goal_->get_goal()->collector_mask;
+                    if (reply->suction_mask > 7 || (reply->success &&
+                        (reply->timed_out || (reply->suction_mask & mask) != mask))) {
+                        begin_stop("invalid suction check response");
+                        return;
+                    }
+                    if (!reply->success && !reply->timed_out) {
+                        begin_stop("suction check rejected: " + reply->message);
+                        return;
+                    }
+                    suction_reply_ = reply;
+                    RCLCPP_INFO(get_logger(),
+                        "Suction check: success=%s, mask=%u, pressure=[%d,%d,%d]: %s",
+                        reply->success ? "true" : "false", reply->suction_mask,
+                        reply->pressure[0], reply->pressure[1], reply->pressure[2],
+                        reply->message.c_str());
+                } catch (const std::exception &error) {
+                    begin_stop(std::string("suction check response: ") + error.what());
+                }
+            });
+        const auto id = pending.request_id;
+        abandon_suction_ = [client = suction_checker_, id]() {client->remove_pending_request(id);};
+        command_done(true, "");
     }
 
     bool interrupted() const
@@ -344,7 +417,12 @@ private:
             }
             return;
         }
-        if (phase_ != Phase::DELAY && Clock::now() >= deadline_) {
+        if (suction_pending_ && Clock::now() >= suction_deadline_) {
+            begin_stop("suction check response timeout");
+            return;
+        }
+        if (phase_ != Phase::DELAY && phase_ != Phase::SUCTION_RESULT &&
+            Clock::now() >= deadline_) {
             begin_stop(phase_name_ + " timeout");
             return;
         }
@@ -415,6 +493,17 @@ private:
                     });
             }
             break;
+        case Phase::WAIT_SUCTION_SERVICE:
+            if (suction_checker_->service_is_ready()) {
+                start_suction_check();
+            }
+            break;
+        case Phase::SUCTION_RESULT:
+            if (suction_reply_) {
+                suction_active_ = false;
+                command_done(true, "");
+            }
+            break;
         case Phase::WAIT_END:
             if (endeffector_->service_is_ready()) {
                 auto value = std::make_shared<EndeffectorControl::Request>();
@@ -457,10 +546,16 @@ private:
 
     void next_step()
     {
+        if (index_ > steps_.size()) {
+            throw std::logic_error("sequence jump is out of range");
+        }
         if (index_ == steps_.size()) {
             if (group_needs_release_) {
                 begin_stop("sequence group was not released");
                 return;
+            }
+            if (suction_active_) {
+                throw std::logic_error("sequence ended before waiting for its suction check");
             }
             finish(true, staged_waypoints_.empty() ? "sequence completed" :
                 "sequence completed; " + std::to_string(staged_waypoints_.size()) +
@@ -549,6 +644,29 @@ private:
         case StepType::PHI_TRAVEL_START:
         case StepType::PHI_TRAVEL_END:
             transition(Phase::WAIT_PHI_TRAVEL, "waiting to set phi travel interval", service_timeout_);
+            break;
+        case StepType::SUCTION_CHECK_START:
+            transition(Phase::WAIT_SUCTION_SERVICE, "waiting for suction checker", service_timeout_);
+            break;
+        case StepType::SUCTION_CHECK_WAIT:
+            if (!suction_active_) {
+                throw std::logic_error("no suction check to wait for");
+            }
+            transition(Phase::SUCTION_RESULT, "waiting for suction result", service_timeout_);
+            break;
+        case StepType::IF_SUCTION:
+            if (suction_active_ || !suction_reply_) {
+                throw std::logic_error("suction condition requires a completed wait");
+            }
+            index_ = suction_reply_->success == step.condition_success ? index_ + 1 : step.jump_index;
+            transition(Phase::READY, "branching on suction result", service_timeout_);
+            break;
+        case StepType::JUMP:
+            index_ = step.jump_index;
+            transition(Phase::READY, "jumping", service_timeout_);
+            break;
+        case StepType::FAIL:
+            begin_stop(step.message);
             break;
         }
     }
@@ -788,10 +906,13 @@ private:
     std::string config_file_, team_, phase_name_, stop_message_;
     bool debug_{false}, stopping_{false}, faulted_{false};
     bool service_pending_{false}, route_pending_{false}, cancel_sent_{false};
+    bool suction_pending_{false}, suction_active_{false};
+    uint64_t suction_generation_{0};
     double service_timeout_, route_timeout_, sequence_timeout_, stop_timeout_;
     double active_route_timeout_{0.0};
     Phase phase_{Phase::READY};
     Clock::time_point deadline_, sequence_deadline_, stop_deadline_;
+    Clock::time_point suction_deadline_;
     std::unique_ptr<SequenceConfig> config_;
     std::vector<Step> steps_;
     std::vector<catchrobo2026_sequence::Pose> pending_waypoints_, staged_waypoints_;
@@ -813,8 +934,10 @@ private:
     GenerateRoute::Request::SharedPtr generate_request_;
     PlanRotationGroup::Request::SharedPtr group_request_;
     PumpControl::Request::SharedPtr pump_request_;
+    CheckSuction::Response::SharedPtr suction_reply_;
     std::function<void()> abandon_request_;
     std::function<void()> abandon_wrist_end_;
+    std::function<void()> abandon_suction_;
     std::shared_ptr<SequenceGoal> goal_;
     RouteGoal::SharedPtr route_goal_;
     rclcpp::Client<Trigger>::SharedPtr initialization_;
@@ -822,6 +945,7 @@ private:
     rclcpp::Client<PlanRotationGroup>::SharedPtr group_planner_;
     rclcpp::Client<WristControl>::SharedPtr wrist_controller_;
     rclcpp::Client<PumpControl>::SharedPtr pump_writer_;
+    rclcpp::Client<CheckSuction>::SharedPtr suction_checker_;
     rclcpp::Client<EndeffectorControl>::SharedPtr endeffector_;
     rclcpp_action::Client<FollowRoute>::SharedPtr follower_;
     rclcpp_action::Server<ExecuteSequence>::SharedPtr server_;

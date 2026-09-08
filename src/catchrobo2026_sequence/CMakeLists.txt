@@ -46,6 +46,7 @@ install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_suction_sequence test/test_suction_sequence.py TIMEOUT 180)
   ament_add_pytest_test(test_route_handoff test/test_route_handoff.py TIMEOUT 120)
   ament_add_pytest_test(test_follower_arrival test/test_follower_arrival.py TIMEOUT 90)
   ament_add_pytest_test(test_follower_joy_arrival test/test_follower_joy_arrival.py TIMEOUT 90)
@@ -57,7 +58,8 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_check_sequence_config test/test_check_sequence_config.py
     TIMEOUT 120
     ENV CHECK_SEQUENCE_CONFIG_EXECUTABLE=$<TARGET_FILE:check_sequence_config>)
-  ament_add_gtest(test_sequence_config test/test_sequence_config.cpp)
+  ament_add_gtest(test_sequence_config test/test_sequence_config.cpp
+    test/test_suction_compatibility.cpp)
   target_link_libraries(test_sequence_config sequence_config)
   ament_add_gtest(test_builtin_sequences test/test_builtin_sequences.cpp)
   target_link_libraries(test_builtin_sequences sequence_config)

@@ -19,6 +19,7 @@ enum class StepType
 {
   MOVE, PUMP, ENDEFFECTOR, WAIT, INITIALIZE, SEQUENCE_START, SEQUENCE_END,
   PHI_TRAVEL_START, PHI_TRAVEL_END,
+  SUCTION_CHECK_START, SUCTION_CHECK_WAIT, IF_SUCTION, JUMP, FAIL,
   ROTATION_START = SEQUENCE_START, ROTATION_END = SEQUENCE_END
 };
 
@@ -30,6 +31,9 @@ struct Step
   std::vector<Pose> waypoints;
   int command{0};
   double seconds{0.0};
+  std::size_t jump_index{0};
+  bool condition_success{true};
+  std::string message;
   bool rotation_group{false};
   std::optional<double> max_phi_travel;
 };
@@ -97,6 +101,8 @@ private:
   {
     Step step;
     bool relative{false};
+    bool loop_break{false};
+    std::string where;
     std::vector<RawPose> waypoints;
   };
 

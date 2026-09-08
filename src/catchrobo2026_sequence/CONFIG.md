@@ -200,6 +200,12 @@ sequences:
 | `pump: release` | UIが指定した回収機構を開放（-1） |
 | `endeffector: 0` または `1` | エンドエフェクタサービスへの指令 |
 | `wait: 秒数` | 0〜86,400の有限秒数だけ待機 |
+| `suction_check: {start: {timeout: 秒数}}` | UI選択機構の空気圧監視を要求し、次手順へ進む |
+| `suction_check: wait` | 監視の成功または期限切れを待ち、結果を保存 |
+| `if: {condition: suction_success, then: [...], else: [...]}` | 保存済み結果で分岐。`suction_failure` も使用可能、`else` は省略可 |
+| `for: {max_iterations: 回数, steps: [...]}` | 初回を含む最大回数まで繰り返す |
+| `break: true` | 最内側の `for` を抜ける |
+| `fail: メッセージ` | アクションを失敗として終了する |
 | `sequence_group: start` | 共通の計画・制約を適用する区間を開始 |
 | `sequence_group: {start: true, rotation_group: true}` | 第4関節の回転方向を固定する区間を開始 |
 | `sequence_group: {start: true, max_phi_travel: ラジアン}` | 手先角`phi`の総移動量を制限する区間を開始 |
@@ -387,6 +393,62 @@ ending:
 
 グループの第4関節指令の速度上限は、追従ノードのROSパラメータ`rotation_speed_rad_sec`（既定`1.0`rad/s、有限の正数）で指定する。これはソフト上の指令速度制限で、実機で保証された速度ではない。`route_timeout_sec`はグループ内の各経路、`sequence_timeout_sec`は待機と計画を含むUIアクション全体に適用される。
 
+### 実験用吸引自動化の切り替え
+
+同梱設定は通常PICKを既定とする。`pick_common.steps` の2行のコメントを入れ替えると実験用へ切り替わる。通常へ戻すときは実験側をコメントアウトし、通常側のコメントを外す。常に片方だけを有効にする。
+
+```yaml
+pick_common:
+  steps:
+    - call: pick_without_suction_check
+    # - call: pick_with_suction_check
+```
+
+両方とも共通の `pick_attempt`（下降→Y−10 mm補正→吸引→退避）を使うため、座標・移動順序・ポンプのタイミングは共通。実験側だけがその前後に監視開始／結果待ちを加え、最大3回・各判定2秒で再試行し、成功後に幅を切り替える。回数と期限は `values.pick_max_attempts`／`pick_suction_timeout_sec` で変更する。期限は監視要求から数えるので、移動時間も含む。通常側は圧力受信や判定サービスを必要としない。
+
+実験を有効にする前に [pump.yaml](../catchrobo2026_pump/config/pump.yaml) の `pressure_comparison` と `pressure_indices` を実機に合わせる。`unconfigured` のままなら判定要求は拒否される。`debug:=true` では次のUI動作から再読込し、通常モードでは再起動する。インストール済みYAMLを使う場合は再ビルドも必要。
+
+### 吸引判定と条件分岐・繰り返し
+
+以下は実験用 `pick_with_suction_check` の編集例。位置別の先行する絶対移動を基準に、同じ接近・退避を繰り返す。
+
+```yaml
+pick_with_suction_check:
+  steps:
+    - for:
+        max_iterations: '$pick_max_attempts'
+        steps:
+          - suction_check: {start: {timeout: '$pick_suction_timeout_sec'}}
+          - call: pick_attempt
+          - suction_check: wait
+          - if:
+              condition: suction_success
+              then:
+                - break: true
+    - if:
+        condition: suction_failure
+        then:
+          - fail: "Suction failed after the maximum number of attempts"
+    - endeffector: '$place_endeffector_command'
+```
+
+`start` はポンプノードの `check_suction` へUIの `collector_mask` と期限を渡す。要求を送ったら次手順へ進むため、監視とポンプ・移動を並行して実行できる。選択機構すべてが同じ新規圧力サンプルで閾値条件を満たすと成功し、期限まで満たさなければ失敗結果になる。早く成功しても途中の移動は省略せず、`wait` まで進んでから分岐する。結果はその監視中の成功を保存したもので、以後の吸着維持や落下の継続監視ではない。閾値・比較方向・圧力配列の対応は [ポンプ設定](../catchrobo2026_pump/README.md) を参照。
+
+`timeout` は0秒超〜86,400秒、`max_iterations` は1〜10,000の整数で、どちらも `'$名前'` を使える。最大回数は初回を含む。`for` 自体は回数を使い切ると次へ進むので、再試行の上限を失敗扱いにするには例のように `if` と `fail` を書く。上限失敗時に部分回収を成功扱いにはせず、ポンプ指令は保持する。
+
+条件は直前の `suction_check: wait` の結果を使う。次の `start` で前結果を消し、同時監視は1件に限定する。すべての到達可能な経路で `start` → `wait` → 条件参照の順序が必要。重複開始・開始のない待ち・待ち前の条件参照・待ち忘れの正常終了は読込時に拒否する。初期化前後など別のライフサイクル手順へ監視を持ち越すことはできない。
+
+`then` と `else`、`for.steps` には通常の手順や `call`、入れ子の `if`／`for` を書ける。`break` は構文上の最内側の `for` のみを抜ける。単独の共通手順に `break` だけを定義して呼び出す形式は使えない。`for` は読込時に有限回数へ展開し、分岐・breakを含む展開後の命令総数に10,000件の上限を適用する。アクション全体には従来どおり `sequence_timeout_sec` が適用される。
+
+正常な吸引タイムアウトは `suction_failure` として分岐できる。サービス未起動・要求拒否・不正応答・通信応答期限切れは動作を停止し、吸引失敗の再試行には入らない。監視応答の通信期限は指定した `timeout` ＋ `service_timeout_sec`、サービスを見つける期限は `service_timeout_sec`。取消時は読み取り専用の監視結果を破棄し、後から届いた結果を次の動作へ使わない。ポンプ側の監視自体は成功か期限まで続く。
+
+条件分岐と経路機能の組合せには次の制約がある。
+
+- `if` と `break` は先読みする `sequence_group` の内部に置けない。完全なグループ全体を `if` の枝や `for` で囲むことはできる。グループ内から外へ抜ける／途中へ入るジャンプは拒否する。
+- 経由点列の途中へジャンプできない。持越し用の末尾経由点は分岐の後へ共通に置き、分岐で飛ばさない。
+- 前の動作の経由点を持ち越す場合、その動作の最初のMOVEは分岐で飛ばせない。先に共通のMOVEを置いてから判定する。同梱PICKは位置別絶対移動が先なのでこの条件を満たす。
+- 実行前検査CLIは実圧力を仮定しない。`if` に達すると `suction_result_unknown` を返し、その後の経路・最終関節角・末尾経由点は確定しない。条件なしの通常PICKや既存groupの検査は従来どおり。
+
 ### 従来の回転グループ（rotation_group）
 
 独立ステップの`rotation_group: start`／`rotation_group: end`は互換表記として使用できる。`sequence_group: {start: true, rotation_group: true}`／`sequence_group: end`と同じ意味で、`phi`の総移動量上限は設定しない。現在の同梱`sequences.yaml`のendingは方向制約を外し、`phi_travel`でA→B間の総移動量を30°に制限する。**既存の回転グループ設定だけでは、A・Bの`phi`が同じでも途中の360°回転を制限しない。**
@@ -400,6 +462,8 @@ ending:
 例えば絶対姿勢 `[100, 200, 300, 0]` の後に、相対姿勢 `[0, 0, -20, 0]`、`[0, 0, 0, 0]` と指定すると、絶対姿勢 `[100, 200, 280, 0]` へ下がり、`[100, 200, 300, 0]` へ戻る。途中のポンプ・待機・エンドエフェクタ指令・シーケンスグループの開始と終了では基準は変わらない。別の絶対移動を挿入すると、以後はその姿勢が基準になる。`call`／`extends` の境界でも同じ規則が続く。
 
 相対移動から始まる共通シーケンスは定義できる。ただし `bindings` に登録する実行シーケンスでは、参照の展開後に全ての相対移動より前に絶対移動が必要となる。開始時のロボット現在姿勢を暗黙の基準にはしない。
+
+分岐や `break` の合流後に相対移動する場合、その位置へ到達する全経路で絶対基準が同じである必要がある。片側だけで異なる絶対移動をした場合は、合流後に `move: {absolute: ...}` を入れて基準を再確定する。実行しなかった枝の絶対姿勢を相対基準には使わない。
 
 ## UI位置の割り当て
 
