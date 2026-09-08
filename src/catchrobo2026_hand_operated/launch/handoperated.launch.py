@@ -31,6 +31,10 @@ def generate_launch_description():
             package='nav_director',
             executable='path_follower_node',
             name='path_follower_node',
+            parameters=[{
+                'goal_joint_tolerance_first_rad': 0.05,  # 配列の1要素目 [rad]
+                'goal_joint_tolerance_remaining_rad': 0.05,  # 配列の2〜4要素目 [rad]
+            }],
             output='screen'
         ),
 

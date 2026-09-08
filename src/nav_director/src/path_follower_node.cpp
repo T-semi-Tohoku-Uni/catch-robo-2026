@@ -34,6 +34,12 @@ public:
         goal_distance_near_mm_ = declare_parameter("goal_distance_near_mm", 100.0);
         goal_distance_far_mm_ = declare_parameter("goal_distance_far_mm", 500.0);
         lookahead_smoothing_sec_ = declare_parameter("lookahead_smoothing_sec", 0.2);
+        goal_joint_tolerance_first_rad_ = declare_parameter("goal_joint_tolerance_first_rad", 0.05);
+        goal_joint_tolerance_remaining_rad_ = declare_parameter("goal_joint_tolerance_remaining_rad", 0.01);
+        if (!std::isfinite(goal_joint_tolerance_first_rad_) || goal_joint_tolerance_first_rad_ < 0.0 ||
+            !std::isfinite(goal_joint_tolerance_remaining_rad_) || goal_joint_tolerance_remaining_rad_ < 0.0) {
+            throw std::invalid_argument("Joint goal tolerances must be finite and nonnegative");
+        }
         rotation_joint_timeout_sec_ = declare_parameter("rotation_joint_timeout_sec", 1.0);
         rotation_speed_rad_sec_ = declare_parameter("rotation_speed_rad_sec", 1.0);
         if (!std::isfinite(rotation_joint_timeout_sec_) || rotation_joint_timeout_sec_ <= 0.0 ||
@@ -50,7 +56,9 @@ public:
         }
 
         // パブリッシャーとサブスクライバーの初期化
-        pub_joints_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("target_joint_angles", 10);
+        sub_target_joints_ = create_subscription<std_msgs::msg::Float32MultiArray>(
+            "target_joint_angles", 10,
+            std::bind(&PathFollowerNode::targetJointCallback, this, std::placeholders::_1));
         
         // 追加: target_pose用のパブリッシャー
         pub_target_pose_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("target_pose", 10);
@@ -96,6 +104,17 @@ private:
                 current_joint_angles_[i] = msg->data[i];
             }
             joints_received_at_ = std::chrono::steady_clock::now();
+        }
+    }
+
+    void targetJointCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(joint_mutex_);
+        target_joints_valid_ = msg->data.size() >= 4 &&
+            std::all_of(msg->data.begin(), msg->data.begin() + 4,
+                [](float value) { return std::isfinite(value); });
+        if (target_joints_valid_) {
+            std::copy_n(msg->data.begin(), 4, target_joint_angles_);
+            target_joints_received_at_ = std::chrono::steady_clock::now();
         }
     }
 
@@ -247,6 +266,8 @@ private:
         double commanded_progress = 0.0;
         double last_wrist_command = constrained ? wristAt(wrist_angles, 0.0) : 0.0;
 
+        bool final_target_sent = false;
+        std::chrono::steady_clock::time_point final_target_sent_at;
         bool lookahead_initialized = false;
         double smoothed_lookahead = lookahead_near_mm_;
         auto last_update = std::chrono::steady_clock::now();
@@ -264,6 +285,7 @@ private:
             float target_joints[4] = {0.0};
             
             float local_joints[4];
+            bool joint_goal_reached = false;
 
             // データの排他制御コピー
             {
@@ -272,6 +294,16 @@ private:
                     throw std::runtime_error("Fresh current_joints required during rotation group");
                 }
                 for(int i=0; i<4; i++) local_joints[i] = current_joint_angles_[i];
+                // 終点の指令を出した後に受信した目標角と比較する。
+                joint_goal_reached = joints_valid_ && target_joints_valid_ && final_target_sent &&
+                    target_joints_received_at_ >= final_target_sent_at;
+                for (int i = 0; i < 4 && joint_goal_reached; ++i) {
+                    const double tolerance = i == 0 ? goal_joint_tolerance_first_rad_ :
+                        goal_joint_tolerance_remaining_rad_;
+                    // 関節の実角度を比較し、2π離れた角度を同一視しない。
+                    joint_goal_reached = std::abs(static_cast<double>(local_joints[i]) -
+                        target_joint_angles_[i]) <= tolerance;
+                }
             }
 
             // 1. 順運動学で現在地を計算
@@ -415,13 +447,13 @@ private:
             const double err_yaw = std::atan2(
                 std::sin(target_yaw - current_posrot[3]),
                 std::cos(target_yaw - current_posrot[3]));
-            if (targeting_final && goal_distance <= 20.0 && std::abs(err_yaw) <= 0.05 &&
+            if (targeting_final && joint_goal_reached && goal_distance <= 30.0 && std::abs(err_yaw) <= 0.05 &&
                 (!constrained || (commanded_progress >= local_path.poses.size() - 1 - 1e-9 &&
                     std::abs(local_joints[3] - wrist_angles.back()) <= 0.05))) {
                 result->success = true;
                 busy_ = false;
                 goal_handle->succeed(result);
-                RCLCPP_INFO(this->get_logger(), "Reached the end of the path with correct position and orientation.");
+                RCLCPP_INFO(this->get_logger(), "Reached the end of the path with correct position, orientation and joint angles.");
                 return;
             }
 
@@ -439,17 +471,6 @@ private:
                 err_dist, err_x, err_y, err_z, err_yaw);
             // ===============================================================
 
-
-            // 3. 逆運動学で目標ジョイント角を計算
-            kin_.inverse_kinematics(target_posrot, target_joints);
-
-            // 4. Float32MultiArrayで出力
-            std_msgs::msg::Float32MultiArray msg_out;
-            msg_out.data.resize(4);
-            for (int i = 0; i < 4; ++i) {
-                msg_out.data[i] = target_joints[i];
-            }
-            //pub_joints_->publish(msg_out);
 
             // 5. target_poseをPoseStampedで出力
             geometry_msgs::msg::PoseStamped target_pose_msg;
@@ -471,6 +492,13 @@ private:
             // 順序は (roll, pitch, yaw) : (PSI, THE, PHI) = (target_posrot[5], target_posrot[4], target_posrot[3])
             q_out.setRPY(target_posrot[5], target_posrot[4], target_posrot[3]);
             target_pose_msg.pose.orientation = tf2::toMsg(q_out);
+
+            if (!targeting_final) {
+                final_target_sent = false;
+            } else if (!final_target_sent) {
+                final_target_sent_at = std::chrono::steady_clock::now();
+                final_target_sent = true;
+            }
 
             if (constrained) {
                 if (!sendWristTarget(goal_handle, target_pose_msg, target_wrist)) {
@@ -516,7 +544,7 @@ private:
 
     robot_kinematics kin_; // 運動学クラスのインスタンス
     
-    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pub_joints_;
+    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr sub_target_joints_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_target_pose_; // 追加: ターゲット姿勢用
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_lookahead_marker_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr sub_path_;
@@ -528,6 +556,9 @@ private:
     std::mutex joint_mutex_;
     nav_msgs::msg::Path current_path_;
     float current_joint_angles_[4] = {0.0};
+    float target_joint_angles_[4] = {0.0};
+    bool target_joints_valid_ = false;
+    std::chrono::steady_clock::time_point target_joints_received_at_;
     bool joints_valid_ = false;
     std::chrono::steady_clock::time_point joints_received_at_;
     nav_msgs::msg::Path accepted_path_;
@@ -539,6 +570,8 @@ private:
     double goal_distance_near_mm_;
     double goal_distance_far_mm_;
     double lookahead_smoothing_sec_;
+    double goal_joint_tolerance_first_rad_;
+    double goal_joint_tolerance_remaining_rad_;
     double rotation_joint_timeout_sec_;
     double rotation_speed_rad_sec_;
 };
