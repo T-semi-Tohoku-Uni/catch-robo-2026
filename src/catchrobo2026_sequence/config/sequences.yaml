@@ -80,7 +80,7 @@ values:
   pick_endeffector_command: 0
   place_endeffector_command: 1
   # Initial CSV Z values; their physical clearance is not verified.
-  work_above_z: 166.95
+  work_above_z: 186.95
   common_work_above_z: 186.95
   place_above_z: 294.35
   # Each offset is relative to the last absolute pose, not the preceding move.
@@ -90,7 +90,7 @@ values:
   place_retreat_dz: 10
 
 poses:
-  lifecycle_pose: [670, -110, 220, 0]
+  lifecycle_pose: [670, -110, 220, 0.025]
   # PICK: UI row 0; CSV ID = row * 6 + column + 1.
   pick_0_1_above: [375, 138, '$work_above_z', -3.1415926535897]
   pick_0_2_above: [575, 138, '$work_above_z', -3.14159265358979]
@@ -140,7 +140,7 @@ sequences:
     # - move: {absolute: lifecycle_pose}
   ending:
     steps:
-      - move: {absolute: [675, 200, 300, 0]}
+      - move: {absolute: [675, 200, 300, 0.05]}
       - move: {absolute: lifecycle_pose}
   startup:
     steps:
@@ -160,10 +160,10 @@ sequences:
       - endeffector: '$pick_endeffector_command'
   place_pre_red_waypoint:
     steps:
-      - waypoint: {absolute: [150, 0, 400, 3.14159265358979]}
+      - waypoint: {absolute: [150, 0, 360, 3.14159265358979]}
   place_pre_blue_waypoint:
     steps:
-      - waypoint: {absolute: [1200, 0, 400, 3.14159265358979]}
+      - waypoint: {absolute: [1200, 0, 360, 3.14159265358979]}
 
   pick_0_1:
     steps:
