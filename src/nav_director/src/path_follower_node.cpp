@@ -2,6 +2,7 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <nav_msgs/msg/path.hpp>
+#include <visualization_msgs/msg/marker.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp> // 追加: PoseStamped用
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -43,6 +44,8 @@ public:
         
         // 追加: target_pose用のパブリッシャー
         pub_target_pose_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("target_pose", 10);
+        pub_lookahead_marker_ = this->create_publisher<visualization_msgs::msg::Marker>(
+            "lookahead_marker", 10);
         
         sub_path_ = this->create_subscription<nav_msgs::msg::Path>(
             "route", 10, std::bind(&PathFollowerNode::pathCallback, this, std::placeholders::_1));
@@ -326,6 +329,24 @@ private:
 
             pub_target_pose_->publish(target_pose_msg);
 
+            // 制御に使用した先読み目標位置を直径50mmの球で表示する。
+            visualization_msgs::msg::Marker marker;
+            marker.header = target_pose_msg.header;
+            marker.ns = "lookahead_target";
+            marker.id = 0;
+            marker.type = visualization_msgs::msg::Marker::SPHERE;
+            marker.action = visualization_msgs::msg::Marker::ADD;
+            marker.pose.position = target_pose_msg.pose.position;
+            marker.pose.orientation.w = 1.0;
+            marker.scale.x = marker.scale.y = marker.scale.z = 0.05;
+            marker.color.r = 1.0;
+            marker.color.g = 0.4;
+            marker.color.b = 0.0;
+            marker.color.a = 1.0;
+            // 完了・キャンセル・異常終了後に古い参照点を残さない。
+            marker.lifetime = rclcpp::Duration::from_seconds(0.3);
+            pub_lookahead_marker_->publish(marker);
+
             // フィードバックの送信
             feedback->distance_remaining = local_path.poses.size() - current_path_index;
             goal_handle->publish_feedback(feedback);
@@ -338,6 +359,7 @@ private:
     
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pub_joints_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_target_pose_; // 追加: ターゲット姿勢用
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_lookahead_marker_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr sub_path_;
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr sub_current_joints_;
     rclcpp_action::Server<FollowRoute>::SharedPtr action_server_;

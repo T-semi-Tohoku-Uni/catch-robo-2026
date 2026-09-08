@@ -73,6 +73,35 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /map_mesh_marker
       Value: true
+    - Class: rviz_default_plugins/Path
+      Enabled: true
+      Name: Route
+      Alpha: 1
+      Color: 0; 200; 255
+      Buffer Length: 1
+      Line Style: Lines
+      Line Width: 0.01
+      Pose Style: None
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /route
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Lookahead Target
+      Namespaces:
+        lookahead_target: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /lookahead_marker
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48

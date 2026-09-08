@@ -69,6 +69,7 @@ ament_target_dependencies(path_follower_node
   tf2
   tf2_geometry_msgs
   catchrobo2026_msgs
+  visualization_msgs
   inverse_kinematics_package
 )
 
