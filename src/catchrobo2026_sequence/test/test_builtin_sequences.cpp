@@ -169,6 +169,10 @@ TEST(BuiltinSequences, PlacementBindingsSelectDifferentTeamApproaches)
       EXPECT_EQ(blue[1].type, StepType::MOVE);
       EXPECT_FALSE(red[1].waypoint);
       EXPECT_FALSE(blue[1].waypoint);
+      EXPECT_TRUE(red.back().waypoint);
+      EXPECT_TRUE(blue.back().waypoint);
+      EXPECT_EQ(red.back().pose, red.front().pose);
+      EXPECT_EQ(blue.back().pose, blue.front().pose);
     }
   }
 }
@@ -179,42 +183,55 @@ TEST(BuiltinSequences, AllBindingsUseTheConfiguredPumpAndWaypointOrder)
   const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
       const auto steps = config.compile(team, kind, first, second);
-      ASSERT_EQ(steps.size(), kind == "pick" ? 5u : 7u);
+      ASSERT_EQ(steps.size(), kind == "pick" ? 6u : 8u);
       const auto anchor_index = kind == "pick" ? 0u : 1u;
       EXPECT_EQ(steps[0].type, StepType::MOVE);
       EXPECT_EQ(steps[0].waypoint, kind == "place");
       EXPECT_EQ(steps[anchor_index].type, StepType::MOVE);
       EXPECT_FALSE(steps[anchor_index].waypoint);
-      EXPECT_EQ(steps[anchor_index + 1].type, StepType::PUMP);
-      EXPECT_EQ(steps[anchor_index + 1].command, kind == "pick" ? 1 : -1);
-      EXPECT_EQ(steps[anchor_index + 2].type, StepType::MOVE);
-      EXPECT_EQ(steps[anchor_index + 3].type, StepType::MOVE);
-      if (kind == "place") {
-        EXPECT_EQ(steps[anchor_index + 4].type, StepType::PUMP);
-        EXPECT_EQ(steps[anchor_index + 4].command, 0);
+      if (kind == "pick") {
+        EXPECT_EQ(steps[1].type, StepType::MOVE);
+        EXPECT_EQ(steps[2].type, StepType::MOVE);
+        EXPECT_EQ(steps[3].type, StepType::PUMP);
+        EXPECT_EQ(steps[3].command, 1);
+      } else {
+        EXPECT_EQ(steps[2].type, StepType::PUMP);
+        EXPECT_EQ(steps[2].command, -1);
+        EXPECT_EQ(steps[3].type, StepType::MOVE);
+        EXPECT_EQ(steps[5].type, StepType::PUMP);
+        EXPECT_EQ(steps[5].command, 0);
+        EXPECT_EQ(steps[7].type, StepType::MOVE);
+        EXPECT_TRUE(steps[7].waypoint);
+        EXPECT_EQ(steps[7].pose, steps[0].pose);
       }
-      EXPECT_EQ(steps.back().type, StepType::ENDEFFECTOR);
-      EXPECT_EQ(
-        steps.back().command,
+      EXPECT_EQ(steps[4].type, StepType::MOVE);
+      const auto width_index = kind == "pick" ? 5u : 6u;
+      EXPECT_EQ(steps[width_index].type, StepType::ENDEFFECTOR);
+      EXPECT_EQ(steps[width_index].command,
         value(yaml, kind == "pick" ? "place_endeffector_command" : "pick_endeffector_command"));
     });
 }
 
-TEST(BuiltinSequences, BothRelativeOffsetsUseTheFixedApproachAnchor)
+TEST(BuiltinSequences, RelativeMovesUseTheFixedAnchorIncludingPickupYCorrection)
 {
   const auto yaml = YAML::LoadFile(SEQUENCE_CONFIG_PATH);
   const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
       const auto steps = config.compile(team, kind, first, second);
-      ASSERT_EQ(steps.size(), kind == "pick" ? 5u : 7u);
+      ASSERT_EQ(steps.size(), kind == "pick" ? 6u : 8u);
       const auto anchor_index = kind == "pick" ? 0u : 1u;
-      for (const auto relative_index : {2u, 3u}) {
-        const auto index = anchor_index + relative_index;
-        const std::string offset = kind + (relative_index == 2 ? "_approach_dz" : "_retreat_dz");
-        for (const auto axis : {0u, 1u, 3u}) {
-          EXPECT_DOUBLE_EQ(steps[index].pose[axis], steps[anchor_index].pose[axis]);
+      const auto relative_indices = kind == "pick" ?
+        std::vector<std::size_t>{1, 2, 4} : std::vector<std::size_t>{3, 4};
+      for (const auto index : relative_indices) {
+        SCOPED_TRACE(index);
+        auto expected = steps[anchor_index].pose;
+        expected[2] += value(yaml, kind + (index == 4 ? "_retreat_dz" : "_approach_dz"));
+        if (kind == "pick" && index == 2) {
+          expected[1] -= 10.0;
         }
-        EXPECT_DOUBLE_EQ(steps[index].pose[2], steps[anchor_index].pose[2] + value(yaml, offset));
+        EXPECT_EQ(steps[index].type, StepType::MOVE);
+        EXPECT_FALSE(steps[index].waypoint);
+        EXPECT_EQ(steps[index].pose, expected);
       }
     });
 }
@@ -239,7 +256,7 @@ TEST(BuiltinSequences, OneHeightEditMovesOnlyTheSelectedRegionAndItsRelativeWayp
           const auto anchor_index = kind == "pick" ? 0u : 1u;
           for (std::size_t index = anchor_index; index < expected.size(); ++index) {
             auto & step = expected[index];
-            if (step.type == StepType::MOVE) {
+            if (step.type == StepType::MOVE && !step.waypoint) {
               step.pose[2] += delta;
             }
           }
@@ -249,13 +266,12 @@ TEST(BuiltinSequences, OneHeightEditMovesOnlyTheSelectedRegionAndItsRelativeWayp
   }
 }
 
-TEST(BuiltinSequences, OneRelativeOffsetEditChangesOnlyItsWaypointAcrossTheMatchingBindings)
+TEST(BuiltinSequences, OneRelativeOffsetEditChangesEveryUseAcrossTheMatchingBindings)
 {
   const auto before = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   for (const std::string changed_kind : {"pick", "place"}) {
-    for (const auto index : {2u, 3u}) {
-      const std::string name = changed_kind +
-        (index == 2 ? "_approach_dz" : "_retreat_dz");
+    for (const std::string phase : {"approach", "retreat"}) {
+      const std::string name = changed_kind + "_" + phase + "_dz";
       SCOPED_TRACE(name);
       auto yaml = YAML::LoadFile(SEQUENCE_CONFIG_PATH);
       constexpr double delta = 83.0;
@@ -263,10 +279,13 @@ TEST(BuiltinSequences, OneRelativeOffsetEditChangesOnlyItsWaypointAcrossTheMatch
       const auto after = SequenceConfig::from_yaml(YAML::Dump(yaml));
       for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
           auto expected = before.compile(team, kind, first, second);
-          ASSERT_EQ(expected.size(), kind == "pick" ? 5u : 7u);
+          ASSERT_EQ(expected.size(), kind == "pick" ? 6u : 8u);
           if (kind == changed_kind) {
-            const auto anchor_index = kind == "pick" ? 0u : 1u;
-            expected[anchor_index + index].pose[2] += delta;
+            const auto indices = phase == "retreat" ? std::vector<std::size_t>{4} :
+              kind == "pick" ? std::vector<std::size_t>{1, 2} : std::vector<std::size_t>{3};
+            for (const auto index : indices) {
+              expected[index].pose[2] += delta;
+            }
           }
           expect_same_steps(after.compile(team, kind, first, second), expected);
         });
@@ -290,7 +309,11 @@ TEST(BuiltinSequences, OneCommonSequenceEditChangesEveryMatchingBindingOnly)
           Step wait;
           wait.type = StepType::WAIT;
           wait.seconds = 0.375;
-          expected.push_back(wait);
+          if (kind == "place") {
+            expected.insert(expected.end() - 1, wait);
+          } else {
+            expected.push_back(wait);
+          }
         }
         expect_same_steps(after.compile(team, kind, first, second), expected);
       });

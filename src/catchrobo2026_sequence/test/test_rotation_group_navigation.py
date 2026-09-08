@@ -330,12 +330,13 @@ def test_first_pick_then_place_with_builtin_coordinates(rotation_rig, tmp_path, 
         rig.node.create_service(EndeffectorControl, 'set_endeffector_state', mechanism_done),
     ]
     config_file = Path(__file__).parents[1] / 'config/sequences.yaml'
+    config = yaml.load(config_file.read_text(), Loader=yaml.BaseLoader)
     if grouped:
-        config = yaml.load(config_file.read_text(), Loader=yaml.BaseLoader)
         place_name = config['bindings'][team]['place']['0,0']
         steps = config['sequences'][place_name]['steps']
+        assert steps[-1] == {'call': f'place_pre_{team}_waypoint'}
         steps.insert(0, {'rotation_group': 'start'})
-        steps.append({'rotation_group': 'end'})
+        steps.insert(len(steps) - 1, {'rotation_group': 'end'})
         config_file = tmp_path / 'first_place_rotation_group.yaml'
         config_file.write_text(yaml.safe_dump(config))
     rig.launch('catchrobo2026_sequence', 'sequence_node', {
@@ -348,6 +349,7 @@ def test_first_pick_then_place_with_builtin_coordinates(rotation_rig, tmp_path, 
         if kind == ExecuteSequence.Goal.PLACE:
             place_commands.append(rig.commands[-1].data[3])
             command_start = len(rig.commands)
+            place_route_start = len(rig.routes)
         handle = rig.resolve(rig.sequence.send_goal_async(ExecuteSequence.Goal(
             control_epoch=1, step_id=index, kind=kind, row=0, column=1,
             box=0, box_column=0, collector_mask=7)))
@@ -364,6 +366,44 @@ def test_first_pick_then_place_with_builtin_coordinates(rotation_rig, tmp_path, 
         direction = 1 if team == 'red' else -1
         assert min(direction*(b-a) for a, b in zip(place_commands, place_commands[1:])) >= -1e-5
         assert max(abs(b-a) for a, b in zip(place_commands, place_commands[1:])) <= 0.051
+    else:
+        def numeric(value):
+            return float(config['values'][value[1:]]) if value.startswith('$') else float(value)
+
+        place_above = [numeric(value) for value in config['poses'][f'place_{team}_0_0_above']]
+        place_retreat = place_above[:3]
+        place_retreat[2] += float(config['values']['place_retreat_dz'])
+        via = [float(value) for value in config['sequences'][
+            f'place_pre_{team}_waypoint']['steps'][0]['waypoint']['absolute']][:3]
+        pick_above = [numeric(value) for value in config['poses']['pick_0_1_above']]
+        pick_retreat = pick_above[:3]
+        pick_retreat[2] += float(config['values']['pick_retreat_dz'])
+
+        # PLACE finishes at its retreat target; its trailing waypoint is still deferred.
+        rig.observe(0.3)
+        assert len(rig.routes) == place_route_start + 3
+        assert math.dist(xyz(rig.poses[-1]), place_retreat) < 20.1
+        assert math.dist(xyz(rig.poses[-1]), via) > 100.0
+        placed_position = xyz(rig.poses[-1])
+        route_start, pose_start = len(rig.routes), len(rig.poses)
+        rig.observe(0.3)
+        assert len(rig.routes) == route_start
+        assert math.dist(xyz(rig.poses[-1]), placed_position) < 1.0
+
+        handle = rig.resolve(rig.sequence.send_goal_async(ExecuteSequence.Goal(
+            control_epoch=1, step_id=3, kind=ExecuteSequence.Goal.PICK,
+            row=0, column=1, collector_mask=7)))
+        assert handle.accepted
+        result = rig.resolve(handle.get_result_async())
+        assert result.result.success, result.result.message
+        rig.observe(0.1)
+        assert len(rig.routes) == route_start + 4
+        first_route = rig.routes[route_start]
+        assert math.dist(xyz(first_route.poses[0]), placed_position) < 1.0
+        assert math.dist(xyz(first_route.poses[-1]), pick_above[:3]) < 0.1
+        assert min(math.dist(xyz(pose), via) for pose in first_route.poses) < 3.0
+        assert min(math.dist(xyz(pose), via) for pose in rig.poses[pose_start:]) < 90.0
+        assert math.dist(xyz(rig.poses[-1]), pick_retreat) < 20.1
     for service in services:
         rig.node.destroy_service(service)
 

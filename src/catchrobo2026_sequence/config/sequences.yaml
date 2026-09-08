@@ -98,12 +98,12 @@ values:
   pick_endeffector_command: 0
   place_endeffector_command: 1
   # Initial CSV Z values; their physical clearance is not verified.
-  work_above_z: 186.95
-  common_work_above_z: 186.95
+  work_above_z: 206.95
+  common_work_above_z: 206.95
   place_above_z: 294.35
   # Each offset is relative to the last absolute pose, not the preceding move.
-  pick_approach_dz: -10
-  pick_retreat_dz: 10
+  pick_approach_dz: -30
+  pick_retreat_dz: 0
   place_approach_dz: -10
   place_retreat_dz: 10
 
@@ -167,8 +167,9 @@ sequences:
       - endeffector: '$place_endeffector_command'
   pick_common:
     steps:
-      - pump: suction
       - move: {relative: [0, 0, '$pick_approach_dz', 0]}
+      - move: {relative: [0, -10, '$pick_approach_dz', 0]}
+      - pump: suction
       - move: {relative: [0, 0, '$pick_retreat_dz', 0]}
       - endeffector: '$place_endeffector_command'
   place_common:
@@ -254,81 +255,97 @@ sequences:
       - call: place_pre_red_waypoint
       - move: {absolute: place_red_0_0_above}
       - call: place_common
+      - call: place_pre_red_waypoint
   place_red_0_1:
     steps:
       - call: place_pre_red_waypoint
       - move: {absolute: place_red_0_1_above}
       - call: place_common
+      - call: place_pre_red_waypoint
   place_red_1_0:
     steps:
       - call: place_pre_red_waypoint
       - move: {absolute: place_red_1_0_above}
       - call: place_common
+      - call: place_pre_red_waypoint
   place_red_1_1:
     steps:
       - call: place_pre_red_waypoint
       - move: {absolute: place_red_1_1_above}
       - call: place_common
+      - call: place_pre_red_waypoint
   place_red_2_0:
     steps:
       - call: place_pre_red_waypoint
       - move: {absolute: place_red_2_0_above}
       - call: place_common
+      - call: place_pre_red_waypoint
   place_red_2_1:
     steps:
       - call: place_pre_red_waypoint
       - move: {absolute: place_red_2_1_above}
       - call: place_common
+      - call: place_pre_red_waypoint
   place_red_3_0:
     steps:
       - call: place_pre_red_waypoint
       - move: {absolute: place_red_3_0_above}
       - call: place_common
+      - call: place_pre_red_waypoint
   place_red_3_1:
     steps:
       - call: place_pre_red_waypoint
       - move: {absolute: place_red_3_1_above}
       - call: place_common
+      - call: place_pre_red_waypoint
   place_blue_0_0:
     steps:
       - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_0_0_above}
       - call: place_common
+      - call: place_pre_blue_waypoint
   place_blue_0_1:
     steps:
       - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_0_1_above}
       - call: place_common
+      - call: place_pre_blue_waypoint
   place_blue_1_0:
     steps:
       - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_1_0_above}
       - call: place_common
+      - call: place_pre_blue_waypoint
   place_blue_1_1:
     steps:
       - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_1_1_above}
       - call: place_common
+      - call: place_pre_blue_waypoint
   place_blue_2_0:
     steps:
       - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_2_0_above}
       - call: place_common
+      - call: place_pre_blue_waypoint
   place_blue_2_1:
     steps:
       - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_2_1_above}
       - call: place_common
+      - call: place_pre_blue_waypoint
   place_blue_3_0:
     steps:
       - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_3_0_above}
       - call: place_common
+      - call: place_pre_blue_waypoint
   place_blue_3_1:
     steps:
       - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_3_1_above}
       - call: place_common
+      - call: place_pre_blue_waypoint
 
 bindings:
   red:

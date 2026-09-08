@@ -13,13 +13,13 @@
 | PICK | UIの `row=0..3`、`column=1..4` に対してCSVの `ID = row * 6 + column + 1`。16姿勢を赤青で共用 |
 | PLACE | 陣営別CSVの `GroupIdx = box + 1`、`RowIdx = box_column + 1`、中央の `ColIdx = 2`。赤青それぞれ8姿勢 |
 
-高さは `values.work_above_z=186.95`（自陣PICK）、`common_work_above_z=186.95`（共通エリアPICK）、`place_above_z=294.35`（PLACE）を姿勢から参照する。単位はmm。CSVを初期参考として調整した設定であり、`above` という名前が実機での上空高さや余裕量の確認済みを意味するものではない。
+高さは `values.work_above_z=206.95`（自陣PICK）、`common_work_above_z=206.95`（共通エリアPICK）、`place_above_z=294.35`（PLACE）を姿勢から参照する。単位はmm。CSVを初期参考として調整した設定であり、`above` という名前が実機での上空高さや余裕量の確認済みを意味するものではない。
 
-位置別PICKは絶対姿勢へ移動した後に `pick_common` を呼び、共通手順は「吸引→相対接近→相対退避→PLACE用の幅に切替」の順。PLACEは赤 `[150, 0, 360, π]`／青 `[1200, 0, 360, π]` の経由点から位置別の絶対姿勢へ1経路で移動し、`place_common` の「開放→相対接近→相対退避→オフ→PICK用の幅に切替」を実行する。初回はUIの「開始」で開始シーケンスを実行し、PLACE用の幅を指令する。このPLACE操作順は実機確認済みの手順ではない。
+位置別PICKは絶対姿勢へ移動した後に `pick_common` を呼び、共通手順は「相対Z接近→接近高さでY−10 mm→吸引→相対退避→PLACE用の幅に切替」の順。PLACEは赤 `[150, 0, 360, π]`／青 `[1200, 0, 360, π]` の経由点から位置別の絶対姿勢へ1経路で移動し、`place_common`の「開放→相対接近→相対退避→オフ→PICK用の幅に切替」を実行し、末尾に同じ陣営別経由点を保留して、次のPICK／PLACEへ向かう経路へつなぐ。初回はUIの「開始」で開始シーケンスを実行し、PLACE用の幅を指令する。このPLACE操作順は実機確認済みの手順ではない。
 
-幅切替の指令値は `values.pick_endeffector_command: 0` と `values.place_endeffector_command: 1` に仮置きし、PLACE末尾で前者、PICK末尾で後者を参照する。0/1の広い／狭い対応は手動で確認し、必要なら値を入れ替える。ユーザー指定により幅切替後の `wait` は追加しておらず、ROSサービスの受理応答でそのPICK／PLACEを完了する。機構動作の完了通知は待たない。
+幅切替の指令値は `values.pick_endeffector_command: 0` と `values.place_endeffector_command: 1` に仮置きし、PLACEの機構操作で前者、PICK末尾で後者を参照する。0/1の広い／狭い対応は手動で確認し、必要なら値を入れ替える。ユーザー指定により幅切替後の `wait` は追加しておらず、ROSサービスの受理応答でそのPICK／PLACEを完了する。機構動作の完了通知は待たない。
 
-現在の相対移動量は `pick_approach_dz`／`place_approach_dz` が `-10 mm`、`pick_retreat_dz`／`place_retreat_dz` が `+10 mm`。相対座標の基準は直近の絶対姿勢なので、各手順の2回の相対目標はその姿勢のZ−10／Z＋10 mmとなる。例えば自陣PICKのZ指令は `186.95 → 176.95 → 196.95 mm`。移動量の符号や復帰先を変える場合は、それぞれの値を直接編集する。
+現在のPICK相対移動量は`pick_approach_dz=-30 mm`、`pick_retreat_dz=0 mm`。直近の絶対姿勢を固定基準にするため、PICKのZ指令は`206.95 → 176.95 → 176.95 → 206.95 mm`となる。2回目の接近は同じ高さで基準Y−10 mmを目標にし、退避は元のYと直上高さへ戻る。PLACEは`place_approach_dz=-10 mm`、`place_retreat_dz=+10 mm`で、Z指令は`294.35 → 284.35 → 304.35 mm`。末尾の陣営別経由点のZ=360 mmはそのPLACE中には実行せず、次のPICK／PLACEへの移動用に保留する。
 
 実機デバッグではワークスペースのルートからソースYAMLの絶対パスを指定して起動する。以下はJazzyの例。`debug:=true` では初期化・開始・終了シーケンス・各PICK／PLACEの実行前に再読込し、その動作の実行中は開始時の展開結果を使う。
 
