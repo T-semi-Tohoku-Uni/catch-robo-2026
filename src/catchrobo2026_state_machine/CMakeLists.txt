@@ -9,12 +9,14 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(catchrobo2026_msgs REQUIRED)
 
 add_executable(state_machine_node src/state_machine_node.cpp)
 ament_target_dependencies(state_machine_node
   rclcpp
   std_msgs
+  std_srvs
   catchrobo2026_msgs
 )
 

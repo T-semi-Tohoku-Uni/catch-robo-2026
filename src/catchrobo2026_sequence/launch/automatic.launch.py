@@ -18,6 +18,9 @@ def generate_launch_description():
                 'catchrobo2026_sequence', 'config', 'sequences.yaml')),
         DeclareLaunchArgument('debug', default_value='false'),
         DeclareLaunchArgument(
+            'queue_config', default_value=package_path(
+                'catchrobo2026_ui', 'config', 'queue.yaml')),
+        DeclareLaunchArgument(
             'pump_config', default_value=package_path(
                 'catchrobo2026_pump', 'config', 'pump.yaml')),
         DeclareLaunchArgument('ipc_socket', default_value='/tmp/catchrobo2026-control.sock'),
@@ -39,6 +42,7 @@ def generate_launch_description():
                 'ipc_socket': LaunchConfiguration('ipc_socket'),
                 'listen': LaunchConfiguration('listen'),
                 'sequence_enabled': 'true',
+                'queue_config': LaunchConfiguration('queue_config'),
             }.items()),
             
         # Existing Nodes
