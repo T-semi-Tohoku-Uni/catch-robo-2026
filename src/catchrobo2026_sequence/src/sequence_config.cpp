@@ -158,7 +158,7 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
     const YAML::Node root = documents.front();
     keys(root, "config", {"version", "values", "poses", "sequences", "bindings",
       "start_sequence", "before_initialization_sequence", "after_initialization_sequence",
-      "end_sequence"});
+      "end_sequence", "route_timeout_sec"});
     if (scalar(root["version"], "version") != "1") {
       fail("version", "only version 1 is supported");
     }
@@ -274,6 +274,13 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
       };
 
     SequenceConfig config;
+    if (root["route_timeout_sec"]) {
+      const double timeout = numeric(root["route_timeout_sec"], "route_timeout_sec");
+      if (timeout <= 0.0 || timeout > MAX_DURATION_SEC) {
+        fail("route_timeout_sec", "timeout must be in (0, 86400] seconds");
+      }
+      config.route_timeout_sec_ = timeout;
+    }
     std::set<std::string> visiting_sequences;
     std::function<const std::vector<RawStep> &(const std::string &)> resolve_sequence;
     resolve_sequence = [&](const std::string & name) -> const std::vector<RawStep> & {

@@ -180,6 +180,7 @@ private:
             if (steps_.empty() && !lifecycle) {
                 throw std::runtime_error("the selected sequence has no steps");
             }
+            active_route_timeout_ = candidate.route_timeout_sec().value_or(route_timeout_);
             if (debug_) {
                 *config_ = std::move(candidate);
             }
@@ -403,9 +404,9 @@ private:
                 generate_request_->z = target[2];
                 generate_request_->phi = target[3];
                 RCLCPP_INFO(get_logger(),
-                    "MOVE steps %zu..%zu: %zu waypoints -> [%.2f, %.2f, %.2f, %.3f]",
+                    "MOVE steps %zu..%zu: %zu waypoints -> [%.2f, %.2f, %.2f, %.3f], timeout=%.2fs",
                     index_, route_end_index_, generate_request_->waypoints.size(),
-                    target[0], target[1], target[2], target[3]);
+                    target[0], target[1], target[2], target[3], active_route_timeout_);
             }
             transition(Phase::WAIT_PLAN, "waiting for planner", service_timeout_);
             break;
@@ -458,7 +459,7 @@ private:
                     begin_stop("follower rejected the route");
                     return;
                 }
-                transition(Phase::FOLLOWING, "following route", route_timeout_);
+                transition(Phase::FOLLOWING, "following route", active_route_timeout_);
             } catch (const std::exception &error) {
                 if (goal_) {
                     begin_stop(std::string("route response: ") + error.what());
@@ -492,6 +493,7 @@ private:
     bool debug_{false}, stopping_{false}, faulted_{false};
     bool service_pending_{false}, route_pending_{false}, cancel_sent_{false};
     double service_timeout_, route_timeout_, sequence_timeout_, stop_timeout_;
+    double active_route_timeout_{0.0};
     Phase phase_{Phase::READY};
     Clock::time_point deadline_, sequence_deadline_, stop_deadline_;
     std::unique_ptr<SequenceConfig> config_;

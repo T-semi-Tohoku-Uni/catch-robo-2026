@@ -3,6 +3,7 @@
 
 #include <array>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -43,6 +44,7 @@ public:
   std::vector<Step> compile_start() const;
   std::vector<Step> compile_initialization() const;
   std::vector<Step> compile_end() const;
+  std::optional<double> route_timeout_sec() const {return route_timeout_sec_;}
 
 private:
   struct RawPose
@@ -68,6 +70,7 @@ private:
   std::string before_initialization_sequence_;
   std::string after_initialization_sequence_;
   std::string end_sequence_;
+  std::optional<double> route_timeout_sec_;
 };
 
 }  // namespace catchrobo2026_sequence
