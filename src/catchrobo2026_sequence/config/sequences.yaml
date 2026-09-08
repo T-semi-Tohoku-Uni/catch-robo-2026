@@ -25,6 +25,16 @@
 #   - endeffector: '$place_endeffector_command'  # 0 or 1; width, not angle
 #   - wait: 0.5                     # seconds
 #   - call: pick_common             # inline another sequence here
+#   - suction_check: {start: {timeout: 2.0}}  # monitor while later steps run
+#   - suction_check: wait           # wait for success or timeout; save the result
+#   - if: {condition: suction_success, then: [{break: true}]}
+#   - for: {max_iterations: 3, steps: [{wait: 0.5}]}
+#   - fail: "Suction failed"        # finish the action with failure
+# IF accepts suction_success / suction_failure and an optional else step list.
+# BREAK exits the innermost FOR. FOR counts include the first attempt.
+# Pair each suction start with wait before another start or result condition.
+# Success requires all UI-selected collectors; a timeout is available to IF.
+# Service/transport errors stop the action. See pick_common for bounded retries.
 # Relative moves use the last absolute target as a FIXED anchor, not the last move.
 # Each lifecycle hook needs its own absolute anchor before any relative move.
 # PICK/PLACE pumps use the UI-selected collectors; other collectors receive off.
@@ -71,6 +81,9 @@ values:
   # Each offset is relative to the last absolute pose, not the preceding move.
   pick_approach_dz: -10
   pick_retreat_dz: 10
+  # Provisional retry settings; tune against the complete approach/retreat motion.
+  pick_max_attempts: 3
+  pick_suction_timeout_sec: 2.0
   place_approach_dz: -10
   place_retreat_dz: 10
 
@@ -131,9 +144,22 @@ sequences:
       - endeffector: '$place_endeffector_command'
   pick_common:
     steps:
-      - pump: suction
-      - move: {relative: [0, 0, '$pick_approach_dz', 0]}
-      - move: {relative: [0, 0, '$pick_retreat_dz', 0]}
+      - for:
+          max_iterations: '$pick_max_attempts'
+          steps:
+            - suction_check: {start: {timeout: '$pick_suction_timeout_sec'}}
+            - pump: suction
+            - move: {relative: [0, 0, '$pick_approach_dz', 0]}
+            - move: {relative: [0, 0, '$pick_retreat_dz', 0]}
+            - suction_check: wait
+            - if:
+                condition: suction_success
+                then:
+                  - break: true
+      - if:
+          condition: suction_failure
+          then:
+            - fail: "Suction failed after the maximum number of attempts"
       - endeffector: '$place_endeffector_command'
   place_common:
     steps:

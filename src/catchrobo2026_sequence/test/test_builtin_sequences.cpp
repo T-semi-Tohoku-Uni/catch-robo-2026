@@ -41,6 +41,9 @@ void expect_same_steps(const std::vector<Step> & actual, const std::vector<Step>
     }
     EXPECT_EQ(actual[index].command, expected[index].command);
     EXPECT_DOUBLE_EQ(actual[index].seconds, expected[index].seconds);
+    EXPECT_EQ(actual[index].jump_index, expected[index].jump_index);
+    EXPECT_EQ(actual[index].condition_success, expected[index].condition_success);
+    EXPECT_EQ(actual[index].message, expected[index].message);
   }
 }
 
@@ -61,18 +64,27 @@ void for_each_binding(Callback callback)
   }
 }
 
-TEST(BuiltinSequences, InitializationAndEndMoveToTheSharedLifecyclePose)
+std::vector<std::size_t> move_indices(const std::vector<Step> & steps)
+{
+  std::vector<std::size_t> result;
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    if (steps[index].type == StepType::MOVE) {
+      result.push_back(index);
+    }
+  }
+  return result;
+}
+
+TEST(BuiltinSequences, InitializationIsCommandOnlyAndEndUsesTheLifecyclePose)
 {
   const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   const auto steps = config.compile_initialization();
-  ASSERT_EQ(steps.size(), 2u);
+  ASSERT_EQ(steps.size(), 1u);
   EXPECT_EQ(steps[0].type, StepType::INITIALIZE);
-  EXPECT_EQ(steps[1].type, StepType::MOVE);
-  EXPECT_EQ(steps[1].pose, (Pose{670, -110, 220, 0}));
   const auto ending = config.compile_end();
   ASSERT_EQ(ending.size(), 1u);
   EXPECT_EQ(ending[0].type, StepType::MOVE);
-  EXPECT_EQ(ending[0].pose, steps[1].pose);
+  EXPECT_EQ(ending[0].pose, (Pose{670, -110, 220, 0}));
 }
 
 TEST(BuiltinSequences, EveryUiPositionIsConfigured)
@@ -161,15 +173,39 @@ TEST(BuiltinSequences, AllBindingsUseTheConfiguredPumpAndWaypointOrder)
   const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
       const auto steps = config.compile(team, kind, first, second);
-      ASSERT_EQ(steps.size(), kind == "pick" ? 5u : 6u);
+      ASSERT_GE(steps.size(), 6u);
       EXPECT_EQ(steps[0].type, StepType::MOVE);
-      EXPECT_EQ(steps[1].type, StepType::PUMP);
-      EXPECT_EQ(steps[1].command, kind == "pick" ? 1 : -1);
-      EXPECT_EQ(steps[2].type, StepType::MOVE);
-      EXPECT_EQ(steps[3].type, StepType::MOVE);
       if (kind == "place") {
+        ASSERT_EQ(steps.size(), 6u);
+        EXPECT_EQ(steps[1].type, StepType::PUMP);
+        EXPECT_EQ(steps[1].command, -1);
+        EXPECT_EQ(steps[2].type, StepType::MOVE);
+        EXPECT_EQ(steps[3].type, StepType::MOVE);
         EXPECT_EQ(steps[4].type, StepType::PUMP);
         EXPECT_EQ(steps[4].command, 0);
+      } else {
+        std::size_t attempts = 0;
+        std::size_t failures = 0;
+        for (std::size_t index = 0; index < steps.size(); ++index) {
+          if (steps[index].type == StepType::SUCTION_CHECK_START) {
+            ++attempts;
+            EXPECT_DOUBLE_EQ(steps[index].seconds, value(yaml, "pick_suction_timeout_sec"));
+            ASSERT_LT(index + 6, steps.size());
+            EXPECT_EQ(steps[index + 1].type, StepType::PUMP);
+            EXPECT_EQ(steps[index + 1].command, 1);
+            EXPECT_EQ(steps[index + 2].type, StepType::MOVE);
+            EXPECT_EQ(steps[index + 3].type, StepType::MOVE);
+            EXPECT_EQ(steps[index + 4].type, StepType::SUCTION_CHECK_WAIT);
+            EXPECT_EQ(steps[index + 5].type, StepType::IF_SUCTION);
+            EXPECT_TRUE(steps[index + 5].condition_success);
+            EXPECT_EQ(steps[index + 6].type, StepType::JUMP);
+          }
+          if (steps[index].type == StepType::FAIL) {
+            ++failures;
+          }
+        }
+        EXPECT_EQ(attempts, value(yaml, "pick_max_attempts"));
+        EXPECT_EQ(failures, 1u);
       }
       EXPECT_EQ(steps.back().type, StepType::ENDEFFECTOR);
       EXPECT_EQ(
@@ -184,9 +220,11 @@ TEST(BuiltinSequences, BothRelativeOffsetsUseTheFixedApproachAnchor)
   const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
       const auto steps = config.compile(team, kind, first, second);
-      ASSERT_EQ(steps.size(), kind == "pick" ? 5u : 6u);
-      for (const auto index : {2u, 3u}) {
-        const std::string offset = kind + (index == 2 ? "_approach_dz" : "_retreat_dz");
+      const auto moves = move_indices(steps);
+      ASSERT_EQ(moves.size(), kind == "pick" ? 1 + 2 * value(yaml, "pick_max_attempts") : 3);
+      for (std::size_t ordinal = 1; ordinal < moves.size(); ++ordinal) {
+        const auto index = moves[ordinal];
+        const std::string offset = kind + (ordinal % 2 ? "_approach_dz" : "_retreat_dz");
         for (const auto axis : {0u, 1u, 3u}) {
           EXPECT_DOUBLE_EQ(steps[index].pose[axis], steps[0].pose[axis]);
         }
@@ -227,9 +265,9 @@ TEST(BuiltinSequences, OneRelativeOffsetEditChangesOnlyItsWaypointAcrossTheMatch
 {
   const auto before = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   for (const std::string changed_kind : {"pick", "place"}) {
-    for (const auto index : {2u, 3u}) {
+    for (const auto ordinal : {1u, 2u}) {
       const std::string name = changed_kind +
-        (index == 2 ? "_approach_dz" : "_retreat_dz");
+        (ordinal == 1 ? "_approach_dz" : "_retreat_dz");
       SCOPED_TRACE(name);
       auto yaml = YAML::LoadFile(SEQUENCE_CONFIG_PATH);
       constexpr double delta = 83.0;
@@ -237,9 +275,11 @@ TEST(BuiltinSequences, OneRelativeOffsetEditChangesOnlyItsWaypointAcrossTheMatch
       const auto after = SequenceConfig::from_yaml(YAML::Dump(yaml));
       for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
           auto expected = before.compile(team, kind, first, second);
-          ASSERT_EQ(expected.size(), kind == "pick" ? 5u : 6u);
           if (kind == changed_kind) {
-            expected[index].pose[2] += delta;
+            const auto moves = move_indices(expected);
+            for (std::size_t position = ordinal; position < moves.size(); position += 2) {
+              expected[moves[position]].pose[2] += delta;
+            }
           }
           expect_same_steps(after.compile(team, kind, first, second), expected);
         });

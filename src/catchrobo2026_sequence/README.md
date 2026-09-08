@@ -8,7 +8,7 @@ UIの初期化・開始・終了操作と確定したPICK／PLACEを、YAMLに�
 
 起動時の既定ファイルは [config/sequences.yaml](config/sequences.yaml) です。運動学パッケージのCSVから転記した赤青共通の16 PICK座標と、赤青それぞれ8 PLACE座標を持ち、デバッグ用の初期手順を読み込んで実行できます。[config/sequences.example.yaml](config/sequences.example.yaml) は全位置未設定の雛形として残しています。
 
-各位置の絶対姿勢へ移動後、PICKは「相対移動→吸引→相対移動→オフ→PLACE用の幅に切替」、PLACEは「相対移動→開放→相対移動→オフ→PICK用の幅に切替」を実行します。各動作の退避・ポンプオフ直後に、次の動作用の幅指令を出します。初回はUIの「開始」でYAMLの開始シーケンスを実行し、PLACE用の幅を指令します。
+各位置の絶対姿勢へ移動後、PICKは「吸引判定開始→吸引→相対接近→相対退避→判定結果待ち」を繰り返し、成功したらPLACE用の幅に切り替えます。仮設定は最大3回・各判定2秒で、`values.pick_max_attempts`／`pick_suction_timeout_sec` から変更できます。上限まで失敗した場合はPICKを失敗として返します。PLACEは「開放→相対接近→相対退避→オフ→PICK用の幅に切替」です。初回はUIの「開始」でPLACE用の幅を指令します。`IF`／`FOR`／`break` の編集例は [CONFIG.md](CONFIG.md#吸引判定と条件分岐繰り返し) を参照してください。
 幅指令はYAMLの `values.pick_endeffector_command: 0`／`place_endeffector_command: 1` に仮置きしています。0/1の広い／狭い対応は手動で確認し、必要なら両値を入れ替えてください。幅切替後の待ち時間は追加しておらず、ROSサービスの受理応答でそのPICK／PLACEを完了します。
 現在の相対Zはapproachが `-10 mm`、retreatが `+10 mm` で、直近の絶対姿勢を固定基準にそれぞれZ−10／Z＋10 mmへ移動します。実機の高さ・移動量・PLACEの操作順は実機確認済みの値ではありません。
 
@@ -37,7 +37,7 @@ UIは開始中を「開始シーケンス」と表示し、完了後に通常の
 
 同梱YAMLの `sequences.before_initialization.steps` と `sequences.after_initialization.steps` に、初期化命令の前後に実行する手順を書けます。UIの「初期化」で前手順→初期化命令→後手順の順に実行し、全体成功後に初期化済みになります。初期化命令の応答は実機の原点復帰完了ではないため、必要な待機は後手順へ `wait` で設定してください。前後の相対移動は、それぞれの手順内の絶対移動を基準にします。
 
-UIの「終了」では現在動作の取消完了後に `sequences.ending.steps` を実行します。cancel／reset・動作失敗・Ctrl+Cでは実行しません。終了手順を中断する場合は取消ボタンを操作します。同梱設定では前手順は `steps: []`、後手順と終了手順は共通の `poses.lifecycle_pose: [670, -110, 220, 0]` への絶対移動です（x/y/zはmm、phiはrad）。参照先はトップレベルの `before_initialization_sequence`／`after_initialization_sequence`／`end_sequence` で変更できます。省略または `null` なら追加動作なしです。
+UIの「終了」では現在動作の取消完了後に `sequences.ending.steps` を実行します。cancel／reset・動作失敗・Ctrl+Cでは実行しません。終了手順を中断する場合は取消ボタンを操作します。同梱設定では初期化前後はともに `steps: []`、終了手順は `poses.lifecycle_pose: [670, -110, 220, 0]` への絶対移動です（x/y/zはmm、phiはrad）。参照先はトップレベルの `before_initialization_sequence`／`after_initialization_sequence`／`end_sequence` で変更できます。省略または `null` なら追加動作なしです。
 
 詳細と編集例は [CONFIG.md](CONFIG.md#初期化前後終了シーケンス) を参照してください。
 
@@ -65,13 +65,17 @@ UIの「終了」では現在動作の取消完了後に `sequences.ending.steps
 
 姿勢の `phi` は経路追従の回転角です。`endeffector: 0`／`1` は回収機構の幅を切り替える既存の `set_endeffector_state` への指令です。0/1の広い／狭い対応は実機側で確認します。
 
-ポンプ／エンドエフェクタのサービス成功は指令の受理です。吸着・開放・機構動作の完了をセンサで確認する機能はありません。設定の `wait` で必要な待機時間を与えます。シーケンス全体が成功した場合だけUIへ成功を返し、UIが元のepoch・step ID・RUNNING状態を照合し、PICK／PLACEでは保持／配置を更新、STARTでは通常キューへの進行を許可します。部分回収の検出は行いません。
+`set_pump_state`／エンドエフェクタのサービス成功は指令の受理です。吸引成否は独立した `check_suction`（`CheckSuction`）で確認します。PICKの選択機構すべてが同じ新規圧力サンプルで閾値条件を満たすと成功し、満たさないまま期限を迎えた場合だけ設定の再試行へ進みます。監視は要求後に早期成功を保存するため、その後の落下の継続監視は行いません。サービス拒否や通信異常では直ちに動作を停止します。圧力の比較方向・配列対応・閾値は [ポンプ設定](../catchrobo2026_pump/README.md) を確認してください。
+
+開放・幅切替の完了は観測せず、必要に応じて `wait` を使います。シーケンス全体が成功した場合だけUIへ成功を返し、UIがepoch・step ID・状態を照合してPICK／PLACEの保持／配置を更新します。上限まで部分吸着のままの場合もPICK全体を失敗とし、部分成功としてUIを更新しません。
 
 ## 取消・失敗
 
 UIのcancel／end／resetで現在動作を取り消します。UIは旧動作の終端結果を受けるまで次を送信せず、古い成功通知を新しいステップへ適用しません。動作失敗時は完了を記録せずUIをFINISHEDへ進め、原因をcontrol_nodeのログへ出します。
 
 シーケンサは待機・サービス応答・追従結果を非同期で処理します。取消時は後続手順を止め、実行中のFollowRouteを取り消します。従来の追従ノードは取消を処理すると追従ループを終了し、実測角の保持指令は追加しません。これはモータの非常停止や停止確認を意味しません。ポンプ／エンドエフェクタの指令は保持し、勝手に開放しません。既に送信したサービス要求は取り消せないため、応答を待ってから動作を終えます。
+
+読み取り専用の吸引監視は取消時に結果を破棄し、その応答を停止完了の条件にはしません。ポンプ側は成功または期限まで監視を続けますが、遅れて届く結果が次のアクションへ混入することはありません。
 
 停止待ち時間を超えて結果が不明な場合は失敗を返し、以降の動作を拒否します。接続先の状態を確認したうえでノードを再起動する必要があります。プロセス強制終了・通信断時の実機停止、原点復帰、衝突回避、手動との自動切替は別途必要です。
 
@@ -83,6 +87,8 @@ UIのcancel／end／resetで現在動作を取り消します。UIは旧動作�
 | `route_timeout_sec` | 30 | 各移動の追従 |
 | `sequence_timeout_sec` | 120 | INITIALIZE／START／END／PICK／PLACE全体 |
 | `stop_timeout_sec` | 3 | 取消・失敗後の未確定処理 |
+
+吸引監視応答の期限はYAMLの `suction_check.start.timeout` ＋ `service_timeout_sec` です。通常サービスの応答期限とは独立し、移動中も監視します。判定サービスの探索期限には `service_timeout_sec` を使用します。
 
 タイムアウトは0秒超〜86,400秒の有限値を指定します。`wait` の設定値にも0〜86,400秒の上限があり、動作全体には `sequence_timeout_sec` が適用されます。
 

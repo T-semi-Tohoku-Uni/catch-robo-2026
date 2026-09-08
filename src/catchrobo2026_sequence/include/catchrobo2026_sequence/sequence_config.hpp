@@ -2,6 +2,7 @@
 #define CATCHROBO2026_SEQUENCE__SEQUENCE_CONFIG_HPP_
 
 #include <array>
+#include <cstddef>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -14,7 +15,11 @@ namespace catchrobo2026_sequence
 using Pose = std::array<double, 4>;
 inline constexpr double MAX_DURATION_SEC = 86400.0;
 
-enum class StepType { MOVE, PUMP, ENDEFFECTOR, WAIT, INITIALIZE };
+enum class StepType
+{
+  MOVE, PUMP, ENDEFFECTOR, WAIT, INITIALIZE,
+  SUCTION_CHECK_START, SUCTION_CHECK_WAIT, IF_SUCTION, JUMP, FAIL
+};
 
 struct Step
 {
@@ -22,6 +27,9 @@ struct Step
   Pose pose{};
   int command{0};
   double seconds{0.0};
+  std::size_t jump_index{0};
+  bool condition_success{true};
+  std::string message;
 };
 
 class ConfigError : public std::runtime_error
@@ -47,6 +55,8 @@ private:
   {
     Step step;
     bool relative{false};
+    bool loop_break{false};
+    std::string where;
   };
 
   using BindingKey = std::tuple<std::string, std::string, int, int>;

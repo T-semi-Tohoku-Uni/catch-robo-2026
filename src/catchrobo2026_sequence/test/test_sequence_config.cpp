@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <fstream>
 #include <string>
+#include <vector>
 #include <unistd.h>
 
 namespace catchrobo2026_sequence
@@ -511,6 +512,298 @@ TEST(SequenceConfig, BoundsWaitDurationIncludingReferencedValues)
       SequenceConfig::from_yaml(document("{}", "{s: {steps: [{wait: '$too_long'}]}}") +
       "values: {too_long: " + duration + "}\n"), ConfigError);
   }
+}
+
+TEST(SequenceConfig, CompilesBoundedSuctionRetriesAndFailureBranch)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  s:
+    steps:
+      - move: {absolute: [10, 20, 30, 0]}
+      - for:
+          max_iterations: '$attempts'
+          steps:
+            - suction_check: {start: {timeout: '$timeout'}}
+            - pump: suction
+            - move: {relative: [0, 0, -5, 0]}
+            - suction_check: wait
+            - if:
+                condition: suction_success
+                then: [{break: true}]
+      - if:
+          condition: suction_failure
+          then: [{fail: 'suction retry limit reached'}]
+      - move: {relative: [0, 0, 5, 0]}
+)", "{'0,1': s}") + "values: {attempts: 3, timeout: 0.75}\n");
+  const auto steps = config.compile("red", "pick", 0, 1);
+  ASSERT_EQ(steps.size(), 22u);
+  for (std::size_t iteration = 0; iteration < 3; ++iteration) {
+    const auto start = 1 + iteration * 6;
+    EXPECT_EQ(steps[start].type, StepType::SUCTION_CHECK_START);
+    EXPECT_DOUBLE_EQ(steps[start].seconds, 0.75);
+    EXPECT_EQ(steps[start + 1].type, StepType::PUMP);
+    EXPECT_EQ(steps[start + 2].pose, (Pose{10, 20, 25, 0}));
+    EXPECT_EQ(steps[start + 3].type, StepType::SUCTION_CHECK_WAIT);
+    EXPECT_EQ(steps[start + 4].type, StepType::IF_SUCTION);
+    EXPECT_TRUE(steps[start + 4].condition_success);
+    EXPECT_EQ(steps[start + 4].jump_index, start + 6);
+    EXPECT_EQ(steps[start + 5].type, StepType::JUMP);
+    EXPECT_EQ(steps[start + 5].jump_index, 19u);
+  }
+  EXPECT_EQ(steps[19].type, StepType::IF_SUCTION);
+  EXPECT_FALSE(steps[19].condition_success);
+  EXPECT_EQ(steps[19].jump_index, 21u);
+  EXPECT_EQ(steps[20].type, StepType::FAIL);
+  EXPECT_EQ(steps[20].message, "suction retry limit reached");
+  EXPECT_EQ(steps[21].pose, (Pose{10, 20, 35, 0}));
+}
+
+TEST(SequenceConfig, RelocatesConditionalJumpsAcrossCallsInheritanceAndHooks)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  check:
+    steps:
+      - suction_check: {start: {timeout: 1}}
+      - suction_check: wait
+      - if:
+          condition: suction_success
+          then: [{pump: suction}]
+          else: [{pump: release}]
+  combined:
+    extends: check
+    steps: [{wait: 0}, {call: check}, {wait: 0}]
+)") + "before_initialization_sequence: check\n"
+    "after_initialization_sequence: combined\n");
+  const auto steps = config.compile_initialization();
+  ASSERT_EQ(steps.size(), 21u);
+  EXPECT_EQ(steps[2].jump_index, 5u);
+  EXPECT_EQ(steps[4].jump_index, 6u);
+  EXPECT_EQ(steps[6].type, StepType::INITIALIZE);
+  EXPECT_EQ(steps[9].jump_index, 12u);
+  EXPECT_EQ(steps[11].jump_index, 13u);
+  EXPECT_EQ(steps[16].jump_index, 19u);
+  EXPECT_EQ(steps[18].jump_index, 20u);
+}
+
+TEST(SequenceConfig, NestedBreakExitsOnlyTheInnermostLoop)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  s:
+    steps:
+      - for:
+          max_iterations: 2
+          steps:
+            - pump: off
+            - for:
+                max_iterations: 3
+                steps:
+                  - pump: suction
+                  - break: true
+            - pump: release
+      - wait: 0
+)", "{'0,1': s}"));
+  const auto steps = config.compile("red", "pick", 0, 1);
+  ASSERT_EQ(steps.size(), 17u);
+  std::vector<int> commands;
+  for (std::size_t index = 0; index < steps.size();) {
+    const auto & step = steps[index];
+    if (step.type == StepType::PUMP) {
+      commands.push_back(step.command);
+    }
+    if (step.type == StepType::JUMP) {
+      ASSERT_GT(step.jump_index, index);
+      index = step.jump_index;
+    } else {
+      ++index;
+    }
+  }
+  EXPECT_EQ(commands, (std::vector<int>{0, 1, -1, 0, 1, -1}));
+  EXPECT_EQ(steps[2].jump_index, 7u);
+  EXPECT_EQ(steps[10].jump_index, 15u);
+}
+
+TEST(SequenceConfig, RejectsInvalidSuctionCheckOrderingOnAnyReachablePath)
+{
+  const std::string start = "{suction_check: {start: {timeout: 1}}}";
+  const std::string wait = "{suction_check: wait}";
+  const std::string condition = "{if: {condition: suction_success, then: []}}";
+  for (const std::string & steps : {
+      wait, start, start + ", " + start + ", " + wait,
+      start + ", " + wait + ", " + wait, condition,
+      start + ", " + condition + ", " + wait,
+      start + ", " + wait + ", " + start + ", " + condition + ", " + wait,
+      start + ", {for: {max_iterations: 2, steps: [" + wait + "]}}",
+      start + ", " + wait + ", {if: {condition: suction_success, then: [" +
+      start + "]}}, " + wait,
+      start + ", " + wait + ", {if: {condition: suction_success, then: [" + start + "]}}",
+      "{for: {max_iterations: 2, steps: [" + start + ", {break: true}, " + wait + "]}}"})
+  {
+    SCOPED_TRACE(steps);
+    EXPECT_THROW(SequenceConfig::from_yaml(document(
+        "{}", "{s: {steps: [" + steps + "]}}", "{'0,1': s}")), ConfigError);
+  }
+  EXPECT_THROW(SequenceConfig::from_yaml(document("{}",
+      "{before: {steps: [" + start + "]}, after: {steps: [" + wait + "]}}") +
+    "before_initialization_sequence: before\nafter_initialization_sequence: after\n"),
+    ConfigError);
+}
+
+TEST(SequenceConfig, PreservesCompletedResultAcrossBranchesAndFragments)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  start_check: {steps: [{suction_check: {start: {timeout: 1}}}]}
+  finish_check: {steps: [{suction_check: wait}]}
+  s:
+    steps:
+      - call: start_check
+      - call: finish_check
+      - if: {condition: suction_failure, then: [{wait: 0}], else: [{pump: suction}]}
+      - if: {condition: suction_success, then: [{wait: 0}], else: [{pump: release}]}
+)", "{'0,1': s}"));
+  const auto steps = config.compile("red", "pick", 0, 1);
+  ASSERT_EQ(steps.size(), 10u);
+  EXPECT_FALSE(steps[2].condition_success);
+  EXPECT_TRUE(steps[6].condition_success);
+}
+
+TEST(SequenceConfig, RejectsAmbiguousAnchorsAfterBranchesOrLoopBreaks)
+{
+  for (const std::string body : {
+      "{if: {condition: suction_success, then: [{move: {absolute: [50, 60, 70, 0]}}]}}",
+      "{for: {max_iterations: 2, steps: ["
+      "{if: {condition: suction_success, then: [{break: true}]}}, "
+      "{move: {absolute: [50, 60, 70, 0]}}]}}"})
+  {
+    SCOPED_TRACE(body);
+    const auto yaml = document("{}", "{s: {steps: ["
+      "{move: {absolute: [10, 20, 30, 0]}}, "
+      "{suction_check: {start: {timeout: 1}}}, {suction_check: wait}, " + body +
+      ", {move: {relative: [0, 0, 5, 0]}}]}}", "{'0,1': s}");
+    EXPECT_THROW(SequenceConfig::from_yaml(yaml), ConfigError);
+  }
+  EXPECT_THROW(SequenceConfig::from_yaml(document("{}", R"(
+  s:
+    steps:
+      - suction_check: {start: {timeout: 1}}
+      - suction_check: wait
+      - if:
+          condition: suction_success
+          then: [{move: {absolute: [10, 20, 30, 0]}}]
+      - move: {relative: [0, 0, 5, 0]}
+)", "{'0,1': s}")), ConfigError);
+}
+
+TEST(SequenceConfig, BranchAnchorsCanBeSelectedByResultOrResetWithAbsoluteMove)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  s:
+    steps:
+      - suction_check: {start: {timeout: 1}}
+      - suction_check: wait
+      - if:
+          condition: suction_success
+          then: [{move: {absolute: [10, 20, 30, 0]}}]
+          else: [{move: {absolute: [50, 60, 70, 0]}}]
+      - if:
+          condition: suction_success
+          then: [{move: {relative: [0, 0, 5, 0]}}]
+          else: [{move: {relative: [0, 0, -5, 0]}}]
+      - move: {absolute: [100, 200, 300, 0]}
+      - move: {relative: [0, 0, 5, 0]}
+)", "{'0,1': s}"));
+  const auto steps = config.compile("red", "pick", 0, 1);
+  ASSERT_EQ(steps.size(), 12u);
+  EXPECT_EQ(steps[7].pose, (Pose{10, 20, 35, 0}));
+  EXPECT_EQ(steps[9].pose, (Pose{50, 60, 65, 0}));
+  EXPECT_EQ(steps[11].pose, (Pose{100, 200, 305, 0}));
+}
+
+TEST(SequenceConfig, ResolvesRelativeAnchorsForEachUnrolledIteration)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  s:
+    steps:
+      - move: {absolute: [10, 20, 30, 0]}
+      - for:
+          max_iterations: 2
+          steps:
+            - move: {relative: [0, 0, 5, 0]}
+            - move: {absolute: [50, 60, 70, 0]}
+      - move: {relative: [0, 0, -5, 0]}
+)", "{'0,1': s}"));
+  const auto steps = config.compile("red", "pick", 0, 1);
+  ASSERT_EQ(steps.size(), 6u);
+  EXPECT_EQ(steps[1].pose, (Pose{10, 20, 35, 0}));
+  EXPECT_EQ(steps[3].pose, (Pose{50, 60, 75, 0}));
+  EXPECT_EQ(steps[5].pose, (Pose{50, 60, 65, 0}));
+}
+
+TEST(SequenceConfig, RejectsInvalidControlFlowSyntaxEvenWhenUnused)
+{
+  for (const std::string step : {
+      "{suction_check: start}", "{suction_check: null}", "{suction_check: []}",
+      "{suction_check: {}}", "{suction_check: {start: {}}}",
+      "{suction_check: {start: {timeout: 0}}}", "{suction_check: {start: {timeout: -1}}}",
+      "{suction_check: {start: {timeout: 86400.1}}}",
+      "{suction_check: {start: {timeout: .inf}}}",
+      "{suction_check: {start: {timeout: '$missing'}}}",
+      "{suction_check: {start: {timeout: 1, collector_mask: 7}}}",
+      "{suction_check: {start: {timeout: 1}, wait: true}}",
+      "{if: {condition: pump_on, then: []}}", "{if: {condition: suction_success}}",
+      "{if: {condition: suction_success, then: null}}",
+      "{if: {condition: suction_success, then: [], else: null}}",
+      "{if: {condition: suction_success, then: [], otherwise: []}}",
+      "{for: {max_iterations: 0, steps: []}}", "{for: {max_iterations: -1, steps: []}}",
+      "{for: {max_iterations: 1.5, steps: []}}",
+      "{for: {max_iterations: 10001, steps: []}}",
+      "{for: {max_iterations: .nan, steps: []}}",
+      "{for: {max_iterations: '$missing', steps: []}}",
+      "{for: {max_iterations: 1}}", "{for: {steps: []}}",
+      "{for: {max_iterations: 1, steps: [], count: 1}}",
+      "{break: true}", "{for: {max_iterations: 1, steps: [{break: false}]}}",
+      "{for: {max_iterations: 1, steps: [{break: 1}]}}",
+      "{fail: ''}", "{fail: []}", "{fail: null}"})
+  {
+    SCOPED_TRACE(step);
+    EXPECT_THROW(SequenceConfig::from_yaml(document(
+        "{}", "{s: {steps: [" + step + "]}}")), ConfigError);
+  }
+}
+
+TEST(SequenceConfig, BoundsLoopExpansionAndNestedCalls)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  s:
+    steps:
+      - for:
+          max_iterations: 100
+          steps:
+            - for: {max_iterations: 100, steps: [{wait: 0}]}
+)", "{'0,1': s}"));
+  EXPECT_EQ(config.compile("red", "pick", 0, 1).size(), 10000u);
+  EXPECT_NO_THROW(SequenceConfig::from_yaml(document("{}", R"(
+  s:
+    steps:
+      - for:
+          max_iterations: 10000
+          steps:
+            - for: {max_iterations: 10000, steps: []}
+)")));
+  for (const std::string sequences : {
+      "{s: {steps: [{for: {max_iterations: 10000, steps: [{wait: 0}, {wait: 0}]}}]}}",
+      "{s: {steps: [{for: {max_iterations: 2, steps: [{call: s}]}}]}}",
+      "{s: {steps: [{if: {condition: suction_success, then: [{call: s}]}}]}}",
+      "{s: {steps: [{for: {max_iterations: 1, steps: [{call: missing}]}}]}}"})
+  {
+    SCOPED_TRACE(sequences);
+    EXPECT_THROW(SequenceConfig::from_yaml(document("{}", sequences)), ConfigError);
+  }
+  std::string nested = "{wait: 0}";
+  for (int depth = 0; depth < 64; ++depth) {
+    nested = "{for: {max_iterations: 1, steps: [" + nested + "]}}";
+  }
+  EXPECT_THROW(SequenceConfig::from_yaml(document(
+      "{}", "{s: {steps: [" + nested + "]}}")), ConfigError);
 }
 
 TEST(SequenceConfig, ReloadsOnlyOnLoadAndKeepsPreviousSnapshotAfterFailedReload)
