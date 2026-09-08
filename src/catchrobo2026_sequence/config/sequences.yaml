@@ -36,20 +36,24 @@
 # Inline waypoints run before the move target and do not change its fixed anchor.
 # Inline relative entries use the absolute anchor BEFORE this move.
 # Legacy move: {absolute: ..., waypoint: true} remains supported.
-# Rotation groups constrain the physical wrist joint, not world-frame phi:
-#   - rotation_group: start
+# Sequence groups preplan a span and keep unwrapped wrist commands:
+#   - sequence_group: {start: true, rotation_group: true, max_phi_travel: 1.5707963267948966}
 #   - move: {absolute: place_blue_0_0_above}
 #   - pump: release
 #   - wait: 0.5
 #   - move: {relative: [0, 0, '$place_retreat_dz', 0]}
-#   - rotation_group: end
+#   - sequence_group: end
+# rotation_group: true selects a single physical wrist direction within [-2*pi, 0].
+# Omit rotation_group to allow wrist reversal while retaining unwrapped commands.
+# max_phi_travel bounds SUM(abs(delta(q0 + q4))) in radians, not endpoint yaw difference.
+# Omit max_phi_travel for no total-yaw limit; zero requests constant world-frame phi.
+# The limit spans all moves, including travel from the group start to its first target.
 # The whole group is planned before its first operation; infeasible groups fail.
-# Direction is selected automatically within the existing wrist limits [-2*pi, 0].
-# Intermediate world-frame phi may differ from ordinary shortest-angle motion.
 # Match start/end after call/extends expansion; no nesting or movement-free groups.
 # A group cannot cross a UI action or initialization hook, or split a waypoint route.
 # Put start before the first waypoint and end after its final normal MOVE.
-# No rotation group is enabled in the configuration below; select the needed span.
+# Legacy rotation_group: start/end is equivalent to a group with rotation_group: true.
+# Ending below retains its previous direction constraint; its phi limit is not set yet.
 # Each lifecycle hook needs its own absolute anchor before any relative move.
 # PICK/PLACE pumps use the UI-selected collectors; other collectors receive off.
 # Lifecycle pump steps address all three collectors.
@@ -154,10 +158,10 @@ sequences:
     # - move: {absolute: lifecycle_pose}
   ending:
     steps:
-      - rotation_group: start
+      - sequence_group: {start: true, rotation_group: true}
       - move: {absolute: [675, 200, 300, 0]}
       - move: {absolute: lifecycle_pose}
-      - rotation_group: end
+      - sequence_group: end
   startup:
     steps:
       - endeffector: '$place_endeffector_command'

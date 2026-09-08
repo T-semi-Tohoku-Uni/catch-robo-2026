@@ -274,6 +274,7 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
       };
 
     SequenceConfig config;
+    config.poses_ = poses;
     if (root["route_timeout_sec"]) {
       const double timeout = numeric(root["route_timeout_sec"], "route_timeout_sec");
       if (timeout <= 0.0 || timeout > MAX_DURATION_SEC) {
@@ -336,7 +337,8 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
               const YAML::Node step = steps[i];
               const std::string at = where + ".steps[" + std::to_string(i) + "]";
               keys(step, at, {
-                "move", "waypoint", "call", "pump", "endeffector", "wait", "rotation_group"});
+                "move", "waypoint", "call", "pump", "endeffector", "wait", "rotation_group",
+                "sequence_group"});
               if (step.size() != 1) {
                 fail(at, "a step must contain exactly one operation");
               }
@@ -378,13 +380,47 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
                       points[j], move_at + ".waypoints[" + std::to_string(j) + "]"));
                   }
                 }
+              } else if (step["sequence_group"]) {
+                const auto group = step["sequence_group"];
+                const auto group_at = at + ".sequence_group";
+                if (group.IsMap()) {
+                  keys(group, group_at, {"start", "rotation_group", "max_phi_travel"});
+                  if (scalar(group["start"], group_at + ".start") != "true") {
+                    fail(group_at + ".start", "expected true");
+                  }
+                  raw.step.type = StepType::SEQUENCE_START;
+                  if (group["rotation_group"]) {
+                    const auto value = scalar(
+                      group["rotation_group"], group_at + ".rotation_group");
+                    if (value != "true" && value != "false") {
+                      fail(group_at + ".rotation_group", "expected true or false");
+                    }
+                    raw.step.rotation_group = value == "true";
+                  }
+                  if (group["max_phi_travel"]) {
+                    const double limit = numeric(
+                      group["max_phi_travel"], group_at + ".max_phi_travel");
+                    if (limit < 0.0) {
+                      fail(group_at + ".max_phi_travel", "expected a nonnegative limit in radians");
+                    }
+                    raw.step.max_phi_travel = limit;
+                  }
+                } else {
+                  const auto value = scalar(group, group_at);
+                  if (value != "start" && value != "end") {
+                    fail(group_at, "expected start, end or a start options mapping");
+                  }
+                  raw.step.type = value == "start" ?
+                    StepType::SEQUENCE_START : StepType::SEQUENCE_END;
+                }
               } else if (step["rotation_group"]) {
                 const auto value = scalar(step["rotation_group"], at + ".rotation_group");
                 if (value != "start" && value != "end") {
                   fail(at + ".rotation_group", "expected start or end");
                 }
                 raw.step.type = value == "start" ?
-                  StepType::ROTATION_START : StepType::ROTATION_END;
+                  StepType::SEQUENCE_START : StepType::SEQUENCE_END;
+                raw.step.rotation_group = value == "start";
               } else if (step["pump"]) {
                 const auto value = scalar(step["pump"], at + ".pump");
                 raw.step.type = StepType::PUMP;
@@ -537,6 +573,38 @@ std::vector<Step> SequenceConfig::compile_end() const
   return compile_sequence(end_sequence_, "end_sequence");
 }
 
+std::vector<SequenceBinding> SequenceConfig::configured_bindings(const std::string & team) const
+{
+  if (team != "red" && team != "blue" && team != "both") {
+    fail("team", "expected red, blue or both");
+  }
+  std::vector<SequenceBinding> result;
+  for (const auto & [key, sequence] : bindings_) {
+    const auto & [binding_team, kind, first, second] = key;
+    if (!sequence.empty() && (team == "both" || team == binding_team)) {
+      result.push_back({binding_team, kind, first, second, sequence});
+    }
+  }
+  return result;
+}
+
+std::vector<Step> SequenceConfig::compile_named(const std::string & name) const
+{
+  if (sequences_.find(name) == sequences_.end()) {
+    fail("sequences." + name, "unknown sequence");
+  }
+  return compile_sequence(name, "sequences." + name);
+}
+
+Pose SequenceConfig::named_pose(const std::string & name) const
+{
+  const auto found = poses_.find(name);
+  if (found == poses_.end()) {
+    fail("poses." + name, "unknown pose reference");
+  }
+  return found->second;
+}
+
 std::vector<Step> SequenceConfig::compile_sequence(
   const std::string & name, const std::string & where) const
 {
@@ -581,8 +649,8 @@ std::vector<Step> SequenceConfig::compile_sequence(
     }
     result.push_back(step);
   }
-  bool in_rotation_group = false;
-  bool rotation_group_has_move = false;
+  bool in_sequence_group = false;
+  bool sequence_group_has_move = false;
   for (std::size_t i = 0; i < result.size(); ++i) {
     const auto at = where + ".steps[" + std::to_string(i) + "]";
     if (result[i].waypoint &&
@@ -591,28 +659,28 @@ std::vector<Step> SequenceConfig::compile_sequence(
       fail(at,
         "waypoint movement must be followed immediately by another movement");
     }
-    if (result[i].type == StepType::ROTATION_START) {
-      if (in_rotation_group) {
-        fail(at, "rotation groups cannot be nested");
+    if (result[i].type == StepType::SEQUENCE_START) {
+      if (in_sequence_group) {
+        fail(at, "sequence groups cannot be nested");
       }
-      in_rotation_group = true;
-      rotation_group_has_move = false;
-    } else if (result[i].type == StepType::ROTATION_END) {
-      if (!in_rotation_group) {
-        fail(at, "rotation_group end needs a preceding start");
+      in_sequence_group = true;
+      sequence_group_has_move = false;
+    } else if (result[i].type == StepType::SEQUENCE_END) {
+      if (!in_sequence_group) {
+        fail(at, "sequence_group end needs a preceding start");
       }
-      if (!rotation_group_has_move) {
-        fail(at, "rotation group must contain at least one movement");
+      if (!sequence_group_has_move) {
+        fail(at, "sequence group must contain at least one movement");
       }
-      in_rotation_group = false;
-    } else if (result[i].type == StepType::INITIALIZE && in_rotation_group) {
-      fail(at, "initialization cannot run inside a rotation group");
-    } else if (result[i].type == StepType::MOVE && in_rotation_group) {
-      rotation_group_has_move = true;
+      in_sequence_group = false;
+    } else if (result[i].type == StepType::INITIALIZE && in_sequence_group) {
+      fail(at, "initialization cannot run inside a sequence group");
+    } else if (result[i].type == StepType::MOVE && in_sequence_group) {
+      sequence_group_has_move = true;
     }
   }
-  if (in_rotation_group) {
-    fail(where, "rotation_group start needs a matching end in the same action or hook");
+  if (in_sequence_group) {
+    fail(where, "sequence_group start needs a matching end in the same action or hook");
   }
   return result;
 }

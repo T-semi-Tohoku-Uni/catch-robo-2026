@@ -107,7 +107,13 @@ private:
         const bool constrained = goal->rotation_group_id != 0;
         if (constrained) {
             if (goal->path.poses.empty() || goal->wrist_angles.size() != goal->path.poses.size() ||
-                (goal->wrist_direction != 1 && goal->wrist_direction != -1)) {
+                goal->wrist_direction < -1 || goal->wrist_direction > 1 ||
+                (!goal->phi_angles.empty() &&
+                 goal->phi_angles.size() != goal->path.poses.size())) {
+                return rclcpp_action::GoalResponse::REJECT;
+            }
+            if (!std::all_of(goal->phi_angles.begin(), goal->phi_angles.end(),
+                    [](double value) { return std::isfinite(value); })) {
                 return rclcpp_action::GoalResponse::REJECT;
             }
             for (size_t i = 0; i < goal->wrist_angles.size(); ++i) {
@@ -123,7 +129,8 @@ private:
                     goal->wrist_angles.front()) > 0.05) {
                 return rclcpp_action::GoalResponse::REJECT;
             }
-        } else if (!goal->wrist_angles.empty() || goal->wrist_direction != 0) {
+        } else if (!goal->wrist_angles.empty() || !goal->phi_angles.empty() ||
+                   goal->wrist_direction != 0) {
             return rclcpp_action::GoalResponse::REJECT;
         }
         // Empty goals retain the manual API, using a snapshot at acceptance.
@@ -144,6 +151,35 @@ private:
                 return rclcpp_action::GoalResponse::REJECT;
             }
         }
+        if (!goal->phi_angles.empty()) {
+            try {
+                for (size_t i = 0; i < path.poses.size(); ++i) {
+                    const double base = baseAt(path, i);
+                    tf2::Quaternion orientation;
+                    tf2::fromMsg(path.poses[i].pose.orientation, orientation);
+                    orientation.normalize();
+                    const auto y_axis = tf2::Matrix3x3(orientation).getColumn(1);
+                    const double pose_phi = std::atan2(-y_axis.x(), y_axis.y());
+                    if (std::hypot(y_axis.x(), y_axis.y()) < 1e-6 ||
+                        std::abs(std::remainder(goal->phi_angles[i] - pose_phi, 2.0 * M_PI)) >
+                            1e-4 ||
+                        std::abs(goal->phi_angles[i] - base - goal->wrist_angles[i]) > 1e-4) {
+                        return rclcpp_action::GoalResponse::REJECT;
+                    }
+                    const auto &a = path.poses[i == 0 ? i : i - 1].pose.position;
+                    const auto &b = path.poses[i].pose.position;
+                    if (!rotation_constraints::legal_phi_segment(
+                            a.x * 1000.0 - robot_pos[0], a.y * 1000.0 - robot_pos[1],
+                            b.x * 1000.0 - robot_pos[0], b.y * 1000.0 - robot_pos[1],
+                            goal->phi_angles[i == 0 ? i : i - 1], goal->phi_angles[i],
+                            goal->wrist_direction)) {
+                        return rclcpp_action::GoalResponse::REJECT;
+                    }
+                }
+            } catch (const std::exception &) {
+                return rclcpp_action::GoalResponse::REJECT;
+            }
+        }
         accepted_path_ = std::move(path);
         busy_ = true;
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
@@ -156,11 +192,14 @@ private:
                 joints_received_at_).count() <= rotation_joint_timeout_sec_;
     }
 
-    static double wristAt(const std::vector<double> &angles, double progress) {
-        if (angles.size() == 1) return rotation_constraints::clamp(angles.front());
+    static double angleAt(const std::vector<double> &angles, double progress) {
+        if (angles.size() == 1) return angles.front();
         const size_t index = std::min(static_cast<size_t>(progress), angles.size() - 2);
-        return rotation_constraints::clamp(angles[index] +
-            (angles[index + 1] - angles[index]) * (progress - index));
+        return angles[index] + (angles[index + 1] - angles[index]) * (progress - index);
+    }
+
+    static double wristAt(const std::vector<double> &angles, double progress) {
+        return rotation_constraints::clamp(angleAt(angles, progress));
     }
 
     static geometry_msgs::msg::Pose poseAt(const nav_msgs::msg::Path &path, double progress) {
@@ -180,6 +219,54 @@ private:
         qb.normalize();
         pose.orientation = tf2::toMsg(qa.slerp(qb, t));
         return pose;
+    }
+
+    double baseAt(const nav_msgs::msg::Path &path, double progress) {
+        const auto pose = poseAt(path, progress);
+        float position[6] = {static_cast<float>(pose.position.x * 1000.0),
+            static_cast<float>(pose.position.y * 1000.0),
+            static_cast<float>(pose.position.z * 1000.0), 0.0F,
+            static_cast<float>(-M_PI / 2.0), 0.0F};
+        float joints[4];
+        kin_.inverse_kinematics(position, joints);
+        if (!std::all_of(joints, joints + 4,
+                [](float value) { return std::isfinite(value); })) {
+            throw std::runtime_error("Constrained route target is unreachable");
+        }
+        return joints[0];
+    }
+
+    double limitedProgress(const FollowRoute::Goal &goal, const nav_msgs::msg::Path &path,
+                           double start, double desired, double budget) {
+        const bool interpolate_phi = !goal.phi_angles.empty();
+        double progress = start;
+        while (progress < desired) {
+            const double end = std::min(desired, std::floor(progress) + 1.0);
+            const auto cost = [&](double target) {
+                if (!interpolate_phi) {
+                    return std::abs(wristAt(goal.wrist_angles, target) -
+                        wristAt(goal.wrist_angles, progress));
+                }
+                // On each valid XY segment, base angle is monotonic.
+                return std::abs(angleAt(goal.phi_angles, target) -
+                    angleAt(goal.phi_angles, progress)) +
+                    std::abs(baseAt(path, target) - baseAt(path, progress));
+            };
+            const double segment_cost = cost(end);
+            if (segment_cost > budget) {
+                double low = progress;
+                double high = end;
+                for (int iteration = 0; iteration < 50; ++iteration) {
+                    const double middle = (low + high) / 2.0;
+                    if (cost(middle) <= budget) low = middle;
+                    else high = middle;
+                }
+                return low;
+            }
+            budget -= segment_cost;
+            progress = end;
+        }
+        return progress;
     }
 
     bool sendWristTarget(const std::shared_ptr<GoalHandleFollowRoute> &goal_handle,
@@ -245,7 +332,6 @@ private:
         const bool constrained = goal->rotation_group_id != 0;
         const auto &wrist_angles = goal->wrist_angles;
         double commanded_progress = 0.0;
-        double last_wrist_command = constrained ? wristAt(wrist_angles, 0.0) : 0.0;
 
         bool lookahead_initialized = false;
         double smoothed_lookahead = lookahead_near_mm_;
@@ -367,22 +453,10 @@ private:
                 // Keep XYZ and wrist on the same monotonically advancing path parameter.
                 target_progress = std::max(commanded_progress, target_progress);
                 const double max_step = rotation_speed_rad_sec_ * rotation_dt;
-                if (goal->wrist_direction *
-                    (wristAt(wrist_angles, target_progress) - last_wrist_command) > max_step) {
-                    double low = commanded_progress;
-                    double high = target_progress;
-                    for (int iteration = 0; iteration < 50; ++iteration) {
-                        const double middle = (low + high) / 2.0;
-                        if (goal->wrist_direction *
-                            (wristAt(wrist_angles, middle) - last_wrist_command) <= max_step) {
-                            low = middle;
-                        } else {
-                            high = middle;
-                        }
-                    }
-                    target_progress = low;
-                }
-                target_wrist = wristAt(wrist_angles, target_progress);
+                target_progress = limitedProgress(*goal, local_path,
+                    commanded_progress, target_progress, max_step);
+                target_wrist = goal->phi_angles.empty() ? wristAt(wrist_angles, target_progress) :
+                    angleAt(goal->phi_angles, target_progress) - baseAt(local_path, target_progress);
                 target_pose = poseAt(local_path, target_progress);
                 targeting_final = target_progress >= local_path.poses.size() - 1 - 1e-9;
             }
@@ -483,7 +557,6 @@ private:
                     throw std::runtime_error("Wrist target was rejected or timed out");
                 }
                 commanded_progress = target_progress;
-                last_wrist_command = target_wrist;
             } else {
                 pub_target_pose_->publish(target_pose_msg);
             }

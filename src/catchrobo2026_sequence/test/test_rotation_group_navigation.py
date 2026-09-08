@@ -8,16 +8,15 @@ import signal
 import subprocess
 import time
 
-import pytest
-import rclpy
-from rclpy.executors import SingleThreadedExecutor
 from catchrobo2026_msgs.action import ExecuteSequence, FollowRoute
 from catchrobo2026_msgs.srv import PlanRotationGroup, WristControl
 from geometry_msgs.msg import PoseStamped
+import pytest
+import rclpy
+from rclpy.executors import SingleThreadedExecutor
 from std_msgs.msg import Float32MultiArray
-import yaml
-
 from test_route_handoff import Harness, waypoint_pose, xyz
+import yaml
 
 
 @pytest.fixture
@@ -27,7 +26,8 @@ def rotation_rig(tmp_path, monkeypatch):
     monkeypatch.setenv('ROS_LOCALHOST_ONLY', '1')
     context = rclpy.context.Context()
     rclpy.init(context=context)
-    node = rclpy.create_node('observer', namespace=f'/rotation_nav_{os.getpid()}', context=context)
+    namespace = f'/rotation_nav_{os.getpid()}_{time.monotonic_ns()}'
+    node = rclpy.create_node('observer', namespace=namespace, context=context)
     executor = SingleThreadedExecutor(context=context)
     executor.add_node(node)
     children = []
@@ -38,7 +38,8 @@ def rotation_rig(tmp_path, monkeypatch):
         rig.joints, rig.commands = [], []
         rig.subscriptions.extend([
             node.create_subscription(Float32MultiArray, 'current_joints', rig.joints.append, 100),
-            node.create_subscription(Float32MultiArray, 'target_joint_angles', rig.commands.append, 100),
+            node.create_subscription(
+                Float32MultiArray, 'target_joint_angles', rig.commands.append, 100),
         ])
         rig.pose_pub = node.create_publisher(PoseStamped, 'target_pose', 10)
         rig.plan = node.create_client(PlanRotationGroup, 'plan_rotation_group')
@@ -88,17 +89,17 @@ def set_start(rig, wrist):
     rig.observe(0.1)
 
 
-def plan(rig, targets, ends):
+def plan(rig, targets, ends, **constraints):
     return rig.resolve(rig.plan.call_async(PlanRotationGroup.Request(
-        targets=targets, route_ends=ends)))
+        targets=targets, route_ends=ends, **constraints)))
 
 
-def begin(rig, response, group_id):
+def begin(rig, response, group_id, **constraints):
     first = response.routes[0]
     result = rig.resolve(rig.wrist.call_async(WristControl.Request(
         operation=WristControl.Request.BEGIN, group_id=group_id,
         direction=response.direction, wrist_angle=first.wrist_angles[0],
-        target=first.path.poses[0])))
+        target=first.path.poses[0], **constraints)))
     assert result.success, result.message
 
 
@@ -112,7 +113,8 @@ def follow(rig, response, route_index, group_id):
     route = response.routes[route_index]
     result = rig.resolve(rig.follow.send_goal_async(FollowRoute.Goal(
         start=True, path=route.path, rotation_group_id=group_id,
-        wrist_direction=response.direction, wrist_angles=route.wrist_angles)))
+        wrist_direction=response.direction, wrist_angles=route.wrist_angles,
+        phi_angles=route.phi_angles)))
     assert result.accepted
     return result
 
@@ -244,7 +246,7 @@ def test_follow_rejects_incomplete_or_reversing_constraints(rotation_rig):
     valid = FollowRoute.Goal(start=True, path=route.path, rotation_group_id=1,
                              wrist_direction=1, wrist_angles=route.wrist_angles)
     invalid = []
-    for field, value in [('rotation_group_id', 0), ('wrist_direction', 0),
+    for field, value in [('rotation_group_id', 0), ('wrist_direction', 2),
                          ('wrist_angles', []), ('path', type(route.path)())]:
         goal = copy.deepcopy(valid)
         setattr(goal, field, value)
@@ -364,3 +366,135 @@ def test_first_pick_then_place_with_builtin_coordinates(rotation_rig, tmp_path, 
         assert max(abs(b-a) for a, b in zip(place_commands, place_commands[1:])) <= 0.051
     for service in services:
         rig.node.destroy_service(service)
+
+
+def commanded_phi_travel(commands):
+    angles = [float(command.data[0]) + float(command.data[3]) for command in commands]
+    return sum(abs(b - a) for a, b in zip(angles, angles[1:]))
+
+
+@pytest.mark.parametrize('one_direction', [False, True])
+def test_ending_ab_rejects_full_turn_and_accepts_zero_phi_travel(rotation_rig, one_direction):
+    rig = rotation_rig
+    set_start(rig, 0.0)
+    final = waypoint_pose((670, -110, 220), 0.0)
+    before = len(rig.commands)
+    rejected = plan(rig, [final], [1], allow_wrist_reversal=not one_direction,
+                    limit_phi_travel=True, max_phi_travel=0.1)
+    assert not rejected.success and not rejected.routes
+    assert 'phi' in rejected.message.lower()
+    rig.observe(0.1)
+    assert commanded_phi_travel(rig.commands[before:]) < 1e-5
+
+    # Reach the equivalent lower endpoint without a full-turn setup motion.
+    set_start(rig, -2 * math.pi + 0.01)
+    setup = plan(rig, [wrist_pose(0.0, (675, 200, 300))], [1])
+    assert setup.success and setup.direction == -1
+    begin(rig, setup, 1)
+    assert rig.resolve(follow(rig, setup, 0, 1).get_result_async()).result.success
+    end(rig, 1)
+    rig.observe(0.1)
+
+    response = plan(rig, [final], [1], allow_wrist_reversal=not one_direction,
+                    limit_phi_travel=True, max_phi_travel=0.0)
+    assert response.success, response.message
+    assert response.direction == (1 if one_direction else 0) and response.phi_travel < 1e-5
+    assert response.routes[0].phi_angles
+    begin(rig, response, 2, limit_phi_travel=True, max_phi_travel=0.0)
+    before = len(rig.commands)
+    result = rig.resolve(follow(rig, response, 0, 2).get_result_async())
+    assert result.result.success
+    rig.observe(0.1)
+    assert commanded_phi_travel(rig.commands[before:]) < 1e-4
+    assert abs(rig.joints[-1].data[3] - (-6.220766497)) < 0.05
+    end(rig, 2)
+
+
+def test_phi_limit_counts_reversals_and_combines_with_direction(rotation_rig):
+    rig = rotation_rig
+    set_start(rig, -3.0)
+    targets = [wrist_pose(-2.6), wrist_pose(-3.0)]
+    response = plan(rig, targets, [1, 2], allow_wrist_reversal=True,
+                    limit_phi_travel=True, max_phi_travel=0.5)
+    assert not response.success and not response.routes
+    response = plan(rig, targets, [1, 2], allow_wrist_reversal=True,
+                    limit_phi_travel=True, max_phi_travel=0.81)
+    assert response.success, response.message
+    assert response.phi_travel == pytest.approx(0.8, abs=1e-5)
+    assert response.direction == 0
+    begin(rig, response, 1, limit_phi_travel=True, max_phi_travel=0.81)
+    before = len(rig.commands)
+    for index in range(2):
+        assert rig.resolve(follow(rig, response, index, 1).get_result_async()).result.success
+    rig.observe(0.1)
+    commands = rig.commands[before:]
+    assert commanded_phi_travel(commands) == pytest.approx(0.8, abs=0.06)
+    wrists = [message.data[3] for message in commands]
+    assert max(abs(b - a) for a, b in zip(wrists, wrists[1:])) <= 0.051
+    end(rig, 1)
+    rejected = plan(rig, targets, [1, 2], limit_phi_travel=True, max_phi_travel=1.0)
+    assert not rejected.success and not rejected.routes
+    accepted = plan(rig, [wrist_pose(-2.7)], [1],
+                    limit_phi_travel=True, max_phi_travel=0.4)
+    assert accepted.success and accepted.direction == 1
+    assert accepted.phi_travel == pytest.approx(0.3, abs=0.05)
+
+
+def test_sequence_group_looks_ahead_across_ending_moves(rotation_rig, tmp_path):
+    rig = rotation_rig
+    start = PoseStamped(pose=waypoint_pose((375, 238, 196.95), -math.pi))
+    for _ in range(3):
+        rig.pose_pub.publish(start)
+        rig.observe(0.1)
+    rig.until(lambda: math.dist(xyz(rig.poses[-1]), (375, 238, 196.95)) < 0.1)
+    rig.observe(0.1)
+    config = yaml.load((Path(__file__).parents[1] / 'config/sequences.yaml').read_text(),
+                       Loader=yaml.BaseLoader)
+    config['sequences']['ending'] = {'steps': [
+        {'sequence_group': {'start': True, 'max_phi_travel': math.pi + 0.01}},
+        {'move': {'absolute': [675, 200, 300, 0]}}, {'wait': 0.05},
+        {'move': {'absolute': 'lifecycle_pose'}}, {'sequence_group': 'end'},
+    ]}
+    config['end_sequence'] = 'ending'
+    config['route_timeout_sec'] = 12.0
+    config_file = tmp_path / 'sequence_phi_limit.yaml'
+    config_file.write_text(yaml.safe_dump(config))
+    rig.launch('catchrobo2026_sequence', 'sequence_node', {
+        'team': 'red', 'sequence_file': config_file,
+    })
+    assert rig.sequence.wait_for_server(timeout_sec=15)
+    before = len(rig.commands)
+    rig.execute(ExecuteSequence.Goal.END)
+    rig.observe(0.1)
+    commands = rig.commands[before:]
+    assert commanded_phi_travel(commands) <= math.pi + 0.011
+    a_index = min(range(len(commands)), key=lambda i: abs(commands[i].data[3] + 2 * math.pi))
+    assert abs(commands[a_index].data[3] + 2 * math.pi) < 1e-4
+    assert commanded_phi_travel(commands[a_index:]) < 1e-4
+    assert abs(rig.joints[-1].data[3] - (-6.220766497)) < 0.05
+
+
+def test_unrestricted_wrist_interpolation_limits_reversal_speed(rotation_rig):
+    rig = rotation_rig
+    set_start(rig, -2.0)
+    response = plan(rig, [wrist_pose(-1.5)], [1])
+    assert response.success
+    response.direction = 0
+    route = response.routes[0]
+    route.path.poses = [PoseStamped(pose=wrist_pose(wrist))
+                        for wrist in [-2.0, -1.5, -2.0]]
+    route.wrist_angles = [-2.0, -1.5, -2.0]
+    route.phi_angles = []
+    begin(rig, response, 1)
+    before = len(rig.commands)
+    handle = follow(rig, response, 0, 1)
+    pending = handle.get_result_async()
+    rig.observe(0.2)
+    assert not pending.done()
+    assert rig.resolve(pending).result.success
+    rig.observe(0.1)
+    wrists = [command.data[3] for command in rig.commands[before:]]
+    assert max(wrists) > -1.56
+    assert abs(wrists[-1] + 2.0) < 1e-4
+    assert max(abs(b - a) for a, b in zip(wrists, wrists[1:])) <= 0.051
+    end(rig, 1)

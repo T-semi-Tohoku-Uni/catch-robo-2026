@@ -4,6 +4,7 @@ import math
 import os
 from pathlib import Path
 import signal
+import struct
 import subprocess
 import tempfile
 import time
@@ -131,13 +132,16 @@ class WristControlTest(unittest.TestCase):
         self.joints_pub.publish(result)
         self.spin(0.04)
 
-    def request(self, operation, wrist=-2.0, direction=1, pose=None, group_id=None):
+    def request(self, operation, wrist=-2.0, direction=1, pose=None, group_id=None,
+                max_phi_travel=None):
         request = WristControl.Request()
         request.operation = operation
         request.group_id = self.group_id if group_id is None else group_id
         request.direction = direction
         request.wrist_angle = wrist
         request.target = self.pose(wrist) if pose is None else pose
+        request.limit_phi_travel = max_phi_travel is not None
+        request.max_phi_travel = 0.0 if max_phi_travel is None else max_phi_travel
         future = self.client.call_async(request)
         deadline = time.monotonic() + 2.0
         while not future.done():
@@ -151,9 +155,10 @@ class WristControlTest(unittest.TestCase):
                 self.active = False
         return response
 
-    def begin(self, wrist=-2.0, direction=1):
+    def begin(self, wrist=-2.0, direction=1, max_phi_travel=None):
         self.feedback(wrist)
-        result = self.request(WristControl.Request.BEGIN, wrist, direction)
+        result = self.request(WristControl.Request.BEGIN, wrist, direction,
+                              max_phi_travel=max_phi_travel)
         self.assertTrue(result.success, result.message)
 
     def assert_hold(self, expected, duration=0.16):
@@ -181,7 +186,7 @@ class WristControlTest(unittest.TestCase):
             WristControl.Request.BEGIN, pose=self.pose(x=0.775)).success)
         self.assertFalse(self.request(
             WristControl.Request.BEGIN, pose=self.pose(wrist=-1.0)).success)
-        self.assertFalse(self.request(WristControl.Request.BEGIN, direction=0).success)
+        self.assertFalse(self.request(WristControl.Request.BEGIN, direction=2).success)
         self.assertFalse(self.request(WristControl.Request.BEGIN, group_id=0).success)
         self.begin()
 
@@ -222,6 +227,76 @@ class WristControlTest(unittest.TestCase):
         self.assertTrue(self.request(WristControl.Request.END).success)
         self.joy_pub.publish(self.joy())
         self.assert_hold(self.joints(-2.0 * math.pi))
+
+    def test_direction_free_phi_travel_counts_reversals_and_survives_waits(self):
+        self.begin(direction=0, max_phi_travel=1.1)
+        for wrist in (-1.6, -1.9):
+            result = self.request(WristControl.Request.TARGET, wrist=wrist, direction=0)
+            self.assertTrue(result.success, result.message)
+        self.assert_hold(self.joints(-1.9))
+        result = self.request(WristControl.Request.TARGET, wrist=-1.5, direction=0)
+        self.assertTrue(result.success, result.message)
+        rejected = self.request(WristControl.Request.TARGET, wrist=-1.49, direction=0)
+        self.assertFalse(rejected.success)
+        self.assertIn('Phi total travel', rejected.message)
+        self.assertFalse(self.request(WristControl.Request.TARGET, wrist=-1.5).success)
+        self.assert_hold(self.joints(-1.5))
+        self.assertTrue(self.request(WristControl.Request.END).success)
+        self.assert_hold(self.joints(-1.5))
+        type(self).group_counter += 1
+        self.group_id = self.group_counter
+        self.begin(wrist=-1.5, direction=0, max_phi_travel=0.2)
+        self.assertTrue(self.request(WristControl.Request.TARGET, wrist=-1.3).success)
+
+    def test_phi_limit_rejects_full_turn_with_identical_quaternion(self):
+        self.begin(wrist=0.0, direction=0, max_phi_travel=0.1)
+        rejected = self.request(WristControl.Request.TARGET, wrist=-2.0 * math.pi,
+                                direction=0, pose=self.pose(wrist=0.0))
+        self.assertFalse(rejected.success)
+        self.assertIn('Phi total travel', rejected.message)
+        self.assert_hold(self.joints(0.0))
+
+    def test_zero_phi_budget_allows_base_and_wrist_compensation(self):
+        self.begin(direction=0, max_phi_travel=0.0)
+
+        def float32(value):
+            return struct.unpack('f', struct.pack('f', value))[0]
+
+        for index in range(1, 81):
+            x = 0.675 + index * 0.002
+            # Match the Float32 IK base used by the production command path.
+            base = float32(math.atan2(float32(x * 1000.0) - 675.0, 390.0))
+            wrist = -2.0 - base
+            result = self.request(WristControl.Request.TARGET, wrist=wrist, direction=0,
+                                  pose=self.pose(wrist=wrist, x=x))
+            self.assertTrue(result.success, result.message)
+        self.spin(0.06)
+        self.assertAlmostEqual(sum(self.samples[-1][1][i] for i in (0, 3)), -2.0,
+                               delta=1e-6)
+
+    def test_phi_tolerance_is_not_subtracted_from_each_small_increment(self):
+        self.begin(direction=0, max_phi_travel=0.0001)
+        for index in range(1, 66):
+            result = self.request(WristControl.Request.TARGET, wrist=-2.0 + index * 2e-6,
+                                  direction=0)
+            if not result.success:
+                self.assertIn('Phi total travel', result.message)
+                self.assertLessEqual(index, 57)
+                break
+        else:
+            self.fail('Small phi increments bypassed the cumulative limit')
+
+    def test_phi_limit_validation_and_combined_direction_constraint(self):
+        for limit in (-1.0, math.inf, math.nan):
+            self.feedback()
+            result = self.request(WristControl.Request.BEGIN, max_phi_travel=limit)
+            self.assertFalse(result.success)
+            self.assertIn('finite and nonnegative', result.message)
+        self.begin(direction=1, max_phi_travel=0.2)
+        self.assertTrue(self.request(WristControl.Request.TARGET, wrist=-1.9).success)
+        rejected = self.request(WristControl.Request.TARGET, wrist=-1.8)
+        self.assertTrue(rejected.success, rejected.message)
+        self.assertFalse(self.request(WristControl.Request.TARGET, wrist=-1.9).success)
 
     def test_quaternion_yaw_wrap_and_small_roundoff_keep_wrist_monotonic(self):
         self.begin(wrist=-4.0)

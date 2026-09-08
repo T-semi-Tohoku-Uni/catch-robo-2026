@@ -15,7 +15,11 @@ namespace catchrobo2026_sequence
 using Pose = std::array<double, 4>;
 inline constexpr double MAX_DURATION_SEC = 86400.0;
 
-enum class StepType { MOVE, PUMP, ENDEFFECTOR, WAIT, INITIALIZE, ROTATION_START, ROTATION_END };
+enum class StepType
+{
+  MOVE, PUMP, ENDEFFECTOR, WAIT, INITIALIZE, SEQUENCE_START, SEQUENCE_END,
+  ROTATION_START = SEQUENCE_START, ROTATION_END = SEQUENCE_END
+};
 
 struct Step
 {
@@ -25,6 +29,17 @@ struct Step
   std::vector<Pose> waypoints;
   int command{0};
   double seconds{0.0};
+  bool rotation_group{false};
+  std::optional<double> max_phi_travel;
+};
+
+struct SequenceBinding
+{
+  std::string team;
+  std::string kind;
+  int index1;
+  int index2;
+  std::string sequence;
 };
 
 class ConfigError : public std::runtime_error
@@ -44,6 +59,9 @@ public:
   std::vector<Step> compile_start() const;
   std::vector<Step> compile_initialization() const;
   std::vector<Step> compile_end() const;
+  std::vector<SequenceBinding> configured_bindings(const std::string & team) const;
+  std::vector<Step> compile_named(const std::string & name) const;
+  Pose named_pose(const std::string & name) const;
   std::optional<double> route_timeout_sec() const {return route_timeout_sec_;}
 
 private:
@@ -65,6 +83,7 @@ private:
     const std::string & name, const std::string & where) const;
 
   std::map<std::string, std::vector<RawStep>> sequences_;
+  std::map<std::string, Pose> poses_;
   std::map<BindingKey, std::string> bindings_;
   std::string start_sequence_;
   std::string before_initialization_sequence_;

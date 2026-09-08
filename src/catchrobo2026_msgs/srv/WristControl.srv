@@ -3,10 +3,14 @@ uint8 TARGET=2
 uint8 END=3
 uint8 operation
 uint64 group_id
+# +1/-1 constrains wrist direction; 0 allows reversal with explicit unwrapped targets.
 int8 direction
 float64 wrist_angle
 # Pose and wrist angle are delivered atomically.
 geometry_msgs/PoseStamped target
+# BEGIN-only bound on cumulative absolute commanded field-yaw travel, radians.
+bool limit_phi_travel
+float64 max_phi_travel
 ---
 bool success
 string message

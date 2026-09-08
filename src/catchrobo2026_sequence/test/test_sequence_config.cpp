@@ -60,6 +60,28 @@ public:
   std::string path;
 };
 
+TEST(SequenceConfig, InspectionUsesResolvedPosesAndOnlyEnabledBindings)
+{
+  const auto config = SequenceConfig::from_yaml(document(
+      "{base: [1, 2, 3, 0], target: {extends: base, x: '$x'}}",
+      "{motion: {steps: [{move: {absolute: target}}]}}",
+      "{'0,1': motion, '0,2': null}", "{}", "{}", "{'0,0': motion}") +
+    "values: {x: 675}\n");
+  EXPECT_EQ(config.named_pose("target"), (Pose{675, 2, 3, 0}));
+  EXPECT_EQ(config.compile_named("motion")[0].pose, config.named_pose("target"));
+  const auto red = config.configured_bindings("red");
+  ASSERT_EQ(red.size(), 1u);
+  EXPECT_EQ(red[0].team, "red");
+  EXPECT_EQ(red[0].kind, "pick");
+  EXPECT_EQ(red[0].index1, 0);
+  EXPECT_EQ(red[0].index2, 1);
+  EXPECT_EQ(red[0].sequence, "motion");
+  EXPECT_EQ(config.configured_bindings("both").size(), 2u);
+  EXPECT_THROW(config.named_pose("missing"), ConfigError);
+  EXPECT_THROW(config.compile_named("missing"), ConfigError);
+  EXPECT_THROW(config.configured_bindings("green"), ConfigError);
+}
+
 TEST(SequenceConfig, OptionalRouteTimeoutResolvesValuesAndValidBounds)
 {
   const auto yaml = document("{}", "{}");
@@ -115,6 +137,9 @@ TEST(SequenceConfig, RotationGroupsExpandAcrossCallsAndKeepOperationOrderAndRela
   const auto steps = config.compile("red", "pick", 0, 1);
   ASSERT_EQ(steps.size(), 9u);
   EXPECT_EQ(steps[1].type, StepType::ROTATION_START);
+  EXPECT_EQ(steps[1].type, StepType::SEQUENCE_START);
+  EXPECT_TRUE(steps[1].rotation_group);
+  EXPECT_FALSE(steps[1].max_phi_travel.has_value());
   EXPECT_EQ(steps[2].pose, (Pose{100, 200, 290, 0.5}));
   EXPECT_EQ(steps[3].type, StepType::PUMP);
   EXPECT_EQ(steps[3].command, 1);
@@ -274,6 +299,180 @@ TEST(SequenceConfig, RotationGroupsAreLocalToEachInitializationHookAndUiAction)
   EXPECT_EQ(steps[2].type, StepType::ROTATION_END);
   EXPECT_EQ(steps[3].type, StepType::INITIALIZE);
   EXPECT_EQ(steps[4].type, StepType::ROTATION_START);
+  EXPECT_EQ(config.compile_start().size(), 3u);
+  EXPECT_EQ(config.compile_end().size(), 3u);
+}
+
+TEST(SequenceConfig, SequenceGroupOptionsAreIndependentAndPreserveNumericReferences)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  begin:
+    steps:
+      - sequence_group: {start: true, rotation_group: true, max_phi_travel: '$budget'}
+  finish: {steps: [{sequence_group: end}]}
+  s:
+    extends: begin
+    steps:
+      - waypoint: {absolute: [100, 200, 300, 0]}
+      - move: {relative: [10, 0, 0, 0], waypoints: [{relative: [5, 0, 0, 0]}]}
+      - call: finish
+      - sequence_group: {start: true, max_phi_travel: 0}
+      - move: {relative: [0, 0, 10, 0]}
+      - sequence_group: end
+      - sequence_group: {start: true, rotation_group: true}
+      - move: {relative: [0, 0, 20, 0]}
+      - sequence_group: end
+      - sequence_group: {start: true, rotation_group: false, max_phi_travel: 0.5}
+      - move: {relative: [0, 0, 30, 0]}
+      - sequence_group: end
+)", "{'0,1': s}") + "values: {budget: '$quarter_turn', quarter_turn: 1.5707963267948966}\n");
+  const auto steps = config.compile("red", "pick", 0, 1);
+  ASSERT_EQ(steps.size(), 13u);
+  EXPECT_EQ(steps[0].type, StepType::SEQUENCE_START);
+  EXPECT_TRUE(steps[0].rotation_group);
+  ASSERT_TRUE(steps[0].max_phi_travel.has_value());
+  EXPECT_DOUBLE_EQ(*steps[0].max_phi_travel, 1.5707963267948966);
+  EXPECT_TRUE(steps[1].waypoint);
+  EXPECT_EQ(steps[2].pose, (Pose{110, 200, 300, 0}));
+  EXPECT_EQ(steps[2].waypoints, (std::vector<Pose>{{105, 200, 300, 0}}));
+  EXPECT_EQ(steps[3].type, StepType::SEQUENCE_END);
+  EXPECT_FALSE(steps[4].rotation_group);
+  ASSERT_TRUE(steps[4].max_phi_travel.has_value());
+  EXPECT_DOUBLE_EQ(*steps[4].max_phi_travel, 0.0);
+  EXPECT_EQ(steps[5].pose, (Pose{100, 200, 310, 0}));
+  EXPECT_TRUE(steps[7].rotation_group);
+  EXPECT_FALSE(steps[7].max_phi_travel.has_value());
+  EXPECT_FALSE(steps[10].rotation_group);
+  ASSERT_TRUE(steps[10].max_phi_travel.has_value());
+  EXPECT_DOUBLE_EQ(*steps[10].max_phi_travel, 0.5);
+}
+
+TEST(SequenceConfig, SequenceGroupStartWithoutOptionsDoesNotEnableConstraints)
+{
+  for (const std::string start : {"start", "{start: true}",
+      "{start: true, rotation_group: false}"})
+  {
+    SCOPED_TRACE(start);
+    const auto config = SequenceConfig::from_yaml(document("{}",
+        "{s: {steps: [{sequence_group: " + start + "}, "
+        "{move: {absolute: [100, 200, 300, 0]}}, {sequence_group: end}]}}",
+        "{'0,1': s}"));
+    const auto steps = config.compile("red", "pick", 0, 1);
+    ASSERT_EQ(steps.size(), 3u);
+    EXPECT_EQ(steps[0].type, StepType::SEQUENCE_START);
+    EXPECT_FALSE(steps[0].rotation_group);
+    EXPECT_FALSE(steps[0].max_phi_travel.has_value());
+    EXPECT_EQ(steps[2].type, StepType::SEQUENCE_END);
+    EXPECT_FALSE(steps[2].rotation_group);
+    EXPECT_FALSE(steps[2].max_phi_travel.has_value());
+  }
+}
+
+TEST(SequenceConfig, SequenceGroupRejectsInvalidOptionsBeforeExecution)
+{
+  for (const std::string options : {
+      "true", "START", "null", "[]", "{}", "{start: false}", "{start: start}",
+      "{start: 1}", "{end: true}", "{start: true, end: true}",
+      "{rotation_group: true}", "{max_phi_travel: 1}",
+      "{start: true, rotation_group: start}", "{start: true, rotation_group: 1}",
+      "{start: true, rotation_group: null}", "{start: true, rotation_group: []}",
+      "{start: true, rotation_group: '$enabled'}", "{start: true, limit: 1}",
+      "{start: true, start: true}", "{start: true, max_phi_travel: 1, max_phi_travel: 2}"})
+  {
+    SCOPED_TRACE(options);
+    EXPECT_THROW(SequenceConfig::from_yaml(document("{}",
+        "{s: {steps: [{sequence_group: " + options + "}]}}")), ConfigError);
+  }
+  for (const std::string limit : {
+      "-0.1", ".nan", ".inf", "-.inf", "null", "true", "[]", "{}", "'$missing'"})
+  {
+    SCOPED_TRACE(limit);
+    EXPECT_THROW(SequenceConfig::from_yaml(document("{}",
+        "{s: {steps: [{sequence_group: {start: true, max_phi_travel: " + limit + "}}]}}")),
+      ConfigError);
+  }
+  EXPECT_THROW(SequenceConfig::from_yaml(document("{}",
+      "{s: {steps: [{sequence_group: {start: true, max_phi_travel: '$limit'}}]}}") +
+      "values: {limit: -1}\n"), ConfigError);
+}
+
+TEST(SequenceConfig, SequenceGroupRejectsCombinedOperationsAndNestedLegacyGroups)
+{
+  for (const std::string steps : {
+      "[{sequence_group: start, wait: 0}]",
+      "[{sequence_group: start, rotation_group: start}]",
+      "[{move: {absolute: [1, 2, 3, 0], sequence_group: start}}]",
+      "[{sequence_group: start}, {rotation_group: start}, "
+      "{move: {absolute: [1, 2, 3, 0]}}, {rotation_group: end}, {sequence_group: end}]",
+      "[{rotation_group: start}, {sequence_group: start}, "
+      "{move: {absolute: [1, 2, 3, 0]}}, {sequence_group: end}, {rotation_group: end}]"})
+  {
+    SCOPED_TRACE(steps);
+    EXPECT_THROW(SequenceConfig::from_yaml(document(
+        "{}", "{s: {steps: " + steps + "}}", "{'0,1': s}")), ConfigError);
+  }
+}
+
+TEST(SequenceConfig, SequenceGroupValidatesExpandedScopeAndMovementBoundaries)
+{
+  const std::string fragments = R"(
+  begin: {steps: [{sequence_group: {start: true, max_phi_travel: 1}}]}
+  end: {steps: [{sequence_group: end}]}
+  move: {steps: [{move: {absolute: [1, 2, 3, 0]}}]}
+  via: {steps: [{waypoint: {absolute: [1, 2, 3, 0]}}]}
+)";
+  EXPECT_NO_THROW(SequenceConfig::from_yaml(document("{}", fragments)));
+  for (const std::string steps : {
+      "[{call: begin}, {call: move}]", "[{call: end}, {call: move}]",
+      "[{call: begin}, {call: move}, {call: end}, {call: end}]",
+      "[{call: begin}, {call: end}]",
+      "[{call: begin}, {wait: 0.5}, {pump: off}, {call: end}]",
+      "[{call: via}, {call: begin}, {call: move}, {call: end}]",
+      "[{call: begin}, {call: via}, {call: end}, {call: move}]"})
+  {
+    SCOPED_TRACE(steps);
+    const auto sequences = fragments + "  s: {steps: " + steps + "}\n";
+    EXPECT_THROW(SequenceConfig::from_yaml(document(
+        "{}", sequences, "{'0,1': s}")), ConfigError);
+    for (const std::string key : {"start_sequence", "end_sequence",
+        "before_initialization_sequence", "after_initialization_sequence"})
+    {
+      SCOPED_TRACE(key);
+      EXPECT_THROW(SequenceConfig::from_yaml(document("{}", sequences) + key + ": s\n"),
+        ConfigError);
+    }
+  }
+}
+
+TEST(SequenceConfig, SequenceGroupCannotSpanInitializationOrUiActions)
+{
+  const auto split = document("{}", R"(
+  before:
+    steps:
+      - sequence_group: {start: true, max_phi_travel: 1}
+      - move: {absolute: [1, 2, 3, 0]}
+  after: {steps: [{move: {absolute: [4, 5, 6, 0]}}, {sequence_group: end}]}
+)");
+  EXPECT_THROW(SequenceConfig::from_yaml(split +
+      "before_initialization_sequence: before\nafter_initialization_sequence: after\n"),
+    ConfigError);
+  EXPECT_THROW(SequenceConfig::from_yaml(split +
+      "start_sequence: before\nend_sequence: after\n"), ConfigError);
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  group:
+    steps:
+      - sequence_group: {start: true, max_phi_travel: 0.5}
+      - move: {absolute: [1, 2, 3, 0]}
+      - sequence_group: end
+)") + "before_initialization_sequence: group\nafter_initialization_sequence: group\n"
+    "start_sequence: group\nend_sequence: group\n");
+  const auto steps = config.compile_initialization();
+  ASSERT_EQ(steps.size(), 7u);
+  EXPECT_EQ(steps[2].type, StepType::SEQUENCE_END);
+  EXPECT_EQ(steps[3].type, StepType::INITIALIZE);
+  EXPECT_EQ(steps[4].type, StepType::SEQUENCE_START);
+  ASSERT_TRUE(steps[4].max_phi_travel.has_value());
+  EXPECT_DOUBLE_EQ(*steps[4].max_phi_travel, 0.5);
   EXPECT_EQ(config.compile_start().size(), 3u);
   EXPECT_EQ(config.compile_end().size(), 3u);
 }

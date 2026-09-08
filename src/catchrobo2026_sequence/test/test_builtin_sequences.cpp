@@ -70,13 +70,17 @@ TEST(BuiltinSequences, InitializationOnlySendsCommandAndEndUsesTwoNormalMoves)
   ASSERT_EQ(steps.size(), 1u);
   EXPECT_EQ(steps[0].type, StepType::INITIALIZE);
   const auto ending = config.compile_end();
-  ASSERT_EQ(ending.size(), 2u);
-  EXPECT_EQ(ending[0].type, StepType::MOVE);
-  EXPECT_EQ(ending[0].pose, (Pose{675, 200, 300, 0}));
-  EXPECT_FALSE(ending[0].waypoint);
+  ASSERT_EQ(ending.size(), 4u);
+  EXPECT_EQ(ending[0].type, StepType::SEQUENCE_START);
+  EXPECT_TRUE(ending[0].rotation_group);
+  EXPECT_FALSE(ending[0].max_phi_travel.has_value());
   EXPECT_EQ(ending[1].type, StepType::MOVE);
-  EXPECT_EQ(ending[1].pose, (Pose{670, -110, 220, 0}));
+  EXPECT_EQ(ending[1].pose, (Pose{675, 200, 300, 0}));
   EXPECT_FALSE(ending[1].waypoint);
+  EXPECT_EQ(ending[2].type, StepType::MOVE);
+  EXPECT_EQ(ending[2].pose, (Pose{670, -110, 220, 0}));
+  EXPECT_FALSE(ending[2].waypoint);
+  EXPECT_EQ(ending[3].type, StepType::SEQUENCE_END);
 }
 
 TEST(BuiltinSequences, EveryUiPositionIsConfigured)

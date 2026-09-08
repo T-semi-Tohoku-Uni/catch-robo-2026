@@ -164,6 +164,7 @@ private:
         cancel_sent_ = false;
         group_routes_.clear();
         planned_wrist_angles_.clear();
+        planned_phi_angles_.clear();
         sequence_deadline_ = after(sequence_timeout_);
         try {
             // Compile the entire action before sending any hardware command.
@@ -289,7 +290,7 @@ private:
             // Release the wrist even if a follower cancellation reply is delayed.
             if (group_needs_release_ && !group_begin_pending_ && !wrist_end_sent_ &&
                 wrist_controller_->service_is_ready()) {
-                end_rotation_group();
+                end_sequence_group();
             }
             if (!service_pending_ && !wrist_end_pending_ && !route_pending_ &&
                 !route_goal_ && !group_needs_release_) {
@@ -333,7 +334,7 @@ private:
             break;
         case Phase::WAIT_GROUP_PLAN:
             if (group_planner_->service_is_ready()) {
-                transition(Phase::GROUP_PLAN, "planning rotation group", service_timeout_);
+                transition(Phase::GROUP_PLAN, "planning sequence group", service_timeout_);
                 request<PlanRotationGroup>(group_planner_, group_request_,
                     [this](PlanRotationGroup::Response::SharedPtr reply) {
                         accept_rotation_plan(*reply);
@@ -342,12 +343,12 @@ private:
             break;
         case Phase::WAIT_WRIST_BEGIN:
             if (wrist_controller_->service_is_ready()) {
-                begin_rotation_group();
+                begin_sequence_group();
             }
             break;
         case Phase::WAIT_WRIST_END:
             if (wrist_controller_->service_is_ready()) {
-                end_rotation_group();
+                end_sequence_group();
             }
             break;
         case Phase::WAIT_FOLLOW:
@@ -408,7 +409,7 @@ private:
     {
         if (index_ == steps_.size()) {
             if (group_needs_release_) {
-                begin_stop("rotation group was not released");
+                begin_stop("sequence group was not released");
                 return;
             }
             finish(true, "sequence completed");
@@ -422,10 +423,12 @@ private:
                 route_end_index_ = route.end_index;
                 planned_path_ = route.route.path;
                 planned_wrist_angles_ = route.route.wrist_angles;
+                planned_phi_angles_ = route.route.phi_angles;
                 transition(Phase::WAIT_FOLLOW, "waiting for follower", service_timeout_);
                 break;
             }
             planned_wrist_angles_.clear();
+            planned_phi_angles_.clear();
             generate_request_ = std::make_shared<GenerateRoute::Request>();
             generate_request_->use_explicit_waypoints = true;
             route_end_index_ = index_;
@@ -485,11 +488,11 @@ private:
         case StepType::WAIT:
             transition(Phase::DELAY, "waiting", step.seconds);
             break;
-        case StepType::ROTATION_START:
-            prepare_rotation_group();
+        case StepType::SEQUENCE_START:
+            prepare_sequence_group();
             break;
-        case StepType::ROTATION_END:
-            transition(Phase::WAIT_WRIST_END, "waiting to release rotation group", service_timeout_);
+        case StepType::SEQUENCE_END:
+            transition(Phase::WAIT_WRIST_END, "waiting to release sequence group", service_timeout_);
             break;
         }
     }
@@ -505,13 +508,17 @@ private:
         return pose;
     }
 
-    void prepare_rotation_group()
+    void prepare_sequence_group()
     {
         group_routes_.clear();
         group_request_ = std::make_shared<PlanRotationGroup::Request>();
+        const auto &group = steps_[index_];
+        group_request_->allow_wrist_reversal = !group.rotation_group;
+        group_request_->limit_phi_travel = group.max_phi_travel.has_value();
+        group_request_->max_phi_travel = group.max_phi_travel.value_or(0.0);
         // Resolve every route before executing any command inside the group.
         size_t cursor = index_ + 1;
-        for (; cursor < steps_.size() && steps_[cursor].type != StepType::ROTATION_END; ++cursor) {
+        for (; cursor < steps_.size() && steps_[cursor].type != StepType::SEQUENCE_END; ++cursor) {
             if (steps_[cursor].type != StepType::MOVE) {
                 continue;
             }
@@ -532,24 +539,32 @@ private:
             group_routes_[first].end_index = cursor;
         }
         if (cursor == steps_.size() || group_routes_.empty()) {
-            throw std::runtime_error("invalid rotation group boundaries");
+            throw std::runtime_error("invalid sequence group boundaries");
         }
-        transition(Phase::WAIT_GROUP_PLAN, "waiting for rotation group planner", service_timeout_);
+        transition(Phase::WAIT_GROUP_PLAN, "waiting for sequence group planner", service_timeout_);
     }
 
     void accept_rotation_plan(const PlanRotationGroup::Response &reply)
     {
         if (!reply.success || reply.routes.size() != group_routes_.size() ||
-            (reply.direction != 1 && reply.direction != -1)) {
-            begin_stop("rotation group planning failed: " + reply.message);
+            (reply.direction != 1 && reply.direction != -1 &&
+                !(reply.direction == 0 && group_request_->allow_wrist_reversal))) {
+            begin_stop("sequence group planning failed: " + reply.message);
+            return;
+        }
+        if (!std::isfinite(reply.phi_travel) || reply.phi_travel < 0.0 ||
+            (group_request_->limit_phi_travel &&
+                reply.phi_travel > group_request_->max_phi_travel + 1e-5)) {
+            begin_stop("sequence group planner exceeded the total phi travel limit");
             return;
         }
         size_t offset = 0;
         for (auto &[first, cached] : group_routes_) {
             (void)first;
             const auto &route = reply.routes[offset++];
-            if (route.path.poses.empty() || route.wrist_angles.size() != route.path.poses.size()) {
-                begin_stop("rotation group planner returned an invalid route");
+            if (route.path.poses.empty() || route.wrist_angles.size() != route.path.poses.size() ||
+                (!route.phi_angles.empty() && route.phi_angles.size() != route.path.poses.size())) {
+                begin_stop("sequence group planner returned an invalid route");
                 return;
             }
             cached.route = route;
@@ -559,10 +574,10 @@ private:
             std::chrono::system_clock::now().time_since_epoch()).count();
         group_id_ = std::max(group_id_ + 1, static_cast<uint64_t>(timestamp));
         wrist_end_sent_ = false;
-        transition(Phase::WAIT_WRIST_BEGIN, "waiting to start rotation group", service_timeout_);
+        transition(Phase::WAIT_WRIST_BEGIN, "waiting to start sequence group", service_timeout_);
     }
 
-    void begin_rotation_group()
+    void begin_sequence_group()
     {
         const auto &first = group_routes_.begin()->second.route;
         auto value = std::make_shared<WristControl::Request>();
@@ -571,7 +586,9 @@ private:
         value->direction = group_direction_;
         value->target = first.path.poses.front();
         value->wrist_angle = first.wrist_angles.front();
-        transition(Phase::WRIST_BEGIN, "starting rotation group", service_timeout_);
+        value->limit_phi_travel = group_request_->limit_phi_travel;
+        value->max_phi_travel = group_request_->max_phi_travel;
+        transition(Phase::WRIST_BEGIN, "starting sequence group", service_timeout_);
         // Cancellation can arrive before the BEGIN reply, so retain its lease.
         group_needs_release_ = true;
         group_begin_pending_ = true;
@@ -580,23 +597,26 @@ private:
                 group_begin_pending_ = false;
                 if (!reply->success) {
                     group_needs_release_ = false;
-                    begin_stop("rotation group start rejected: " + reply->message);
+                    begin_stop("sequence group start rejected: " + reply->message);
                 } else if (!interrupted()) {
-                    RCLCPP_INFO(get_logger(), "Rotation group %llu: fourth joint direction=%d",
-                        static_cast<unsigned long long>(group_id_), group_direction_);
+                    RCLCPP_INFO(get_logger(),
+                        "Sequence group %llu: fourth joint direction=%d, phi limit=%s %.6f rad",
+                        static_cast<unsigned long long>(group_id_), group_direction_,
+                        group_request_->limit_phi_travel ? "enabled" : "disabled",
+                        group_request_->max_phi_travel);
                     command_done(true, "");
                 }
             }, true);
     }
 
-    void end_rotation_group()
+    void end_sequence_group()
     {
         auto value = std::make_shared<WristControl::Request>();
         value->operation = WristControl::Request::END;
         value->group_id = group_id_;
         wrist_end_sent_ = true;
         if (!stopping_) {
-            transition(Phase::WRIST_END, "releasing rotation group", service_timeout_);
+            transition(Phase::WRIST_END, "releasing sequence group", service_timeout_);
         }
         // Release independently of unrelated service replies during cancellation.
         wrist_end_pending_ = true;
@@ -609,17 +629,18 @@ private:
                     const auto reply = response.get();
                     if (!reply->success) {
                         faulted_ = true;
-                        begin_stop("rotation group release rejected: " + reply->message);
+                        begin_stop("sequence group release rejected: " + reply->message);
                         return;
                     }
                     group_needs_release_ = false;
                     group_routes_.clear();
                     planned_wrist_angles_.clear();
+                    planned_phi_angles_.clear();
                     if (!interrupted()) {
                         command_done(true, "");
                     }
                 } catch (const std::exception &error) {
-                    begin_stop(std::string("rotation group release: ") + error.what());
+                    begin_stop(std::string("sequence group release: ") + error.what());
                 }
             });
         const auto id = pending.request_id;
@@ -635,6 +656,7 @@ private:
             goal.rotation_group_id = group_id_;
             goal.wrist_direction = group_direction_;
             goal.wrist_angles = planned_wrist_angles_;
+            goal.phi_angles = planned_phi_angles_;
         }
         route_pending_ = true;
         cancel_sent_ = false;
@@ -706,6 +728,7 @@ private:
     bool group_needs_release_{false}, wrist_end_sent_{false};
     bool group_begin_pending_{false}, wrist_end_pending_{false};
     std::vector<double> planned_wrist_angles_;
+    std::vector<double> planned_phi_angles_;
     size_t index_{0};
     size_t route_end_index_{0};
     nav_msgs::msg::Path planned_path_;

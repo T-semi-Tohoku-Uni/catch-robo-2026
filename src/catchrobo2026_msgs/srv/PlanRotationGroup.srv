@@ -2,9 +2,15 @@
 geometry_msgs/Pose[] targets
 # Exclusive target indices ending each MOVE route.
 uint32[] route_ends
+# False preserves the legacy single wrist direction constraint.
+bool allow_wrist_reversal
+# Bound cumulative absolute unwrapped field-yaw travel in radians.
+bool limit_phi_travel
+float64 max_phi_travel
 ---
 bool success
 string message
-# +1: increasing fourth-joint angle; -1: decreasing.
+# +1: increasing fourth-joint angle; -1: decreasing; 0: unrestricted.
 int8 direction
 catchrobo2026_msgs/RotationGroupRoute[] routes
+float64 phi_travel

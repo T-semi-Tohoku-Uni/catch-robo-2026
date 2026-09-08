@@ -11,14 +11,15 @@ import pytest
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.task import Future
 
-from test_waypoint_sequence import rig as base_rig, move, waypoint_step
+from test_waypoint_sequence import move, rig as base_rig, waypoint_step  # noqa: F401
 
 
 @pytest.fixture
-def rig(base_rig):
+def rig(base_rig):  # noqa: F811
     rig = base_rig
     rig.group_plans, rig.wrist_requests = [], []
     rig.group_mode = 'success'
+    rig.planned_phi_travel = 0.0
     rig.begin_gate = None
     rig.pump_gate = None
     rig.wrist_mode = 'success'
@@ -27,7 +28,8 @@ def rig(base_rig):
         rig.group_plans.append(copy.deepcopy(request))
         response.success = rig.group_mode == 'success'
         response.message = 'no monotonic solution' if not response.success else 'planned'
-        response.direction = -1
+        response.direction = 0 if request.allow_wrist_reversal else -1
+        response.phi_travel = rig.planned_phi_travel
         if response.success:
             offset = 0
             previous = PoseStamped()
@@ -46,6 +48,8 @@ def rig(base_rig):
                     route.path.poses.append(previous)
                     wrist -= 0.1
                     route.wrist_angles.append(wrist)
+                if request.allow_wrist_reversal:
+                    route.phi_angles = list(route.wrist_angles)
                 response.routes.append(route)
                 offset = end
         return response
@@ -67,8 +71,8 @@ def rig(base_rig):
         return response
 
     rig.node.destroy_service(rig.services[1])
-    rig.services[1] = rig.node.create_service(PumpControl, 'set_pump_state', pump,
-                                            callback_group=ReentrantCallbackGroup())
+    rig.services[1] = rig.node.create_service(
+        PumpControl, 'set_pump_state', pump, callback_group=ReentrantCallbackGroup())
     rig.services.extend([
         rig.node.create_service(PlanRotationGroup, 'plan_rotation_group', plan),
         rig.node.create_service(WristControl, 'wrist_control', wrist,
@@ -227,3 +231,42 @@ def test_unconfirmed_release_blocks_next_action(rig):
     handle = rig.resolve(rig.sequence.send_goal_async(ExecuteSequence.Goal(
         control_epoch=1, step_id=2, kind=ExecuteSequence.Goal.END, collector_mask=7)))
     assert not handle.accepted
+
+
+@pytest.mark.parametrize('one_direction', [False, True])
+def test_sequence_group_passes_independent_constraints(rig, one_direction):
+    rig.launch([
+        {'sequence_group': {'start': True, 'rotation_group': one_direction,
+                            'max_phi_travel': 0.75}},
+        move([600, 200, 300, 0]), {'wait': 0.05},
+        move([650, 200, 300, 0]), {'sequence_group': 'end'},
+    ])
+    _, result = rig.start()
+    rig.until(lambda: len(rig.follows) == 1)
+    request = rig.group_plans[0]
+    assert request.allow_wrist_reversal == (not one_direction)
+    assert request.limit_phi_travel and request.max_phi_travel == 0.75
+    begin_request = rig.wrist_requests[0]
+    assert begin_request.limit_phi_travel and begin_request.max_phi_travel == 0.75
+    first = rig.follows[0]['request']
+    assert first.wrist_direction == (-1 if one_direction else 0)
+    assert bool(first.phi_angles) == (not one_direction)
+    rig.complete_follow(0)
+    rig.until(lambda: len(rig.follows) == 2)
+    assert len(rig.wrist_requests) == 1
+    assert rig.follows[1]['request'].rotation_group_id == first.rotation_group_id
+    rig.complete_follow(1)
+    rig.assert_succeeded(result)
+    assert_released(rig)
+
+
+def test_sequence_group_rejects_over_budget_plan_before_commands(rig):
+    rig.planned_phi_travel = 1.0
+    rig.launch([
+        {'sequence_group': {'start': True, 'max_phi_travel': 0.5}},
+        {'pump': 'suction'}, move([600, 200, 300, 0]), {'sequence_group': 'end'},
+    ])
+    _, result = rig.start()
+    reply = rig.resolve(result)
+    assert not reply.result.success and 'phi travel limit' in reply.result.message
+    assert not rig.pumps and not rig.follows and not rig.wrist_requests

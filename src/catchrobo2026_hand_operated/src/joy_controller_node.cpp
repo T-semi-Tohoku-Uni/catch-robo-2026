@@ -160,8 +160,13 @@ private:
                 response->message = "Rotation group ID is zero or stale";
                 return;
             }
-            if (request->direction != 1 && request->direction != -1) {
-                response->message = "Rotation direction must be +1 or -1";
+            if (request->direction < -1 || request->direction > 1) {
+                response->message = "Rotation direction must be -1, 0, or +1";
+                return;
+            }
+            if (request->limit_phi_travel &&
+                (!std::isfinite(request->max_phi_travel) || request->max_phi_travel < 0.0)) {
+                response->message = "Phi travel limit must be finite and nonnegative";
                 return;
             }
             const double age = std::chrono::duration<double>(
@@ -193,6 +198,10 @@ private:
             rotation_group_id_ = request->group_id;
             highest_group_id_ = request->group_id;
             rotation_direction_ = request->direction;
+            limit_phi_travel_ = request->limit_phi_travel;
+            max_phi_travel_ = request->max_phi_travel;
+            phi_travel_ = 0.0;
+            last_commanded_phi_ = static_cast<double>(current_joints_[0]) + current_joints_[3];
             rotation_fault_.clear();
             hold_joints_ = current_joints_;
             hold_joints_active_ = true;
@@ -249,8 +258,19 @@ private:
             reject("Wrist target angle does not match its pose yaw");
             return;
         }
+        // Preserve turns and accumulate before Float32 output rounding.
+        const double commanded_phi = static_cast<double>(joints[0]) + wrist_angle;
+        const double next_phi_travel = phi_travel_ +
+            std::abs(commanded_phi - last_commanded_phi_);
+        // Apply this tolerance once to the group total, never to each increment.
+        if (limit_phi_travel_ && next_phi_travel > max_phi_travel_ + 1e-5) {
+            reject("Phi total travel exceeds the sequence group limit");
+            return;
+        }
         joints[3] = static_cast<float>(wrist_angle);
         hold_joints_ = joints;
+        phi_travel_ = next_phi_travel;
+        last_commanded_phi_ = commanded_phi;
         std::copy(std::begin(pose), std::end(pose), current_pose_);
         response->success = true;
         response->message = "Wrist target accepted";
@@ -524,6 +544,10 @@ private:
     uint64_t highest_group_id_ = 0;
     uint64_t last_ended_group_id_ = 0;
     int rotation_direction_ = 0;
+    bool limit_phi_travel_ = false;
+    double max_phi_travel_ = 0.0;
+    double phi_travel_ = 0.0;
+    double last_commanded_phi_ = 0.0;
     std::string rotation_fault_;
     std::array<float, 4> hold_joints_{};
     bool hold_joints_active_ = false;
