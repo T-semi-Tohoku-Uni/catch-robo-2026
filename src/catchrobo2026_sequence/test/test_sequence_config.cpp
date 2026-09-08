@@ -90,6 +90,194 @@ TEST(SequenceConfig, RejectsInvalidRouteTimeoutBeforeExecution)
       "route_timeout_sec: '$limit'\nvalues: {limit: 0}\n"), ConfigError);
 }
 
+TEST(SequenceConfig, RotationGroupsExpandAcrossCallsAndKeepOperationOrderAndRelativeAnchor)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  anchor: {steps: [{move: {absolute: [100, 200, 300, 0.5]}}]}
+  begin:
+    steps:
+      - rotation_group: start
+      - move: {relative: [0, 0, -10, 0]}
+  finish:
+    steps:
+      - pump: suction
+      - wait: 0.25
+      - endeffector: 1
+      - move: {relative: [0, 0, 5, 0]}
+      - rotation_group: end
+  s:
+    extends: anchor
+    steps:
+      - call: begin
+      - call: finish
+      - move: {relative: [0, 0, 20, 0]}
+)", "{'0,1': s}"));
+  const auto steps = config.compile("red", "pick", 0, 1);
+  ASSERT_EQ(steps.size(), 9u);
+  EXPECT_EQ(steps[1].type, StepType::ROTATION_START);
+  EXPECT_EQ(steps[2].pose, (Pose{100, 200, 290, 0.5}));
+  EXPECT_EQ(steps[3].type, StepType::PUMP);
+  EXPECT_EQ(steps[3].command, 1);
+  EXPECT_EQ(steps[4].type, StepType::WAIT);
+  EXPECT_DOUBLE_EQ(steps[4].seconds, 0.25);
+  EXPECT_EQ(steps[5].type, StepType::ENDEFFECTOR);
+  EXPECT_EQ(steps[5].command, 1);
+  EXPECT_EQ(steps[6].pose, (Pose{100, 200, 305, 0.5}));
+  EXPECT_EQ(steps[7].type, StepType::ROTATION_END);
+  EXPECT_EQ(steps[8].pose, (Pose{100, 200, 320, 0.5}));
+}
+
+TEST(SequenceConfig, RotationGroupsAllowMultipleGroupsAndBothWaypointForms)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  s:
+    steps:
+      - rotation_group: start
+      - waypoint: {absolute: [100, 200, 300, 0]}
+      - move: {absolute: [110, 200, 300, 0], waypoints: [{relative: [5, 0, 0, 0]}]}
+      - rotation_group: end
+      - rotation_group: start
+      - move: {relative: [0, 0, 10, 0]}
+      - rotation_group: end
+)", "{'0,1': s}"));
+  const auto steps = config.compile("red", "pick", 0, 1);
+  ASSERT_EQ(steps.size(), 7u);
+  EXPECT_EQ(steps[0].type, StepType::ROTATION_START);
+  EXPECT_TRUE(steps[1].waypoint);
+  EXPECT_FALSE(steps[2].waypoint);
+  EXPECT_EQ(steps[2].waypoints, (std::vector<Pose>{{105, 200, 300, 0}}));
+  EXPECT_EQ(steps[3].type, StepType::ROTATION_END);
+  EXPECT_EQ(steps[4].type, StepType::ROTATION_START);
+  EXPECT_EQ(steps[5].pose, (Pose{110, 200, 310, 0}));
+  EXPECT_EQ(steps[6].type, StepType::ROTATION_END);
+}
+
+TEST(SequenceConfig, RotationGroupFlagsCanBeUnboundFragmentsAndCombinedWithInheritance)
+{
+  const auto fragments = R"(
+  begin: {steps: [{rotation_group: start}]}
+  end: {steps: [{rotation_group: end}]}
+  move: {steps: [{move: {absolute: [1, 2, 3, 0]}}]}
+  s: {extends: [begin, move, end]}
+)";
+  EXPECT_NO_THROW(SequenceConfig::from_yaml(document("{}", fragments)));
+  const auto config = SequenceConfig::from_yaml(document("{}", fragments, "{'0,1': s}"));
+  const auto steps = config.compile("red", "pick", 0, 1);
+  ASSERT_EQ(steps.size(), 3u);
+  EXPECT_EQ(steps[0].type, StepType::ROTATION_START);
+  EXPECT_EQ(steps[1].type, StepType::MOVE);
+  EXPECT_EQ(steps[2].type, StepType::ROTATION_END);
+  for (const std::string name : {"begin", "end"}) {
+    SCOPED_TRACE(name);
+    EXPECT_THROW(SequenceConfig::from_yaml(document(
+        "{}", fragments, "{'0,1': " + name + "}")), ConfigError);
+  }
+}
+
+TEST(SequenceConfig, RotationGroupRejectsInvalidFlagsAndCombinedOperations)
+{
+  for (const std::string flag : {
+      "START", "End", "auto", "cw", "1", "true", "false", "null", "''", "[]",
+      "{}", "{start: true}", "'$start'"})
+  {
+    SCOPED_TRACE(flag);
+    EXPECT_THROW(SequenceConfig::from_yaml(document("{}",
+        "{s: {steps: [{rotation_group: " + flag + "}]}}")), ConfigError);
+  }
+  for (const std::string step : {
+      "{rotation_group: start, wait: 0}", "{rotation_group: start, rotation_group: end}",
+      "{move: {absolute: [1, 2, 3, 0], rotation_group: start}}"})
+  {
+    SCOPED_TRACE(step);
+    EXPECT_THROW(SequenceConfig::from_yaml(document("{}", "{s: {steps: [" + step + "]}}")),
+      ConfigError);
+  }
+}
+
+TEST(SequenceConfig, RotationGroupRejectsMismatchedAndNestedExpandedFlags)
+{
+  const std::string fragments = R"(
+  begin: {steps: [{rotation_group: start}]}
+  end: {steps: [{rotation_group: end}]}
+  move: {steps: [{move: {absolute: [1, 2, 3, 0]}}]}
+)";
+  for (const std::string steps : {
+      "[{call: begin}, {call: move}]", "[{call: end}, {call: move}]",
+      "[{call: begin}, {call: begin}, {call: move}, {call: end}, {call: end}]",
+      "[{call: begin}, {call: move}, {call: end}, {call: end}]"})
+  {
+    SCOPED_TRACE(steps);
+    const auto yaml = document("{}", fragments + "  s: {steps: " + steps + "}\n");
+    for (const std::string key : {
+        "start_sequence", "end_sequence", "before_initialization_sequence",
+        "after_initialization_sequence"})
+    {
+      SCOPED_TRACE(key);
+      EXPECT_THROW(SequenceConfig::from_yaml(yaml + key + ": s\n"), ConfigError);
+    }
+    EXPECT_THROW(SequenceConfig::from_yaml(document(
+        "{}", fragments + "  s: {steps: " + steps + "}\n", "{'0,1': s}")), ConfigError);
+  }
+}
+
+TEST(SequenceConfig, RotationGroupRejectsEmptyOrMechanismOnlyGroups)
+{
+  for (const std::string body : {"", "{pump: off}, {wait: 0.5}, {endeffector: 1}, "}) {
+    SCOPED_TRACE(body);
+    EXPECT_THROW(SequenceConfig::from_yaml(document("{}",
+        "{s: {steps: [{rotation_group: start}, " + body + "{rotation_group: end}]}}",
+        "{'0,1': s}")), ConfigError);
+  }
+}
+
+TEST(SequenceConfig, RotationGroupFlagsCannotInterruptAWaypointRoute)
+{
+  for (const std::string waypoint : {
+      "{waypoint: {absolute: [1, 2, 3, 0]}}",
+      "{move: {absolute: [1, 2, 3, 0], waypoint: true}}"})
+  {
+    SCOPED_TRACE(waypoint);
+    for (const std::string steps : {
+        "[" + waypoint + ", {rotation_group: start}, {move: {absolute: [4, 5, 6, 0]}}, "
+        "{rotation_group: end}]",
+        "[{rotation_group: start}, " + waypoint + ", {rotation_group: end}, "
+        "{move: {absolute: [4, 5, 6, 0]}}]"})
+    {
+      SCOPED_TRACE(steps);
+      EXPECT_THROW(SequenceConfig::from_yaml(document(
+          "{}", "{s: {steps: " + steps + "}}", "{'0,1': s}")), ConfigError);
+    }
+  }
+}
+
+TEST(SequenceConfig, RotationGroupsAreLocalToEachInitializationHookAndUiAction)
+{
+  const auto yaml = document("{}", R"(
+  before: {steps: [{rotation_group: start}, {move: {absolute: [1, 2, 3, 0]}}]}
+  after: {steps: [{move: {absolute: [4, 5, 6, 0]}}, {rotation_group: end}]}
+)");
+  EXPECT_THROW(SequenceConfig::from_yaml(yaml +
+      "before_initialization_sequence: before\nafter_initialization_sequence: after\n"),
+    ConfigError);
+  EXPECT_THROW(SequenceConfig::from_yaml(yaml +
+      "start_sequence: before\nend_sequence: after\n"), ConfigError);
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  group:
+    steps:
+      - rotation_group: start
+      - move: {absolute: [1, 2, 3, 0]}
+      - rotation_group: end
+)") + "before_initialization_sequence: group\nafter_initialization_sequence: group\n"
+    "start_sequence: group\nend_sequence: group\n");
+  const auto steps = config.compile_initialization();
+  ASSERT_EQ(steps.size(), 7u);
+  EXPECT_EQ(steps[2].type, StepType::ROTATION_END);
+  EXPECT_EQ(steps[3].type, StepType::INITIALIZE);
+  EXPECT_EQ(steps[4].type, StepType::ROTATION_START);
+  EXPECT_EQ(config.compile_start().size(), 3u);
+  EXPECT_EQ(config.compile_end().size(), 3u);
+}
+
 TEST(SequenceConfig, ResolvesAliasesInheritanceAndFixedRelativeAnchor)
 {
   const auto config = SequenceConfig::from_yaml(document(R"(

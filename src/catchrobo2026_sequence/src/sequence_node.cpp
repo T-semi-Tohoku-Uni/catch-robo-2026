@@ -1,8 +1,10 @@
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <csignal>
 #include <functional>
 #include <memory>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -18,6 +20,8 @@
 #include "catchrobo2026_msgs/action/follow_route.hpp"
 #include "catchrobo2026_msgs/srv/endeffector_control.hpp"
 #include "catchrobo2026_msgs/srv/generate_route.hpp"
+#include "catchrobo2026_msgs/srv/plan_rotation_group.hpp"
+#include "catchrobo2026_msgs/srv/wrist_control.hpp"
 #include "catchrobo2026_msgs/srv/pump_control.hpp"
 #include "catchrobo2026_sequence/sequence_config.hpp"
 
@@ -25,6 +29,8 @@ using Trigger = std_srvs::srv::Trigger;
 using ExecuteSequence = catchrobo2026_msgs::action::ExecuteSequence;
 using FollowRoute = catchrobo2026_msgs::action::FollowRoute;
 using GenerateRoute = catchrobo2026_msgs::srv::GenerateRoute;
+using PlanRotationGroup = catchrobo2026_msgs::srv::PlanRotationGroup;
+using WristControl = catchrobo2026_msgs::srv::WristControl;
 using PumpControl = catchrobo2026_msgs::srv::PumpControl;
 using EndeffectorControl = catchrobo2026_msgs::srv::EndeffectorControl;
 using SequenceGoal = rclcpp_action::ServerGoalHandle<ExecuteSequence>;
@@ -70,6 +76,8 @@ public:
         config_ = std::make_unique<SequenceConfig>(SequenceConfig::load(config_file_));
         initialization_ = create_client<Trigger>("request_initialization");
         planner_ = create_client<GenerateRoute>("generate_route");
+        group_planner_ = create_client<PlanRotationGroup>("plan_rotation_group");
+        wrist_controller_ = create_client<WristControl>("wrist_control");
         pump_writer_ = create_client<PumpControl>("set_pump_state");
         endeffector_ = create_client<EndeffectorControl>("set_endeffector_state");
         follower_ = rclcpp_action::create_client<FollowRoute>(this, "follow_route");
@@ -122,6 +130,8 @@ public:
 private:
     enum class Phase {
         READY, WAIT_PLAN, PLAN, WAIT_FOLLOW, FOLLOW_GOAL, FOLLOWING,
+        WAIT_GROUP_PLAN, GROUP_PLAN, WAIT_WRIST_BEGIN, WRIST_BEGIN,
+        WAIT_WRIST_END, WRIST_END,
         WAIT_PUMP_SET, PUMP_SET, WAIT_END, END, WAIT_INITIALIZE, INITIALIZE, DELAY
     };
 
@@ -152,6 +162,8 @@ private:
         stopping_ = false;
         stop_message_.clear();
         cancel_sent_ = false;
+        group_routes_.clear();
+        planned_wrist_angles_.clear();
         sequence_deadline_ = after(sequence_timeout_);
         try {
             // Compile the entire action before sending any hardware command.
@@ -227,14 +239,15 @@ private:
 
     template<typename Service, typename Callback>
     void request(const typename rclcpp::Client<Service>::SharedPtr &client,
-                 const std::shared_ptr<typename Service::Request> &value, Callback callback)
+                 const std::shared_ptr<typename Service::Request> &value, Callback callback,
+                 bool handle_interruption = false)
     {
         service_pending_ = true;
         auto pending = client->async_send_request(value,
-            [this, callback](typename rclcpp::Client<Service>::SharedFuture response) {
+            [this, callback, handle_interruption](typename rclcpp::Client<Service>::SharedFuture response) {
                 service_pending_ = false;
                 abandon_request_ = {};
-                if (interrupted()) {
+                if (!goal_ || (interrupted() && !handle_interruption)) {
                     return;
                 }
                 try {
@@ -273,7 +286,13 @@ private:
                 cancel_sent_ = true;
                 follower_->async_cancel_goal(route_goal_);
             }
-            if (!service_pending_ && !route_pending_ && !route_goal_) {
+            // Release the wrist even if a follower cancellation reply is delayed.
+            if (group_needs_release_ && !group_begin_pending_ && !wrist_end_sent_ &&
+                wrist_controller_->service_is_ready()) {
+                end_rotation_group();
+            }
+            if (!service_pending_ && !wrist_end_pending_ && !route_pending_ &&
+                !route_goal_ && !group_needs_release_) {
                 finish(false, stop_message_);
             } else if (Clock::now() >= stop_deadline_) {
                 // A lost reply can conceal an active command; require a restart.
@@ -281,6 +300,10 @@ private:
                 if (abandon_request_) {
                     abandon_request_();
                     abandon_request_ = {};
+                }
+                if (abandon_wrist_end_) {
+                    abandon_wrist_end_();
+                    abandon_wrist_end_ = {};
                 }
                 finish(false, stop_message_ + "; stop unconfirmed, sequencer restart required");
             }
@@ -306,6 +329,25 @@ private:
                         planned_path_ = reply->path;
                         transition(Phase::WAIT_FOLLOW, "waiting for follower", service_timeout_);
                     });
+            }
+            break;
+        case Phase::WAIT_GROUP_PLAN:
+            if (group_planner_->service_is_ready()) {
+                transition(Phase::GROUP_PLAN, "planning rotation group", service_timeout_);
+                request<PlanRotationGroup>(group_planner_, group_request_,
+                    [this](PlanRotationGroup::Response::SharedPtr reply) {
+                        accept_rotation_plan(*reply);
+                    });
+            }
+            break;
+        case Phase::WAIT_WRIST_BEGIN:
+            if (wrist_controller_->service_is_ready()) {
+                begin_rotation_group();
+            }
+            break;
+        case Phase::WAIT_WRIST_END:
+            if (wrist_controller_->service_is_ready()) {
+                end_rotation_group();
             }
             break;
         case Phase::WAIT_FOLLOW:
@@ -365,12 +407,25 @@ private:
     void next_step()
     {
         if (index_ == steps_.size()) {
+            if (group_needs_release_) {
+                begin_stop("rotation group was not released");
+                return;
+            }
             finish(true, "sequence completed");
             return;
         }
         const auto &step = steps_[index_];
         switch (step.type) {
         case StepType::MOVE:
+            if (group_needs_release_) {
+                const auto &route = group_routes_.at(index_);
+                route_end_index_ = route.end_index;
+                planned_path_ = route.route.path;
+                planned_wrist_angles_ = route.route.wrist_angles;
+                transition(Phase::WAIT_FOLLOW, "waiting for follower", service_timeout_);
+                break;
+            }
+            planned_wrist_angles_.clear();
             generate_request_ = std::make_shared<GenerateRoute::Request>();
             generate_request_->use_explicit_waypoints = true;
             route_end_index_ = index_;
@@ -430,7 +485,145 @@ private:
         case StepType::WAIT:
             transition(Phase::DELAY, "waiting", step.seconds);
             break;
+        case StepType::ROTATION_START:
+            prepare_rotation_group();
+            break;
+        case StepType::ROTATION_END:
+            transition(Phase::WAIT_WRIST_END, "waiting to release rotation group", service_timeout_);
+            break;
         }
+    }
+
+    static geometry_msgs::msg::Pose route_pose(const catchrobo2026_sequence::Pose &point)
+    {
+        geometry_msgs::msg::Pose pose;
+        pose.position.x = point[0] / 1000.0;
+        pose.position.y = point[1] / 1000.0;
+        pose.position.z = point[2] / 1000.0;
+        pose.orientation.z = std::sin(point[3] / 2.0);
+        pose.orientation.w = std::cos(point[3] / 2.0);
+        return pose;
+    }
+
+    void prepare_rotation_group()
+    {
+        group_routes_.clear();
+        group_request_ = std::make_shared<PlanRotationGroup::Request>();
+        // Resolve every route before executing any command inside the group.
+        size_t cursor = index_ + 1;
+        for (; cursor < steps_.size() && steps_[cursor].type != StepType::ROTATION_END; ++cursor) {
+            if (steps_[cursor].type != StepType::MOVE) {
+                continue;
+            }
+            const size_t first = cursor;
+            while (true) {
+                const auto &move = steps_.at(cursor);
+                for (const auto &point : move.waypoints) {
+                    group_request_->targets.push_back(route_pose(point));
+                }
+                group_request_->targets.push_back(route_pose(move.pose));
+                if (!move.waypoint) {
+                    break;
+                }
+                ++cursor;
+            }
+            group_request_->route_ends.push_back(
+                static_cast<uint32_t>(group_request_->targets.size()));
+            group_routes_[first].end_index = cursor;
+        }
+        if (cursor == steps_.size() || group_routes_.empty()) {
+            throw std::runtime_error("invalid rotation group boundaries");
+        }
+        transition(Phase::WAIT_GROUP_PLAN, "waiting for rotation group planner", service_timeout_);
+    }
+
+    void accept_rotation_plan(const PlanRotationGroup::Response &reply)
+    {
+        if (!reply.success || reply.routes.size() != group_routes_.size() ||
+            (reply.direction != 1 && reply.direction != -1)) {
+            begin_stop("rotation group planning failed: " + reply.message);
+            return;
+        }
+        size_t offset = 0;
+        for (auto &[first, cached] : group_routes_) {
+            (void)first;
+            const auto &route = reply.routes[offset++];
+            if (route.path.poses.empty() || route.wrist_angles.size() != route.path.poses.size()) {
+                begin_stop("rotation group planner returned an invalid route");
+                return;
+            }
+            cached.route = route;
+        }
+        group_direction_ = reply.direction;
+        const auto timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        group_id_ = std::max(group_id_ + 1, static_cast<uint64_t>(timestamp));
+        wrist_end_sent_ = false;
+        transition(Phase::WAIT_WRIST_BEGIN, "waiting to start rotation group", service_timeout_);
+    }
+
+    void begin_rotation_group()
+    {
+        const auto &first = group_routes_.begin()->second.route;
+        auto value = std::make_shared<WristControl::Request>();
+        value->operation = WristControl::Request::BEGIN;
+        value->group_id = group_id_;
+        value->direction = group_direction_;
+        value->target = first.path.poses.front();
+        value->wrist_angle = first.wrist_angles.front();
+        transition(Phase::WRIST_BEGIN, "starting rotation group", service_timeout_);
+        // Cancellation can arrive before the BEGIN reply, so retain its lease.
+        group_needs_release_ = true;
+        group_begin_pending_ = true;
+        request<WristControl>(wrist_controller_, value,
+            [this](WristControl::Response::SharedPtr reply) {
+                group_begin_pending_ = false;
+                if (!reply->success) {
+                    group_needs_release_ = false;
+                    begin_stop("rotation group start rejected: " + reply->message);
+                } else if (!interrupted()) {
+                    RCLCPP_INFO(get_logger(), "Rotation group %llu: fourth joint direction=%d",
+                        static_cast<unsigned long long>(group_id_), group_direction_);
+                    command_done(true, "");
+                }
+            }, true);
+    }
+
+    void end_rotation_group()
+    {
+        auto value = std::make_shared<WristControl::Request>();
+        value->operation = WristControl::Request::END;
+        value->group_id = group_id_;
+        wrist_end_sent_ = true;
+        if (!stopping_) {
+            transition(Phase::WRIST_END, "releasing rotation group", service_timeout_);
+        }
+        // Release independently of unrelated service replies during cancellation.
+        wrist_end_pending_ = true;
+        auto pending = wrist_controller_->async_send_request(value,
+            [this](rclcpp::Client<WristControl>::SharedFuture response) {
+                wrist_end_pending_ = false;
+                abandon_wrist_end_ = {};
+                if (!goal_) return;
+                try {
+                    const auto reply = response.get();
+                    if (!reply->success) {
+                        faulted_ = true;
+                        begin_stop("rotation group release rejected: " + reply->message);
+                        return;
+                    }
+                    group_needs_release_ = false;
+                    group_routes_.clear();
+                    planned_wrist_angles_.clear();
+                    if (!interrupted()) {
+                        command_done(true, "");
+                    }
+                } catch (const std::exception &error) {
+                    begin_stop(std::string("rotation group release: ") + error.what());
+                }
+            });
+        const auto id = pending.request_id;
+        abandon_wrist_end_ = [this, id]() {wrist_controller_->remove_pending_request(id);};
     }
 
     void follow()
@@ -438,6 +631,11 @@ private:
         FollowRoute::Goal goal;
         goal.start = true;
         goal.path = planned_path_;
+        if (group_needs_release_) {
+            goal.rotation_group_id = group_id_;
+            goal.wrist_direction = group_direction_;
+            goal.wrist_angles = planned_wrist_angles_;
+        }
         route_pending_ = true;
         cancel_sent_ = false;
         transition(Phase::FOLLOW_GOAL, "sending route", service_timeout_);
@@ -498,16 +696,30 @@ private:
     Clock::time_point deadline_, sequence_deadline_, stop_deadline_;
     std::unique_ptr<SequenceConfig> config_;
     std::vector<Step> steps_;
+    struct GroupRoute {
+        size_t end_index{0};
+        catchrobo2026_msgs::msg::RotationGroupRoute route;
+    };
+    std::map<size_t, GroupRoute> group_routes_;
+    uint64_t group_id_{0};
+    int8_t group_direction_{0};
+    bool group_needs_release_{false}, wrist_end_sent_{false};
+    bool group_begin_pending_{false}, wrist_end_pending_{false};
+    std::vector<double> planned_wrist_angles_;
     size_t index_{0};
     size_t route_end_index_{0};
     nav_msgs::msg::Path planned_path_;
     GenerateRoute::Request::SharedPtr generate_request_;
+    PlanRotationGroup::Request::SharedPtr group_request_;
     PumpControl::Request::SharedPtr pump_request_;
     std::function<void()> abandon_request_;
+    std::function<void()> abandon_wrist_end_;
     std::shared_ptr<SequenceGoal> goal_;
     RouteGoal::SharedPtr route_goal_;
     rclcpp::Client<Trigger>::SharedPtr initialization_;
     rclcpp::Client<GenerateRoute>::SharedPtr planner_;
+    rclcpp::Client<PlanRotationGroup>::SharedPtr group_planner_;
+    rclcpp::Client<WristControl>::SharedPtr wrist_controller_;
     rclcpp::Client<PumpControl>::SharedPtr pump_writer_;
     rclcpp::Client<EndeffectorControl>::SharedPtr endeffector_;
     rclcpp_action::Client<FollowRoute>::SharedPtr follower_;

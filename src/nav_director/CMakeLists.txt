@@ -83,7 +83,7 @@ ament_target_dependencies(dummy_robot_node
 )
 
 # ros2 run 等で実行できるようにインストール
-install(TARGETS 
+install(TARGETS
   path_generator_3d
   path_follower_node
   dummy_robot_node
@@ -97,6 +97,8 @@ install(DIRECTORY
 )
 
 if(BUILD_TESTING)
+  add_executable(test_rotation_constraints test/test_rotation_constraints.cpp)
+  add_test(NAME rotation_constraints COMMAND test_rotation_constraints)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
   # comment the line when a copyright and license is added to all source files

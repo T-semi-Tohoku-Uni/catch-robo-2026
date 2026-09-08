@@ -7,16 +7,21 @@
 #include <unsupported/Eigen/Splines>
 #include <Eigen/Dense>
 #include <cmath>
+#include <chrono>
+#include <stdexcept>
 #include <vector>
 #include <visualization_msgs/msg/marker_array.hpp>
 
 // 独自メッセージパッケージと運動学ライブラリのヘッダー
 #include <catchrobo2026_msgs/srv/waypoint.hpp>
 #include <catchrobo2026_msgs/srv/generate_route.hpp>
+#include <catchrobo2026_msgs/srv/plan_rotation_group.hpp>
 #include "ros2_inverse_kinematics/robot_kinematics.h" // 追加: 運動学計算用
+#include "rotation_constraints.hpp"
 
 using WaypointSrv = catchrobo2026_msgs::srv::Waypoint;
 using GenRouteSrv = catchrobo2026_msgs::srv::GenerateRoute;
+using PlanRotationGroup = catchrobo2026_msgs::srv::PlanRotationGroup;
 
 struct Point3D {
     double x, y, z, phi;
@@ -25,6 +30,10 @@ struct Point3D {
 class PathGenerator3D : public rclcpp::Node {
 public:
     PathGenerator3D() : Node("path_generator_3d") {
+        rotation_joint_timeout_sec_ = declare_parameter("rotation_joint_timeout_sec", 1.0);
+        if (!std::isfinite(rotation_joint_timeout_sec_) || rotation_joint_timeout_sec_ <= 0.0) {
+            throw std::invalid_argument("Invalid rotation_joint_timeout_sec");
+        }
         // パブリッシャーの初期化
         pub_path_ = this->create_publisher<nav_msgs::msg::Path>("route", 10);
         pub_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("path_orientations", 10);
@@ -38,6 +47,9 @@ public:
             "waypoint", std::bind(&PathGenerator3D::waypointCallback, this, std::placeholders::_1, std::placeholders::_2));
         srv_gen_route_ = this->create_service<GenRouteSrv>(
             "generate_route", std::bind(&PathGenerator3D::genRouteCallback, this, std::placeholders::_1, std::placeholders::_2));
+        srv_plan_rotation_group_ = create_service<PlanRotationGroup>(
+            "plan_rotation_group", std::bind(&PathGenerator3D::planRotationGroup, this,
+                std::placeholders::_1, std::placeholders::_2));
 
         // 初期パラメータの設定
         cur_pose_ = {0.0, 0.0, 0.0, 0.0};
@@ -50,12 +62,17 @@ private:
     // 変更: ジョイント値から順運動学を用いて現在地を計算するコールバック
     void jointCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
         if (msg->data.size() < 4) {
+            joints_valid_ = false;
             RCLCPP_WARN(this->get_logger(), "Received joint data size is less than 4.");
             return;
         }
 
         float joint_angles[4];
         for (int i = 0; i < 4; ++i) {
+            if (!std::isfinite(msg->data[i])) {
+                joints_valid_ = false;
+                return;
+            }
             joint_angles[i] = msg->data[i];
         }
 
@@ -64,11 +81,154 @@ private:
         // 順運動学で手先位置姿勢を計算
         kin_.forward_kinematics(current_posrot, joint_angles);
 
+        if (!std::all_of(current_posrot, current_posrot + 4,
+                [](float value) { return std::isfinite(value); })) {
+            joints_valid_ = false;
+            return;
+        }
+
         // cur_pose_ を更新 (X, Y, Z, PHI)
         cur_pose_.x = current_posrot[0];
         cur_pose_.y = current_posrot[1];
         cur_pose_.z = current_posrot[2];
         cur_pose_.phi = current_posrot[3]; // PHI (Yawに相当)
+        current_wrist_ = joint_angles[3];
+        joints_valid_ = true;
+        joints_received_at_ = std::chrono::steady_clock::now();
+    }
+
+    bool solveIK(const Point3D &point, float (&joints)[4]) {
+        if (!finitePoint(point)) return false;
+        float pose[6] = {static_cast<float>(point.x), static_cast<float>(point.y),
+            static_cast<float>(point.z), static_cast<float>(point.phi),
+            static_cast<float>(-M_PI / 2.0), 0.0F};
+        kin_.inverse_kinematics(pose, joints);
+        return std::all_of(joints, joints + 4,
+            [](float value) { return std::isfinite(value); });
+    }
+
+    void planRotationGroup(const std::shared_ptr<PlanRotationGroup::Request> req,
+                           std::shared_ptr<PlanRotationGroup::Response> res) {
+        res->success = false;
+        if (!joints_valid_ || !rotation_constraints::legal(current_wrist_) ||
+            std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                joints_received_at_).count() > rotation_joint_timeout_sec_) {
+            res->message = "Fresh finite current_joints within the wrist limits are required";
+            return;
+        }
+        if (req->targets.empty() || req->route_ends.empty() ||
+            req->route_ends.back() != req->targets.size()) {
+            res->message = "Rotation group requires targets and matching route ends";
+            return;
+        }
+        size_t previous_end = 0;
+        for (const auto end : req->route_ends) {
+            if (end <= previous_end || end > req->targets.size()) {
+                res->message = "Rotation group route ends must increase within targets";
+                return;
+            }
+            previous_end = end;
+        }
+        std::vector<Point3D> targets;
+        std::vector<double> raw_angles;
+        for (const auto &pose : req->targets) {
+            const auto &q = pose.orientation;
+            const double norm = q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w;
+            if (!std::isfinite(norm) || norm < 1e-12) {
+                res->message = "Rotation group target has an invalid quaternion";
+                return;
+            }
+            tf2::Quaternion quaternion(q.x, q.y, q.z, q.w);
+            quaternion.normalize();
+            const tf2::Matrix3x3 rotation(quaternion);
+            Point3D point{pose.position.x * 1000.0, pose.position.y * 1000.0,
+                pose.position.z * 1000.0, std::atan2(-rotation[0][1], rotation[1][1])};
+            float joints[4];
+            if (!solveIK(point, joints)) {
+                res->message = "Rotation group target is non-finite or unreachable";
+                return;
+            }
+            targets.push_back(point);
+            raw_angles.push_back(point.phi - joints[0]);
+        }
+
+        const double start_wrist = rotation_constraints::clamp(current_wrist_);
+        std::vector<double> increasing, decreasing;
+        const bool can_increase = rotation_constraints::solve(start_wrist, raw_angles, 1, increasing);
+        const bool can_decrease = rotation_constraints::solve(start_wrist, raw_angles, -1, decreasing);
+        if (!can_increase && !can_decrease) {
+            res->message = "No single wrist direction can reach every target within [-2pi, 0]";
+            return;
+        }
+        const int direction = can_increase && (!can_decrease ||
+            std::abs(increasing.back() - start_wrist) <=
+                std::abs(decreasing.back() - start_wrist)) ? 1 : -1;
+        const auto &selected = direction > 0 ? increasing : decreasing;
+
+        // Finish every route before exposing any plan or touching shared waypoints.
+        std::vector<catchrobo2026_msgs::msg::RotationGroupRoute> routes;
+        Point3D start_pose = cur_pose_;
+        double route_start_wrist = start_wrist;
+        size_t begin = 0;
+        for (const auto end : req->route_ends) {
+            std::vector<Point3D> points{start_pose};
+            std::vector<double> wrists{route_start_wrist};
+            for (size_t i = begin; i < end; ++i) {
+                points.push_back(targets[i]);
+                wrists.push_back(selected[i]);
+            }
+            while (points.size() < 4) {
+                std::vector<double> dense_wrists;
+                for (size_t i = 0; i + 1 < wrists.size(); ++i) {
+                    for (int third = 0; third < 3; ++third) {
+                        dense_wrists.push_back(wrists[i] +
+                            (wrists[i + 1] - wrists[i]) * third / 3.0);
+                    }
+                }
+                dense_wrists.push_back(wrists.back());
+                points = densifyPoints(points);
+                wrists = std::move(dense_wrists);
+            }
+            auto samples = generate3DSpline(points);
+            catchrobo2026_msgs::msg::RotationGroupRoute route;
+            route.path.header.stamp = now();
+            route.path.header.frame_id = "map";
+            for (size_t i = 0; i < samples.size(); ++i) {
+                const double scaled = static_cast<double>(i) * (points.size() - 1) /
+                    static_cast<double>(samples.size() - 1);
+                const size_t index = std::min(static_cast<size_t>(scaled), wrists.size() - 2);
+                const double wrist = wrists[index] +
+                    (wrists[index + 1] - wrists[index]) * (scaled - index);
+                float joints[4];
+                if (!solveIK(samples[i], joints)) {
+                    res->message = "Rotation group spline leaves the reachable workspace";
+                    return;
+                }
+                samples[i].phi = joints[0] + wrist;
+                if (!solveIK(samples[i], joints)) {
+                    res->message = "Rotation group spline has invalid joint angles";
+                    return;
+                }
+                geometry_msgs::msg::PoseStamped pose;
+                pose.header = route.path.header;
+                pose.pose.position.x = samples[i].x / 1000.0;
+                pose.pose.position.y = samples[i].y / 1000.0;
+                pose.pose.position.z = samples[i].z / 1000.0;
+                tf2::Quaternion q;
+                q.setRPY(0.0, 0.0, samples[i].phi);
+                pose.pose.orientation = tf2::toMsg(q);
+                route.path.poses.push_back(pose);
+                route.wrist_angles.push_back(wrist);
+            }
+            routes.push_back(std::move(route));
+            start_pose = targets[end - 1];
+            route_start_wrist = selected[end - 1];
+            begin = end;
+        }
+        res->routes = std::move(routes);
+        res->direction = direction;
+        res->success = true;
+        res->message = "Rotation group planned";
     }
 
     void waypointCallback(const std::shared_ptr<WaypointSrv::Request> req,
@@ -284,6 +444,10 @@ private:
     Point3D cur_pose_;
     std::vector<Point3D> waypoints_;
     int sample_resolution_;
+    double rotation_joint_timeout_sec_;
+    double current_wrist_ = 0.0;
+    bool joints_valid_ = false;
+    std::chrono::steady_clock::time_point joints_received_at_;
     robot_kinematics kin_; // 追加: 運動学インスタンス
 
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_path_;
@@ -291,6 +455,7 @@ private:
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr sub_joints_; // 変更: PoseStampedから変更
     rclcpp::Service<WaypointSrv>::SharedPtr srv_waypoint_;
     rclcpp::Service<GenRouteSrv>::SharedPtr srv_gen_route_;
+    rclcpp::Service<PlanRotationGroup>::SharedPtr srv_plan_rotation_group_;
 };
 
 int main(int argc, char** argv) {

@@ -2,6 +2,10 @@
 bool start
 # Explicit route; an empty path uses the latest received route.
 nav_msgs/Path path
+# Zero/empty preserves normal following. Constrained routes require all fields.
+uint64 rotation_group_id
+int8 wrist_direction
+float64[] wrist_angles
 ---
 # Result
 bool success

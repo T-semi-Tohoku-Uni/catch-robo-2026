@@ -1,0 +1,10 @@
+# Ordered intermediate and final poses in meters and quaternions.
+geometry_msgs/Pose[] targets
+# Exclusive target indices ending each MOVE route.
+uint32[] route_ends
+---
+bool success
+string message
+# +1: increasing fourth-joint angle; -1: decreasing.
+int8 direction
+catchrobo2026_msgs/RotationGroupRoute[] routes

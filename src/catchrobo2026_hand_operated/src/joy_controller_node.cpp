@@ -1,10 +1,12 @@
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <stdexcept>
 
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/joy.hpp"
@@ -22,6 +24,7 @@
 // サービス型のインクルード
 #include "catchrobo2026_msgs/srv/pump_control.hpp"
 #include "catchrobo2026_msgs/srv/endeffector_control.hpp"
+#include "catchrobo2026_msgs/srv/wrist_control.hpp"
 #include "std_srvs/srv/trigger.hpp"
 
 using namespace std::chrono_literals;
@@ -42,6 +45,10 @@ public:
             
         pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
             "target_pose", 10, std::bind(&JoyControllerNode::pose_callback, this, std::placeholders::_1));
+
+        current_joints_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
+            "current_joints", 10,
+            std::bind(&JoyControllerNode::current_joints_callback, this, std::placeholders::_1));
             
         endeffector_sub_ = this->create_subscription<std_msgs::msg::Int32MultiArray>(
             "endeffector_state", 10, std::bind(&JoyControllerNode::endeffector_callback, this, std::placeholders::_1));
@@ -50,6 +57,14 @@ public:
         pump_client_ = this->create_client<catchrobo2026_msgs::srv::PumpControl>("set_pump_state");
         endeffector_client_ = this->create_client<catchrobo2026_msgs::srv::EndeffectorControl>("set_endeffector_state");
         state_client_ = this->create_client<std_srvs::srv::Trigger>("request_initialization");
+
+        rotation_joint_timeout_sec_ = declare_parameter("rotation_joint_timeout_sec", 1.0);
+        if (!std::isfinite(rotation_joint_timeout_sec_) || rotation_joint_timeout_sec_ <= 0.0) {
+            throw std::invalid_argument("rotation_joint_timeout_sec must be finite and positive");
+        }
+        wrist_service_ = create_service<WristControl>("wrist_control",
+            std::bind(&JoyControllerNode::wrist_callback, this,
+                std::placeholders::_1, std::placeholders::_2));
 
         // 4. IK計算とパブリッシュを行うメインループタイマー (例: 20ms = 50Hz)
         publish_timer_ = this->create_wall_timer(
@@ -68,8 +83,190 @@ public:
 
 private:
     using PumpRequest = catchrobo2026_msgs::srv::PumpControl::Request;
+    using WristControl = catchrobo2026_msgs::srv::WristControl;
+
+    static bool wrist_in_range(double angle) {
+        return std::isfinite(angle) && angle >= -2.0 * M_PI - 1e-5 && angle <= 1e-5;
+    }
+
+    static bool read_pose(const geometry_msgs::msg::PoseStamped &msg, float (&pose)[6]) {
+        const auto &p = msg.pose.position;
+        const auto &q = msg.pose.orientation;
+        const double norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
+            !std::isfinite(norm) || std::abs(norm - 1.0) > 1e-3) {
+            return false;
+        }
+        tf2::Quaternion rotation(q.x, q.y, q.z, q.w);
+        rotation.normalize();
+        const auto y_axis = tf2::Matrix3x3(rotation).getColumn(1);
+        if (std::hypot(y_axis.x(), y_axis.y()) < 1e-6) {
+            return false;
+        }
+        pose[0] = static_cast<float>(p.x * 1000.0);
+        pose[1] = static_cast<float>(p.y * 1000.0);
+        pose[2] = static_cast<float>(p.z * 1000.0);
+        pose[3] = static_cast<float>(std::atan2(-y_axis.x(), y_axis.y()));
+        pose[4] = -static_cast<float>(M_PI) / 2.0f;
+        pose[5] = 0.0f;
+        return std::all_of(std::begin(pose), std::end(pose),
+            [](float value) { return std::isfinite(value); });
+    }
+
+    void clear_velocity() {
+        vel_x_ = vel_y_ = vel_z_ = vel_phi_ = 0.0f;
+    }
+
+    void current_joints_callback(const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
+        current_joints_valid_ = msg->data.size() >= 4 &&
+            std::all_of(msg->data.begin(), msg->data.begin() + 4,
+                [](float value) { return std::isfinite(value); });
+        if (current_joints_valid_) {
+            std::copy_n(msg->data.begin(), 4, current_joints_.begin());
+            current_joints_time_ = std::chrono::steady_clock::now();
+        }
+    }
+
+    void wrist_callback(const std::shared_ptr<WristControl::Request> request,
+                        std::shared_ptr<WristControl::Response> response) {
+        response->success = false;
+        if (request->operation == WristControl::Request::END) {
+            if (request->group_id == 0 ||
+                (rotation_active_ && request->group_id != rotation_group_id_) ||
+                (!rotation_active_ && request->group_id != last_ended_group_id_)) {
+                response->message = "Rotation group ID does not match";
+                return;
+            }
+            if (!rotation_active_) {
+                response->success = true;
+                response->message = "Rotation group already ended";
+                return;
+            }
+            rotation_active_ = false;
+            last_ended_group_id_ = request->group_id;
+            rotation_fault_.clear();
+            clear_velocity();
+            response->success = true;
+            response->message = "Rotation group ended; holding last joint command";
+            return;
+        }
+
+        if (request->operation == WristControl::Request::BEGIN) {
+            if (rotation_active_ || state_request_pending_) {
+                response->message = "A rotation group or initialization request is active";
+                return;
+            }
+            if (request->group_id == 0 || request->group_id <= highest_group_id_) {
+                response->message = "Rotation group ID is zero or stale";
+                return;
+            }
+            if (request->direction != 1 && request->direction != -1) {
+                response->message = "Rotation direction must be +1 or -1";
+                return;
+            }
+            const double age = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - current_joints_time_).count();
+            if (!current_joints_valid_ || age > rotation_joint_timeout_sec_ ||
+                !wrist_in_range(current_joints_[3])) {
+                response->message = "Fresh finite current_joints within the wrist limit are required";
+                return;
+            }
+            if (!wrist_in_range(request->wrist_angle) ||
+                std::abs(request->wrist_angle - current_joints_[3]) > 0.05) {
+                response->message = "Rotation start wrist angle does not match current_joints";
+                return;
+            }
+            float requested_pose[6];
+            float actual_pose[6];
+            kin_.forward_kinematics(actual_pose, current_joints_.data());
+            if (!read_pose(request->target, requested_pose) ||
+                !std::all_of(std::begin(actual_pose), std::end(actual_pose),
+                    [](float value) { return std::isfinite(value); }) ||
+                std::sqrt(std::pow(actual_pose[0] - requested_pose[0], 2) +
+                    std::pow(actual_pose[1] - requested_pose[1], 2) +
+                    std::pow(actual_pose[2] - requested_pose[2], 2)) > 20.0 ||
+                std::abs(std::remainder(actual_pose[3] - requested_pose[3], 2.0 * M_PI)) > 0.05) {
+                response->message = "Rotation start pose does not match current_joints";
+                return;
+            }
+            rotation_active_ = true;
+            rotation_group_id_ = request->group_id;
+            highest_group_id_ = request->group_id;
+            rotation_direction_ = request->direction;
+            rotation_fault_.clear();
+            hold_joints_ = current_joints_;
+            hold_joints_active_ = true;
+            std::copy(std::begin(actual_pose), std::end(actual_pose), current_pose_);
+            clear_velocity();
+            response->success = true;
+            response->message = "Rotation group started; holding current joints";
+            return;
+        }
+
+        if (request->operation != WristControl::Request::TARGET) {
+            response->message = "Unknown wrist operation";
+            return;
+        }
+        if (!rotation_active_ || request->group_id != rotation_group_id_) {
+            response->message = "Rotation group ID does not match an active group";
+            return;
+        }
+        if (!rotation_fault_.empty()) {
+            response->message = rotation_fault_;
+            return;
+        }
+        const auto reject = [this, &response](const std::string &message) {
+            rotation_fault_ = message;
+            response->message = message;
+            RCLCPP_ERROR(get_logger(), "Rotation group rejected target: %s", message.c_str());
+        };
+        if (!wrist_in_range(request->wrist_angle)) {
+            reject("Wrist target is nonfinite or outside [-2pi, 0]");
+            return;
+        }
+        double wrist_angle = std::clamp(request->wrist_angle, -2.0 * M_PI, 0.0);
+        const double increment = wrist_angle - hold_joints_[3];
+        if (rotation_direction_ * increment < -1e-5) {
+            reject("Wrist target reverses the group direction");
+            return;
+        }
+        if (rotation_direction_ * increment < 0.0) {
+            wrist_angle = hold_joints_[3];
+        }
+        float pose[6];
+        if (!read_pose(request->target, pose)) {
+            reject("Wrist target pose is invalid");
+            return;
+        }
+        std::array<float, 4> joints;
+        kin_.inverse_kinematics(pose, joints.data());
+        if (!std::all_of(joints.begin(), joints.end(),
+                [](float value) { return std::isfinite(value); })) {
+            reject("Wrist target inverse kinematics is nonfinite");
+            return;
+        }
+        if (std::abs(std::remainder(pose[3] - joints[0] - wrist_angle, 2.0 * M_PI)) > 1e-4) {
+            reject("Wrist target angle does not match its pose yaw");
+            return;
+        }
+        joints[3] = static_cast<float>(wrist_angle);
+        hold_joints_ = joints;
+        std::copy(std::begin(pose), std::end(pose), current_pose_);
+        response->success = true;
+        response->message = "Wrist target accepted";
+    }
 
     void pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+        if (rotation_active_) {
+            return;
+        }
+        if (hold_joints_active_) {
+            float pose[6];
+            if (!read_pose(*msg, pose)) {
+                return;
+            }
+            hold_joints_active_ = false;
+        }
         // 単位を [m] から [mm] に変換
         current_pose_[0] = msg->pose.position.x * 1000.0;
         current_pose_[1] = msg->pose.position.y * 1000.0;
@@ -103,14 +300,23 @@ private:
         if (msg->axes.size() < 6 || msg->buttons.size() < 6) return;
         
         // --- 速度として入力値を保持 ---
-        vel_x_ = msg->axes[1]; 
-        vel_y_ = msg->axes[0]; 
-        vel_z_ = msg->axes[4]; 
-        vel_phi_ = msg->axes[3]; 
+        if (!rotation_active_) {
+            vel_x_ = msg->axes[1];
+            vel_y_ = msg->axes[0];
+            vel_z_ = msg->axes[4];
+            vel_phi_ = msg->axes[3];
+            if (std::isfinite(vel_x_) && std::isfinite(vel_y_) &&
+                std::isfinite(vel_z_) && std::isfinite(vel_phi_) &&
+                (vel_x_ != 0.0f || vel_y_ != 0.0f || vel_z_ != 0.0f || vel_phi_ != 0.0f)) {
+                hold_joints_active_ = false;
+            } else if (hold_joints_active_) {
+                clear_velocity();
+            }
+        }
 
         // Request a shared initialization toggle on each X button press.
         const bool current_x_button = msg->buttons[0] != 0;
-        if (current_x_button && !prev_x_button_ && !state_request_pending_) {
+        if (!rotation_active_ && current_x_button && !prev_x_button_ && !state_request_pending_) {
             if (!state_client_->service_is_ready()) {
                 RCLCPP_WARN(this->get_logger(), "State service not ready.");
             } else {
@@ -200,6 +406,14 @@ private:
             RCLCPP_WARN(this->get_logger(), "Pump request timed out. Press again to retry.");
         }
 
+        if (hold_joints_active_) {
+            std_msgs::msg::Float32MultiArray msg_out;
+            msg_out.data.assign(hold_joints_.begin(), hold_joints_.end());
+            joint_pub_->publish(msg_out);
+            publish_arm_markers(hold_joints_.data());
+            return;
+        }
+
         // 1. Joy入力による手動介入 (位置の微調整)
         const float pos_gain = 5.0f;  
         const float rot_gain = 0.05f; 
@@ -285,6 +499,7 @@ private:
     // --- 変数定義 ---
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
+    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr current_joints_sub_;
     rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr endeffector_sub_;
     
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr joint_pub_;
@@ -293,12 +508,25 @@ private:
     rclcpp::Client<catchrobo2026_msgs::srv::PumpControl>::SharedPtr pump_client_;
     rclcpp::Client<catchrobo2026_msgs::srv::EndeffectorControl>::SharedPtr endeffector_client_;
     rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr state_client_;
+    rclcpp::Service<WristControl>::SharedPtr wrist_service_;
     
     rclcpp::TimerBase::SharedPtr publish_timer_; 
     
     robot_kinematics kin_; // 運動学クラスのインスタンス
 
     float current_pose_[6];
+    std::array<float, 4> current_joints_{};
+    std::chrono::steady_clock::time_point current_joints_time_;
+    bool current_joints_valid_ = false;
+    double rotation_joint_timeout_sec_ = 1.0;
+    bool rotation_active_ = false;
+    uint64_t rotation_group_id_ = 0;
+    uint64_t highest_group_id_ = 0;
+    uint64_t last_ended_group_id_ = 0;
+    int rotation_direction_ = 0;
+    std::string rotation_fault_;
+    std::array<float, 4> hold_joints_{};
+    bool hold_joints_active_ = false;
     bool prev_x_button_ = false;
     bool state_request_pending_ = false;
     int64_t state_request_id_ = 0;

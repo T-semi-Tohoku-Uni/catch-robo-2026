@@ -335,7 +335,8 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
             for (std::size_t i = 0; i < steps.size(); ++i) {
               const YAML::Node step = steps[i];
               const std::string at = where + ".steps[" + std::to_string(i) + "]";
-              keys(step, at, {"move", "waypoint", "call", "pump", "endeffector", "wait"});
+              keys(step, at, {
+                "move", "waypoint", "call", "pump", "endeffector", "wait", "rotation_group"});
               if (step.size() != 1) {
                 fail(at, "a step must contain exactly one operation");
               }
@@ -377,6 +378,13 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
                       points[j], move_at + ".waypoints[" + std::to_string(j) + "]"));
                   }
                 }
+              } else if (step["rotation_group"]) {
+                const auto value = scalar(step["rotation_group"], at + ".rotation_group");
+                if (value != "start" && value != "end") {
+                  fail(at + ".rotation_group", "expected start or end");
+                }
+                raw.step.type = value == "start" ?
+                  StepType::ROTATION_START : StepType::ROTATION_END;
               } else if (step["pump"]) {
                 const auto value = scalar(step["pump"], at + ".pump");
                 raw.step.type = StepType::PUMP;
@@ -573,13 +581,38 @@ std::vector<Step> SequenceConfig::compile_sequence(
     }
     result.push_back(step);
   }
+  bool in_rotation_group = false;
+  bool rotation_group_has_move = false;
   for (std::size_t i = 0; i < result.size(); ++i) {
+    const auto at = where + ".steps[" + std::to_string(i) + "]";
     if (result[i].waypoint &&
       (i + 1 == result.size() || result[i + 1].type != StepType::MOVE))
     {
-      fail(where + ".steps[" + std::to_string(i) + "]",
+      fail(at,
         "waypoint movement must be followed immediately by another movement");
     }
+    if (result[i].type == StepType::ROTATION_START) {
+      if (in_rotation_group) {
+        fail(at, "rotation groups cannot be nested");
+      }
+      in_rotation_group = true;
+      rotation_group_has_move = false;
+    } else if (result[i].type == StepType::ROTATION_END) {
+      if (!in_rotation_group) {
+        fail(at, "rotation_group end needs a preceding start");
+      }
+      if (!rotation_group_has_move) {
+        fail(at, "rotation group must contain at least one movement");
+      }
+      in_rotation_group = false;
+    } else if (result[i].type == StepType::INITIALIZE && in_rotation_group) {
+      fail(at, "initialization cannot run inside a rotation group");
+    } else if (result[i].type == StepType::MOVE && in_rotation_group) {
+      rotation_group_has_move = true;
+    }
+  }
+  if (in_rotation_group) {
+    fail(where, "rotation_group start needs a matching end in the same action or hook");
   }
   return result;
 }

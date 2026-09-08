@@ -63,7 +63,7 @@ void for_each_binding(Callback callback)
   }
 }
 
-TEST(BuiltinSequences, InitializationOnlySendsCommandAndEndPassesWaypointToLifecyclePose)
+TEST(BuiltinSequences, InitializationOnlySendsCommandAndEndUsesTwoNormalMoves)
 {
   const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   const auto steps = config.compile_initialization();
@@ -73,7 +73,7 @@ TEST(BuiltinSequences, InitializationOnlySendsCommandAndEndPassesWaypointToLifec
   ASSERT_EQ(ending.size(), 2u);
   EXPECT_EQ(ending[0].type, StepType::MOVE);
   EXPECT_EQ(ending[0].pose, (Pose{675, 200, 300, 0}));
-  EXPECT_TRUE(ending[0].waypoint);
+  EXPECT_FALSE(ending[0].waypoint);
   EXPECT_EQ(ending[1].type, StepType::MOVE);
   EXPECT_EQ(ending[1].pose, (Pose{670, -110, 220, 0}));
   EXPECT_FALSE(ending[1].waypoint);
@@ -156,8 +156,8 @@ TEST(BuiltinSequences, PlacementBindingsSelectDifferentTeamApproaches)
       ASSERT_GE(blue.size(), 2u);
       EXPECT_EQ(red.front().type, StepType::MOVE);
       EXPECT_EQ(blue.front().type, StepType::MOVE);
-      EXPECT_EQ(red.front().pose, (Pose{150, 0, 400, 3.14159265358979}));
-      EXPECT_EQ(blue.front().pose, (Pose{1200, 0, 400, 3.14159265358979}));
+      EXPECT_EQ(red.front().pose, (Pose{150, 0, 360, 3.14159265358979}));
+      EXPECT_EQ(blue.front().pose, (Pose{1200, 0, 360, 3.14159265358979}));
       EXPECT_NE(red.front().pose, blue.front().pose);
       EXPECT_TRUE(red.front().waypoint);
       EXPECT_TRUE(blue.front().waypoint);

@@ -36,6 +36,20 @@
 # Inline waypoints run before the move target and do not change its fixed anchor.
 # Inline relative entries use the absolute anchor BEFORE this move.
 # Legacy move: {absolute: ..., waypoint: true} remains supported.
+# Rotation groups constrain the physical wrist joint, not world-frame phi:
+#   - rotation_group: start
+#   - move: {absolute: place_blue_0_0_above}
+#   - pump: release
+#   - wait: 0.5
+#   - move: {relative: [0, 0, '$place_retreat_dz', 0]}
+#   - rotation_group: end
+# The whole group is planned before its first operation; infeasible groups fail.
+# Direction is selected automatically within the existing wrist limits [-2*pi, 0].
+# Intermediate world-frame phi may differ from ordinary shortest-angle motion.
+# Match start/end after call/extends expansion; no nesting or movement-free groups.
+# A group cannot cross a UI action or initialization hook, or split a waypoint route.
+# Put start before the first waypoint and end after its final normal MOVE.
+# No rotation group is enabled in the configuration below; select the needed span.
 # Each lifecycle hook needs its own absolute anchor before any relative move.
 # PICK/PLACE pumps use the UI-selected collectors; other collectors receive off.
 # Lifecycle pump steps address all three collectors.

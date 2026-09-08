@@ -15,7 +15,7 @@ namespace catchrobo2026_sequence
 using Pose = std::array<double, 4>;
 inline constexpr double MAX_DURATION_SEC = 86400.0;
 
-enum class StepType { MOVE, PUMP, ENDEFFECTOR, WAIT, INITIALIZE };
+enum class StepType { MOVE, PUMP, ENDEFFECTOR, WAIT, INITIALIZE, ROTATION_START, ROTATION_END };
 
 struct Step
 {
