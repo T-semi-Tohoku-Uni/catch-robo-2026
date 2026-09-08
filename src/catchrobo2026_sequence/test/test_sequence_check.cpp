@@ -118,6 +118,24 @@ TEST(SequenceCheck, PhiPlannerLooksAcrossMovesAndMechanismSteps)
   EXPECT_FALSE(has_code(result, "wrist_wrap_jump"));
 }
 
+TEST(SequenceCheck, LocalPhiBudgetExcludesApproachAndPlansItsWinding)
+{
+  auto begin = flag(StepType::PHI_TRAVEL_START);
+  begin.max_phi_travel = kPi / 6.0;
+  const std::vector<Step> steps{group(false), move_to(kEndingA), begin,
+    flag(StepType::WAIT), move_to(kEndingB), flag(StepType::PHI_TRAVEL_END),
+    flag(StepType::SEQUENCE_END)};
+  const auto accepted = check_sequence_steps(steps, joints_at(kPickRetreat));
+  EXPECT_EQ(accepted.status, CheckStatus::FEASIBLE) << accepted.message;
+  EXPECT_EQ(accepted.route_count, 2u);
+  EXPECT_NEAR(accepted.phi_travel, kPi, 1e-3);
+  EXPECT_FALSE(has_code(accepted, "wrist_wrap_jump"));
+  const auto rejected = check_sequence_steps({group(false), begin, move_to(kEndingB),
+      flag(StepType::PHI_TRAVEL_END), flag(StepType::SEQUENCE_END)}, joints_at(kEndingA));
+  EXPECT_EQ(rejected.status, CheckStatus::INFEASIBLE);
+  EXPECT_EQ(rejected.route_count, 0u);
+}
+
 TEST(SequenceCheck, ConsecutiveWaypointsAndInlinePointsFormOneRoute)
 {
   auto waypoint = move_to({580, 180, 290, -kPi});

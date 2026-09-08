@@ -87,6 +87,20 @@ int main()
           "AB must meet a zero phi budget with or without increasing wrist direction");
   }
   const auto any_edge = [](size_t, double, double) {return true;};
+  expect(!solve_minimum_phi_cost(0.0, {0.0}, {0.0},
+          [](size_t, double, double) {return 1.0;}, angles, travel, {{0, 1, 0.8}}),
+        "A custom interpolation must count interior travel despite identical endpoints");
+  expect(solve_minimum_phi(0.0, {0.0, 0.0, 0.0}, {0.0, -4.0, -2.0},
+          any_edge, angles, travel, {{1, 3, 5.0}}) && angles.front() == -kTurn &&
+          std::abs(travel - (2.0 * kTurn - 2.0)) < 1e-10,
+        "Keep a more expensive prefix when it preserves the local budget after a merge");
+  expect(!solve_minimum_phi(0.0, {0.0, 0.0, 0.0}, {0.0, -4.0, -2.0},
+          any_edge, angles, travel, {{1, 3, 4.0}}),
+        "Reject all winding paths exceeding a cumulative subinterval budget");
+  expect(solve_minimum_phi(-2.0, {0.0, 0.0, 0.0}, {-2.0, -2.4, -2.0},
+          any_edge, angles, travel, {{0, 1, 0.0}, {1, 2, 0.4}, {2, 3, 0.4}}),
+        "Reset each adjacent subinterval without resetting the global total");
+  expect(std::abs(travel - 0.8) < 1e-10, "Adjacent budgets must not erase global travel");
   expect(solve_minimum_phi(-kTurn / 2.0, {0.0, ending_base},
           {0.0, -ending_base}, any_edge, angles, travel) &&
           angles[0] == -kTurn && std::abs(travel - kTurn / 2.0) < 1e-12,

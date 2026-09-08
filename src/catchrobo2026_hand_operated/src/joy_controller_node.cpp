@@ -143,6 +143,7 @@ private:
                 return;
             }
             rotation_active_ = false;
+            phi_interval_active_ = false;
             last_ended_group_id_ = request->group_id;
             rotation_fault_.clear();
             clear_velocity();
@@ -201,6 +202,8 @@ private:
             limit_phi_travel_ = request->limit_phi_travel;
             max_phi_travel_ = request->max_phi_travel;
             phi_travel_ = 0.0;
+            phi_interval_active_ = false;
+            interval_phi_travel_ = 0.0;
             last_commanded_phi_ = static_cast<double>(current_joints_[0]) + current_joints_[3];
             rotation_fault_.clear();
             hold_joints_ = current_joints_;
@@ -212,7 +215,9 @@ private:
             return;
         }
 
-        if (request->operation != WristControl::Request::TARGET) {
+        if (request->operation != WristControl::Request::TARGET &&
+            request->operation != WristControl::Request::PHI_BEGIN &&
+            request->operation != WristControl::Request::PHI_END) {
             response->message = "Unknown wrist operation";
             return;
         }
@@ -229,6 +234,29 @@ private:
             response->message = message;
             RCLCPP_ERROR(get_logger(), "Rotation group rejected target: %s", message.c_str());
         };
+        if (request->operation == WristControl::Request::PHI_BEGIN) {
+            if (phi_interval_active_ || !request->limit_phi_travel ||
+                !std::isfinite(request->max_phi_travel) || request->max_phi_travel < 0.0) {
+                reject("Phi interval is already active or its limit is invalid");
+                return;
+            }
+            phi_interval_active_ = true;
+            interval_max_phi_travel_ = request->max_phi_travel;
+            interval_phi_travel_ = 0.0;
+            response->success = true;
+            response->message = "Phi interval started at the last accepted joint command";
+            return;
+        }
+        if (request->operation == WristControl::Request::PHI_END) {
+            if (!phi_interval_active_) {
+                reject("Phi interval end needs an active interval");
+                return;
+            }
+            phi_interval_active_ = false;
+            response->success = true;
+            response->message = "Phi interval ended; whole-group constraints remain active";
+            return;
+        }
         if (!wrist_in_range(request->wrist_angle)) {
             reject("Wrist target is nonfinite or outside [-2pi, 0]");
             return;
@@ -262,14 +290,21 @@ private:
         const double commanded_phi = static_cast<double>(joints[0]) + wrist_angle;
         const double next_phi_travel = phi_travel_ +
             std::abs(commanded_phi - last_commanded_phi_);
+        const double next_interval_travel = interval_phi_travel_ +
+            std::abs(commanded_phi - last_commanded_phi_);
         // Apply this tolerance once to the group total, never to each increment.
         if (limit_phi_travel_ && next_phi_travel > max_phi_travel_ + 1e-5) {
             reject("Phi total travel exceeds the sequence group limit");
             return;
         }
+        if (phi_interval_active_ && next_interval_travel > interval_max_phi_travel_ + 1e-5) {
+            reject("Phi total travel exceeds the active interval limit");
+            return;
+        }
         joints[3] = static_cast<float>(wrist_angle);
         hold_joints_ = joints;
         phi_travel_ = next_phi_travel;
+        if (phi_interval_active_) interval_phi_travel_ = next_interval_travel;
         last_commanded_phi_ = commanded_phi;
         std::copy(std::begin(pose), std::end(pose), current_pose_);
         response->success = true;
@@ -547,6 +582,9 @@ private:
     bool limit_phi_travel_ = false;
     double max_phi_travel_ = 0.0;
     double phi_travel_ = 0.0;
+    bool phi_interval_active_ = false;
+    double interval_max_phi_travel_ = 0.0;
+    double interval_phi_travel_ = 0.0;
     double last_commanded_phi_ = 0.0;
     std::string rotation_fault_;
     std::array<float, 4> hold_joints_{};

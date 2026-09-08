@@ -99,6 +99,61 @@ void check()
   require(std::abs(lookahead.routes[0].wrist_angles.back() + turn) < 1e-5,
     "Lookahead did not select the useful winding at A");
 
+  request.limit_phi_travel = false;
+  catchrobo2026_msgs::msg::PhiTravelInterval interval;
+  interval.start_target = 1;
+  interval.end_target = 2;
+  interval.max_phi_travel = turn / 12.0;
+  request.phi_travel_intervals = {interval};
+  const auto scoped = planner.planGroup(pick_state, request);
+  require(scoped.success, scoped.message);
+  require(scoped.interval_phi_travel.size() == 1 && scoped.interval_phi_travel[0] < 1e-5,
+    "Only A to B should be counted against the 30-degree budget");
+  require(scoped.phi_travel > 3.0 && scoped.phi_travel < 3.2,
+    "The approach must remain outside the local budget");
+  require(std::abs(scoped.routes[0].wrist_angles.back() + turn) < 1e-5,
+    "The local bound must influence winding selection before its start");
+  auto from_a = request;
+  from_a.targets = {target(b)};
+  from_a.route_ends = {1};
+  from_a.phi_travel_intervals[0].start_target = 0;
+  from_a.phi_travel_intervals[0].end_target = 1;
+  require(!planner.planGroup(zero, from_a).success,
+    "Unwound A to B must be rejected when the interval is active from the start");
+  request.limit_phi_travel = true;
+  request.max_phi_travel = 0.6;
+  require(!planner.planGroup(pick_state, request).success, "Local bound must not replace global bound");
+  request.limit_phi_travel = false;
+  request.allow_wrist_reversal = false;
+  require(!planner.planGroup(pick_state, request).success, "Direction bound must remain active");
+  request.allow_wrist_reversal = true;
+  for (const auto range : std::vector<std::array<uint32_t, 2>>{{2, 1}, {1, 1}, {0, 3}}) {
+    request.phi_travel_intervals[0].start_target = range[0];
+    request.phi_travel_intervals[0].end_target = range[1];
+    require(!planner.planGroup(pick_state, request).success, "Invalid interval indices were accepted");
+  }
+  for (const nav_director::Point3D rear : std::vector<nav_director::Point3D>{
+      {1199.13, -586.0, 304.35, -turn / 2.0},
+      {1235.87, -622.0, 304.35, -turn / 2.0},
+      {1199.13, -736.0, 304.35, -turn / 2.0}}) {
+    std::array<float, 4> rear_joints{};
+    require(planner.solveIK(rear, rear_joints), "Blue rear fixture must be reachable");
+    request.phi_travel_intervals = {interval};
+    const auto fallback = planner.planGroup(planner.stateFromJoints(rear_joints), request);
+    require(fallback.success, fallback.message);
+    require(fallback.routes.size() == 2 && fallback.routes[0].phi_angles.empty(),
+      "Rear approach must use the bounded wrist interpolation fallback");
+    require(fallback.interval_phi_travel.size() == 1 &&
+      fallback.interval_phi_travel[0] < turn / 12.0,
+      "Fallback must include the interior phi reversal in the A-to-B budget");
+    require(fallback.interval_phi_travel[0] > 0.04, "Fallback interior travel was lost");
+  }
+  request.phi_travel_intervals = {interval, interval};
+  require(!planner.planGroup(pick_state, request).success, "Overlapping intervals were accepted");
+  request.phi_travel_intervals = {interval};
+  request.route_ends = {2};
+  require(!planner.planGroup(pick_state, request).success, "An interval split a waypoint route");
+
   std::array<float, 4> joints{};
   require(!planner.solveIK({10000, 10000, 10000, 0}, joints),
     "An unreachable position was accepted");

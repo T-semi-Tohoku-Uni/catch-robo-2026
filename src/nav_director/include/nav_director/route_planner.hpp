@@ -55,11 +55,11 @@ private:
     const std::vector<uint32_t> & route_ends,
     const std::vector<double> & selected, bool strict_base,
     std::vector<catchrobo2026_msgs::msg::RotationGroupRoute> & routes,
-    double & travel, std::string & error);
+    double & travel, std::string & error, std::vector<double> & route_travel);
   void planMinimumPhi(
     const std::vector<Point3D> & targets, const std::vector<double> & raw_angles,
     const PlanRotationGroup::Request & request,
-    PlanRotationGroup::Response & response, int direction = 0);
+    PlanRotationGroup::Response & response, int direction = 0, bool wrist_interpolation = false);
   static bool finitePoint(const Point3D & point);
   std::vector<Point3D> densifyPoints(const std::vector<Point3D> & points);
   Point3D interpolatePoint(const Point3D & p0, const Point3D & p1, double ratio);

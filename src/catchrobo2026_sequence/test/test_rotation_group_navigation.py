@@ -480,13 +480,18 @@ def test_phi_limit_counts_reversals_and_combines_with_direction(rotation_rig):
     assert accepted.phi_travel == pytest.approx(0.3, abs=0.05)
 
 
-def test_sequence_group_looks_ahead_across_ending_moves(rotation_rig, tmp_path):
+@pytest.mark.parametrize('local_budget,start_xyz', [
+    (False, (375, 238, 196.95)), (True, (375, 238, 196.95)),
+    (True, (1199.13, -736, 304.35)),
+])
+def test_sequence_group_looks_ahead_across_ending_moves(
+        rotation_rig, tmp_path, local_budget, start_xyz):
     rig = rotation_rig
-    start = PoseStamped(pose=waypoint_pose((375, 238, 196.95), -math.pi))
+    start = PoseStamped(pose=waypoint_pose(start_xyz, -math.pi))
     for _ in range(3):
         rig.pose_pub.publish(start)
         rig.observe(0.1)
-    rig.until(lambda: math.dist(xyz(rig.poses[-1]), (375, 238, 196.95)) < 0.1)
+    rig.until(lambda: math.dist(xyz(rig.poses[-1]), start_xyz) < 0.1)
     rig.observe(0.1)
     config = yaml.load((Path(__file__).parents[1] / 'config/sequences.yaml').read_text(),
                        Loader=yaml.BaseLoader)
@@ -495,6 +500,14 @@ def test_sequence_group_looks_ahead_across_ending_moves(rotation_rig, tmp_path):
         {'move': {'absolute': [675, 200, 300, 0]}}, {'wait': 0.05},
         {'move': {'absolute': 'lifecycle_pose'}}, {'sequence_group': 'end'},
     ]}
+    if local_budget:
+        config['sequences']['ending']['steps'] = [
+            {'sequence_group': 'start'},
+            {'move': {'absolute': [675, 200, 300, 0]}},
+            {'phi_travel': {'start': True, 'limit': math.pi / 6}}, {'wait': 0.05},
+            {'move': {'absolute': 'lifecycle_pose'}}, {'phi_travel': 'end'},
+            {'sequence_group': 'end'},
+        ]
     config['end_sequence'] = 'ending'
     config['route_timeout_sec'] = 12.0
     config_file = tmp_path / 'sequence_phi_limit.yaml'
@@ -507,10 +520,10 @@ def test_sequence_group_looks_ahead_across_ending_moves(rotation_rig, tmp_path):
     rig.execute(ExecuteSequence.Goal.END)
     rig.observe(0.1)
     commands = rig.commands[before:]
-    assert commanded_phi_travel(commands) <= math.pi + 0.011
+    assert commanded_phi_travel(commands) <= math.pi + (0.1 if local_budget else 0.011)
     a_index = min(range(len(commands)), key=lambda i: abs(commands[i].data[3] + 2 * math.pi))
     assert abs(commands[a_index].data[3] + 2 * math.pi) < 1e-4
-    assert commanded_phi_travel(commands[a_index:]) < 1e-4
+    assert commanded_phi_travel(commands[a_index:]) < (math.pi / 6 if local_budget else 1e-4)
     assert abs(rig.joints[-1].data[3] - (-6.220766497)) < 0.05
 
 

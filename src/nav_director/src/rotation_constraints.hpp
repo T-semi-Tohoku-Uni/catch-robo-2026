@@ -164,52 +164,95 @@ inline double wrist_segment_phi_travel(
   return travel;
 }
 
-// At most two wrist endpoints exist at each target; retain both for lookahead.
-template<typename EdgeLegal>
-inline bool solve_minimum_phi(
+struct PhiTravelInterval
+{
+  size_t start_target, end_target;
+  double max_phi_travel;
+};
+
+// Keep nondominated total/local costs so later bounds can select an earlier winding.
+template<typename EdgeCost>
+inline bool solve_minimum_phi_cost(
   double start_phi, const std::vector<double> & bases,
-  const std::vector<double> & raw_angles, EdgeLegal edge_legal,
-  std::vector<double> & angles, double & travel)
+  const std::vector<double> & raw_angles, EdgeCost edge_cost,
+  std::vector<double> & angles, double & travel,
+  const std::vector<PhiTravelInterval> & intervals = {})
 {
   angles.clear();
   travel = 0.0;
   if (!std::isfinite(start_phi) || bases.size() != raw_angles.size() || bases.empty()) {
     return false;
   }
-  const double infinity = std::numeric_limits<double>::infinity();
-  std::vector<std::vector<double>> options;
-  std::vector<std::array<int, 2>> parents;
-  std::array<double, 2> previous_cost{0.0, infinity};
-  std::vector<double> previous_phi{start_phi};
+  size_t previous_end = 0;
+  for (const auto & interval : intervals) {
+    if (interval.start_target < previous_end || interval.start_target >= interval.end_target ||
+      interval.end_target > bases.size() || !std::isfinite(interval.max_phi_travel) ||
+      interval.max_phi_travel < 0.0) {return false;}
+    previous_end = interval.end_target;
+  }
+  struct Label {double phi, wrist, cost, local; size_t parent;};
+  std::vector<std::vector<Label>> layers{{{start_phi, 0.0, 0.0, 0.0, 0}}};
+  size_t interval_index = 0;
   for (size_t i = 0; i < bases.size(); ++i) {
     if (!std::isfinite(bases[i])) {return false;}
-    options.push_back(candidates(raw_angles[i]));
-    parents.push_back({-1, -1});
-    std::array<double, 2> costs{infinity, infinity};
-    std::vector<double> phis;
-    for (size_t target = 0; target < options.back().size(); ++target) {
-      const double phi = bases[i] + options.back()[target];
-      phis.push_back(phi);
-      for (size_t previous = 0; previous < previous_phi.size(); ++previous) {
-        const double cost = previous_cost[previous] + std::abs(phi - previous_phi[previous]);
-        if (cost < costs[target] && edge_legal(i, previous_phi[previous], phi)) {
-          costs[target] = cost;
-          parents.back()[target] = static_cast<int>(previous);
-        }
+    while (interval_index < intervals.size() && i >= intervals[interval_index].end_target) {
+      ++interval_index;
+    }
+    const auto * interval = interval_index < intervals.size() &&
+      i >= intervals[interval_index].start_target ? &intervals[interval_index] : nullptr;
+    const auto & previous = layers.back();
+    std::vector<Label> next;
+    for (const double wrist : candidates(raw_angles[i])) {
+      const double phi = bases[i] + wrist;
+      if (!std::isfinite(phi)) {return false;}
+      for (size_t parent = 0; parent < previous.size(); ++parent) {
+        const auto & before = previous[parent];
+        const double amount = edge_cost(i, before.phi, phi);
+        if (!std::isfinite(amount) || amount < 0.0) {continue;}
+        const double local = interval ? amount +
+          (i == interval->start_target ? 0.0 : before.local) : 0.0;
+        if (interval && local > interval->max_phi_travel + kTolerance) {continue;}
+        const double cost = before.cost + amount;
+        if (!std::isfinite(cost) || !std::isfinite(local)) {continue;}
+        const auto dominates = [wrist, cost, local](const Label & label) {
+            return label.wrist == wrist && label.cost <= cost && label.local <= local;
+          };
+        if (std::any_of(next.begin(), next.end(), dominates)) {continue;}
+        next.erase(std::remove_if(next.begin(), next.end(),
+          [wrist, cost, local](const Label & label) {
+            return label.wrist == wrist && cost <= label.cost && local <= label.local;
+          }), next.end());
+        next.push_back({phi, wrist, cost, local, parent});
       }
     }
-    previous_cost = costs;
-    previous_phi = std::move(phis);
+    if (next.empty()) {return false;}
+    layers.push_back(std::move(next));
   }
-  size_t selected = previous_cost[0] <= previous_cost[1] ? 0 : 1;
-  if (!std::isfinite(previous_cost[selected])) {return false;}
-  travel = previous_cost[selected];
-  angles.resize(options.size());
-  for (size_t i = options.size(); i-- > 0;) {
-    angles[i] = options[i][selected];
-    selected = static_cast<size_t>(parents[i][selected]);
+  const auto & last = layers.back();
+  size_t selected = static_cast<size_t>(std::min_element(last.begin(), last.end(),
+    [](const Label & a, const Label & b) {return a.cost < b.cost;}) - last.begin());
+  travel = last[selected].cost;
+  angles.resize(bases.size());
+  for (size_t i = bases.size(); i > 0; --i) {
+    const auto & label = layers[i][selected];
+    angles[i - 1] = label.wrist;
+    selected = label.parent;
   }
   return true;
+}
+
+template<typename EdgeLegal>
+inline bool solve_minimum_phi(
+  double start_phi, const std::vector<double> & bases,
+  const std::vector<double> & raw_angles, EdgeLegal edge_legal,
+  std::vector<double> & angles, double & travel,
+  const std::vector<PhiTravelInterval> & intervals = {})
+{
+  return solve_minimum_phi_cost(start_phi, bases, raw_angles,
+    [&edge_legal](size_t i, double phi0, double phi1) {
+      return edge_legal(i, phi0, phi1) ? std::abs(phi1 - phi0) :
+             std::numeric_limits<double>::infinity();
+    }, angles, travel, intervals);
 }
 
 }  // namespace rotation_constraints

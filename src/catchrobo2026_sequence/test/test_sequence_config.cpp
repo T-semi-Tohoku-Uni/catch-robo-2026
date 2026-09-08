@@ -82,6 +82,69 @@ TEST(SequenceConfig, InspectionUsesResolvedPosesAndOnlyEnabledBindings)
   EXPECT_THROW(config.configured_bindings("green"), ConfigError);
 }
 
+TEST(SequenceConfig, PhiIntervalsUseFlagsValuesAndExpandedTargetIndices)
+{
+  const auto config = SequenceConfig::from_yaml(R"(
+version: 1
+poses: {}
+bindings: {red: {pick: {}, place: {}}, blue: {pick: {}, place: {}}}
+values: {budget: 0.5235987755982988}
+sequences:
+  s:
+    steps:
+      - sequence_group: start
+      - move: {absolute: [675, 200, 300, 0], waypoints: [[650, 200, 300, 0]]}
+      - phi_travel: {start: true, limit: '$budget'}
+      - waypoint: {absolute: [670, 100, 250, 0]}
+      - move: {absolute: [670, -110, 220, 0]}
+      - phi_travel: end
+      - phi_travel: {start: true, limit: 0}
+      - move: {relative: [0, 0, 10, 0]}
+      - phi_travel: end
+      - sequence_group: end
+)");
+  const auto steps = config.compile_named("s");
+  ASSERT_EQ(steps.size(), 10u);
+  const auto intervals = catchrobo2026_sequence::collect_phi_travel_intervals(steps, 0, 9);
+  ASSERT_EQ(intervals.size(), 2u);
+  EXPECT_EQ(intervals[0].start_target, 2u);
+  EXPECT_EQ(intervals[0].end_target, 4u);
+  EXPECT_DOUBLE_EQ(intervals[0].max_phi_travel, 0.5235987755982988);
+  EXPECT_EQ(intervals[1].start_target, 4u);
+  EXPECT_EQ(intervals[1].end_target, 5u);
+  EXPECT_DOUBLE_EQ(intervals[1].max_phi_travel, 0.0);
+}
+
+TEST(SequenceConfig, InvalidPhiIntervalsAreRejected)
+{
+  const std::string prefix = "version: 1\nposes: {}\nbindings: "
+    "{red: {pick: {}, place: {}}, blue: {pick: {}, place: {}}}\n";
+  const std::string move = "{move: {absolute: [675, 200, 300, 0]}}";
+  for (const std::string & body : {
+      "{phi_travel: end}, " + move,
+      "{phi_travel: {start: true, limit: 1}}, " + move,
+      "{phi_travel: {start: true, limit: 1}}, {phi_travel: end}, " + move,
+      "{phi_travel: {start: true, limit: 1}}, "
+      "{phi_travel: {start: true, limit: 1}}, " + move + ", {phi_travel: end}",
+      "{waypoint: {absolute: [675, 200, 300, 0]}}, "
+      "{phi_travel: {start: true, limit: 1}}, " + move + ", {phi_travel: end}"})
+  {
+    EXPECT_THROW(SequenceConfig::from_yaml(prefix + "sequences: {s: {steps: ["
+        "{sequence_group: start}, " + body + ", {sequence_group: end}]}}")
+      .compile_named("s"), ConfigError) << body;
+  }
+  for (const std::string options : {"start", "{start: true}", "{start: false, limit: 1}",
+      "{start: true, limit: -1}", "{start: true, limit: .nan}",
+      "{start: true, limit: .inf}", "{start: true, limit: 1, extra: 2}"})
+  {
+    EXPECT_THROW(SequenceConfig::from_yaml(prefix + "sequences: {s: {steps: [{phi_travel: " +
+        options + "}]}}"), ConfigError) << options;
+  }
+  EXPECT_THROW(SequenceConfig::from_yaml(prefix + "sequences: {s: {steps: ["
+      "{phi_travel: {start: true, limit: 1}}, " + move + ", {phi_travel: end}]}}")
+    .compile_named("s"), ConfigError);
+}
+
 TEST(SequenceConfig, OptionalRouteTimeoutResolvesValuesAndValidBounds)
 {
   const auto yaml = document("{}", "{}");

@@ -20,6 +20,7 @@ def rig(base_rig):  # noqa: F811
     rig.group_plans, rig.wrist_requests = [], []
     rig.group_mode = 'success'
     rig.planned_phi_travel = 0.0
+    rig.planned_interval_phi_travel = 0.0
     rig.begin_gate = None
     rig.pump_gate = None
     rig.wrist_mode = 'success'
@@ -30,6 +31,8 @@ def rig(base_rig):  # noqa: F811
         response.message = 'no monotonic solution' if not response.success else 'planned'
         response.direction = 0 if request.allow_wrist_reversal else -1
         response.phi_travel = rig.planned_phi_travel
+        response.interval_phi_travel = [rig.planned_interval_phi_travel] * len(
+            request.phi_travel_intervals)
         if response.success:
             offset = 0
             previous = PoseStamped()
@@ -270,3 +273,64 @@ def test_sequence_group_rejects_over_budget_plan_before_commands(rig):
     reply = rig.resolve(result)
     assert not reply.result.success and 'phi travel limit' in reply.result.message
     assert not rig.pumps and not rig.follows and not rig.wrist_requests
+
+
+def test_phi_interval_flags_follow_arrival_and_preserve_group(rig):
+    rig.launch([
+        {'sequence_group': 'start'},
+        {'move': {'absolute': [600, 200, 300, 0], 'waypoints': [[625, 210, 310, 0]]}},
+        {'phi_travel': {'start': True, 'limit': 0.5235987755982988}}, {'wait': 0.05},
+        move([650, 200, 300, 0]), {'phi_travel': 'end'},
+        move([675, 200, 300, 0]), {'sequence_group': 'end'},
+    ])
+    _, result = rig.start()
+    rig.until(lambda: len(rig.follows) == 1)
+    request = rig.group_plans[0]
+    assert list(request.route_ends) == [2, 3, 4]
+    assert len(request.phi_travel_intervals) == 1
+    interval = request.phi_travel_intervals[0]
+    assert (interval.start_target, interval.end_target) == (2, 3)
+    assert operations(rig) == [WristControl.Request.BEGIN]
+    assert not rig.wrist_requests[0].limit_phi_travel
+    rig.complete_follow(0)
+    rig.until(lambda: len(rig.follows) == 2)
+    assert operations(rig) == [WristControl.Request.BEGIN, WristControl.Request.PHI_BEGIN]
+    assert rig.wrist_requests[1].max_phi_travel == interval.max_phi_travel
+    assert rig.wrist_requests[1].limit_phi_travel
+    rig.complete_follow(1)
+    rig.until(lambda: len(rig.follows) == 3)
+    assert operations(rig)[-1] == WristControl.Request.PHI_END
+    rig.complete_follow(2)
+    rig.assert_succeeded(result)
+    assert operations(rig) == [WristControl.Request.BEGIN, WristControl.Request.PHI_BEGIN,
+                               WristControl.Request.PHI_END, WristControl.Request.END]
+    assert len({request.group_id for request in rig.wrist_requests}) == 1
+
+
+def test_phi_interval_over_budget_plan_is_rejected_before_approach(rig):
+    rig.planned_interval_phi_travel = 1.0
+    rig.launch([
+        {'sequence_group': 'start'}, move([600, 200, 300, 0]),
+        {'phi_travel': {'start': True, 'limit': 0.5}}, move([650, 200, 300, 0]),
+        {'phi_travel': 'end'}, {'sequence_group': 'end'},
+    ])
+    _, result = rig.start()
+    reply = rig.resolve(result)
+    assert not reply.result.success and 'phi interval limit' in reply.result.message
+    assert not rig.follows and not rig.wrist_requests
+
+
+def test_cancel_inside_phi_interval_releases_outer_group(rig):
+    rig.launch([
+        {'sequence_group': 'start'}, move([600, 200, 300, 0]),
+        {'phi_travel': {'start': True, 'limit': 0.5}}, move([650, 200, 300, 0]),
+        {'phi_travel': 'end'}, {'sequence_group': 'end'},
+    ])
+    handle, result = rig.start()
+    rig.until(lambda: len(rig.follows) == 1)
+    rig.complete_follow(0)
+    rig.until(lambda: len(rig.follows) == 2)
+    rig.resolve(handle.cancel_goal_async())
+    assert rig.resolve(result).status == GoalStatus.STATUS_CANCELED
+    assert operations(rig) == [WristControl.Request.BEGIN, WristControl.Request.PHI_BEGIN,
+                               WristControl.Request.END]

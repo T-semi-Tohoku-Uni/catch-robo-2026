@@ -132,6 +132,7 @@ private:
         READY, WAIT_PLAN, PLAN, WAIT_FOLLOW, FOLLOW_GOAL, FOLLOWING,
         WAIT_GROUP_PLAN, GROUP_PLAN, WAIT_WRIST_BEGIN, WRIST_BEGIN,
         WAIT_WRIST_END, WRIST_END,
+        WAIT_PHI_TRAVEL, PHI_TRAVEL,
         WAIT_PUMP_SET, PUMP_SET, WAIT_END, END, WAIT_INITIALIZE, INITIALIZE, DELAY
     };
 
@@ -384,6 +385,22 @@ private:
                 end_sequence_group();
             }
             break;
+        case Phase::WAIT_PHI_TRAVEL:
+            if (wrist_controller_->service_is_ready()) {
+                auto value = std::make_shared<WristControl::Request>();
+                const auto &step = steps_[index_];
+                value->operation = step.type == StepType::PHI_TRAVEL_START ?
+                    WristControl::Request::PHI_BEGIN : WristControl::Request::PHI_END;
+                value->group_id = group_id_;
+                value->limit_phi_travel = step.max_phi_travel.has_value();
+                value->max_phi_travel = step.max_phi_travel.value_or(0.0);
+                transition(Phase::PHI_TRAVEL, "setting phi travel interval", service_timeout_);
+                request<WristControl>(wrist_controller_, value,
+                    [this](WristControl::Response::SharedPtr reply) {
+                        command_done(reply->success, "phi travel interval rejected: " + reply->message);
+                    });
+            }
+            break;
         case Phase::WAIT_FOLLOW:
             if (follower_->action_server_is_ready()) {
                 follow();
@@ -529,6 +546,10 @@ private:
         case StepType::SEQUENCE_END:
             transition(Phase::WAIT_WRIST_END, "waiting to release sequence group", service_timeout_);
             break;
+        case StepType::PHI_TRAVEL_START:
+        case StepType::PHI_TRAVEL_END:
+            transition(Phase::WAIT_PHI_TRAVEL, "waiting to set phi travel interval", service_timeout_);
+            break;
         }
     }
 
@@ -576,6 +597,14 @@ private:
         if (cursor == steps_.size() || group_routes_.empty()) {
             throw std::runtime_error("invalid sequence group boundaries");
         }
+        for (const auto &interval : catchrobo2026_sequence::collect_phi_travel_intervals(
+                steps_, index_, cursor)) {
+            catchrobo2026_msgs::msg::PhiTravelInterval value;
+            value.start_target = static_cast<uint32_t>(interval.start_target);
+            value.end_target = static_cast<uint32_t>(interval.end_target);
+            value.max_phi_travel = interval.max_phi_travel;
+            group_request_->phi_travel_intervals.push_back(value);
+        }
         transition(Phase::WAIT_GROUP_PLAN, "waiting for sequence group planner", service_timeout_);
     }
 
@@ -594,6 +623,18 @@ private:
             return;
         }
         size_t offset = 0;
+        if (reply.interval_phi_travel.size() != group_request_->phi_travel_intervals.size()) {
+            begin_stop("sequence group planner omitted phi interval results");
+            return;
+        }
+        for (size_t i = 0; i < reply.interval_phi_travel.size(); ++i) {
+            const double amount = reply.interval_phi_travel[i];
+            if (!std::isfinite(amount) || amount < 0.0 ||
+                amount > group_request_->phi_travel_intervals[i].max_phi_travel + 1e-5) {
+                begin_stop("sequence group planner exceeded a phi interval limit");
+                return;
+            }
+        }
         for (auto &[first, cached] : group_routes_) {
             (void)first;
             const auto &route = reply.routes[offset++];

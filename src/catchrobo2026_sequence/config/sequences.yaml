@@ -158,9 +158,11 @@ sequences:
     # - move: {absolute: lifecycle_pose}
   ending:
     steps:
-      - sequence_group: {start: true, rotation_group: true}
+      - sequence_group: start
       - move: {absolute: [675, 200, 300, 0]}
+      - phi_travel: {start: true, limit: 0.5235987755982988}  # 30 degrees, A to B only.
       - move: {absolute: lifecycle_pose}
+      - phi_travel: end
       - sequence_group: end
   startup:
     steps:

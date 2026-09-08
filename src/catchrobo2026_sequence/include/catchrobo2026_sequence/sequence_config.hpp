@@ -18,6 +18,7 @@ inline constexpr double MAX_DURATION_SEC = 86400.0;
 enum class StepType
 {
   MOVE, PUMP, ENDEFFECTOR, WAIT, INITIALIZE, SEQUENCE_START, SEQUENCE_END,
+  PHI_TRAVEL_START, PHI_TRAVEL_END,
   ROTATION_START = SEQUENCE_START, ROTATION_END = SEQUENCE_END
 };
 
@@ -39,6 +40,16 @@ struct PreparedSequence
   std::vector<Pose> deferred_waypoints;
   std::size_t consumed_pending_waypoints{0};
 };
+
+struct PhiTravelInterval
+{
+  std::size_t start_target, end_target;
+  double max_phi_travel;
+};
+
+// Target indices count inline and standalone waypoints as well as MOVE endpoints.
+std::vector<PhiTravelInterval> collect_phi_travel_intervals(
+  const std::vector<Step> & steps, std::size_t group_start, std::size_t group_end);
 
 // Accepts compiled steps; deferred poses retain their original absolute anchor.
 PreparedSequence prepare_sequence(

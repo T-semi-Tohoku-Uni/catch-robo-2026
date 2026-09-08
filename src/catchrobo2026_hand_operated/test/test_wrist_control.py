@@ -286,6 +286,54 @@ class WristControlTest(unittest.TestCase):
         else:
             self.fail('Small phi increments bypassed the cumulative limit')
 
+    def test_phi_interval_excludes_approach_and_counts_reversals(self):
+        self.begin(wrist=-3.0, direction=0)
+        self.assertTrue(self.request(WristControl.Request.TARGET, wrist=-2.0).success)
+        self.assertTrue(self.request(
+            WristControl.Request.PHI_BEGIN, max_phi_travel=math.pi / 6).success)
+        self.assertTrue(self.request(WristControl.Request.TARGET, wrist=-1.7).success)
+        rejected = self.request(WristControl.Request.TARGET, wrist=-2.0)
+        self.assertFalse(rejected.success)
+        self.assertIn('interval', rejected.message.lower())
+        self.assert_hold(self.joints(-1.7))
+        self.assertFalse(self.request(WristControl.Request.PHI_END).success)
+
+    def test_phi_interval_end_and_new_interval_preserve_global_budget(self):
+        self.begin(wrist=-3.0, direction=0, max_phi_travel=1.0)
+        self.assertTrue(self.request(WristControl.Request.TARGET, wrist=-2.5).success)
+        self.assertTrue(self.request(WristControl.Request.PHI_BEGIN, max_phi_travel=0.2).success)
+        self.assertTrue(self.request(WristControl.Request.TARGET, wrist=-2.3).success)
+        self.assertTrue(self.request(WristControl.Request.PHI_END).success)
+        self.assertTrue(self.request(WristControl.Request.PHI_BEGIN, max_phi_travel=0.2).success)
+        self.assertTrue(self.request(WristControl.Request.TARGET, wrist=-2.1).success)
+        self.assertTrue(self.request(WristControl.Request.PHI_END).success)
+        rejected = self.request(WristControl.Request.TARGET, wrist=-1.9)
+        self.assertFalse(rejected.success)
+        self.assertIn('sequence group limit', rejected.message)
+        self.assert_hold(self.joints(-2.1))
+
+    def test_phi_interval_requires_active_group_and_releases_with_group(self):
+        self.assertFalse(self.request(WristControl.Request.PHI_BEGIN, max_phi_travel=1.0).success)
+        self.begin(direction=0)
+        self.assertFalse(self.request(
+            WristControl.Request.PHI_BEGIN, group_id=self.group_id + 1,
+            max_phi_travel=1.0).success)
+        self.assertTrue(self.request(WristControl.Request.PHI_BEGIN, max_phi_travel=0.0).success)
+        self.assertTrue(self.request(WristControl.Request.END).success)
+        type(self).group_counter += 1
+        self.group_id = self.group_counter
+        self.begin(direction=0)
+        self.assertTrue(self.request(WristControl.Request.TARGET, wrist=-1.5).success)
+        self.assertTrue(self.request(WristControl.Request.PHI_BEGIN, max_phi_travel=0.0).success)
+        self.assertTrue(self.request(WristControl.Request.PHI_END).success)
+        self.assertTrue(self.request(WristControl.Request.TARGET, wrist=-1.0).success)
+
+    def test_phi_interval_rejects_nested_start(self):
+        self.begin(direction=0)
+        self.assertTrue(self.request(WristControl.Request.PHI_BEGIN, max_phi_travel=0.5).success)
+        self.assertFalse(self.request(WristControl.Request.PHI_BEGIN, max_phi_travel=1.0).success)
+        self.assertFalse(self.request(WristControl.Request.TARGET, wrist=-1.9).success)
+
     def test_phi_limit_validation_and_combined_direction_constraint(self):
         for limit in (-1.0, math.inf, math.nan):
             self.feedback()

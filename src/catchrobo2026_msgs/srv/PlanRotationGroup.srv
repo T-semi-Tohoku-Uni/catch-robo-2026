@@ -7,6 +7,8 @@ bool allow_wrist_reversal
 # Bound cumulative absolute unwrapped field-yaw travel in radians.
 bool limit_phi_travel
 float64 max_phi_travel
+# Ordered, nonoverlapping subintervals, independent of the whole-group limit.
+catchrobo2026_msgs/PhiTravelInterval[] phi_travel_intervals
 ---
 bool success
 string message
@@ -14,3 +16,5 @@ string message
 int8 direction
 catchrobo2026_msgs/RotationGroupRoute[] routes
 float64 phi_travel
+# Planned travel for each requested subinterval, in the same order.
+float64[] interval_phi_travel

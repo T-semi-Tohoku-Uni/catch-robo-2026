@@ -76,7 +76,7 @@ steps:
 
 グループ全経路を事前計画し、設定した制約を満たせない場合は最初の操作前に失敗します。実行時にも指令の総移動量を検査しますが、これは指令に対するソフト上の制限であり、実際の機構の回転量や停止を保証するものではありません。`sequence_group: start`は追加の一方向制約・総移動量上限を指定せず、グループとして事前計画します。
 
-ポンプ・幅切替・待機・経由点を含められ、`call`／`extends`でも接続できます。同じUIアクション内で開始と終了を対応させ、初期化命令や経由点列の途中を境界にしないでください。従来の独立ステップ`rotation_group: start`／`end`は、第4関節の一方向制約を有効にする互換表記として残しています。現在の同梱endingは`sequence_group`内の`rotation_group: true`を指定し、`phi`の総移動量上限は未設定です。詳しくは[シーケンスグループの設定](CONFIG.md#シーケンスグループsequence_group)を参照してください。
+ポンプ・幅切替・待機・経由点を含められ、`call`／`extends`でも接続できます。同じUIアクション内で開始と終了を対応させ、初期化命令や経由点列の途中を境界にしないでください。従来の独立ステップ`rotation_group: start`／`end`は、第4関節の一方向制約を有効にする互換表記として残しています。現在の同梱endingは方向制約を指定せず、AへのMOVE後に`phi_travel: {start: true, limit: 0.5235987755982988}`、BへのMOVE後に`phi_travel: end`を置き、A→Bの総移動量を30°に制限します。外側の`sequence_group`は両方のMOVEを含むため、制限区間より前のAの巻き数も先読みして選びます。詳しくは[シーケンスグループの設定](CONFIG.md#シーケンスグループsequence_group)を参照してください。
 
 ## 実行前のオフライン検査
 
@@ -126,7 +126,7 @@ PICK／PLACEの末尾に経由点が残る場合、その時点では次の通�
 
 シーケンサからの `GenerateRoute` は毎回 `use_explicit_waypoints=true` とし、要求内の `waypoints` に経由点を列挙します。経由点なしの移動では空配列です。YAMLと要求の最終目標はmm／rad、要求内の経由点はROS Poseのm／Quaternionへ変換します。生成結果の `route`／`path` もmです。要求内で経由点と終点をまとめるため、取消や失敗で共有の `waypoint` 蓄積へ経由点が残りません。
 
-シーケンスグループでは `plan_rotation_group`（`PlanRotationGroup`）へ全目標・通常MOVEの終点位置・グループの制約を渡し、経路列と各点の第4関節角・方向をまとめて取得します。各経路を `FollowRoute` の `path`／`wrist_angles`／`wrist_direction`／`rotation_group_id` と、phi補間用の `phi_angles` へ渡して順に実行します。Joyの `wrist_control`（`WristControl`）はグループの開始・終了と、姿勢と第4関節角を一緒にした指令を受け付けます。
+シーケンスグループでは `plan_rotation_group`（`PlanRotationGroup`）へ全目標・通常MOVEの終点位置・グループの制約・phi計測区間を渡し、経路列と各点の第4関節角・方向をまとめて取得します。各経路を `FollowRoute` の `path`／`wrist_angles`／`wrist_direction`／`rotation_group_id` と、phi補間用の `phi_angles` へ渡して順に実行します。Joyの `wrist_control`（`WristControl`）はグループとphi計測区間それぞれの開始・終了、および姿勢と第4関節角を一緒にした指令を受け付けます。
 
 初期化前後・開始・終了・PICK／PLACEのすべての移動で、生成した経路を追従アクションへ直接渡します。`route` トピックの受信順に依存せず、実行中の経路は固定されます。追従中の追加ゴールは拒否します。手動の `FollowRoute(start=true)` は `path` を省略した場合、受理時に受信済みの `route` を固定して使い、未受信なら拒否します。手動の `GenerateRoute` は `use_explicit_waypoints=false`（既定）で従来の `waypoint` 蓄積を使います。明示要求はこの蓄積を参照・消費しません。
 

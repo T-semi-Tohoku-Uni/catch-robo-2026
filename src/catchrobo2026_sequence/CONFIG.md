@@ -204,6 +204,8 @@ sequences:
 | `sequence_group: {start: true, rotation_group: true}` | 第4関節の回転方向を固定する区間を開始 |
 | `sequence_group: {start: true, max_phi_travel: ラジアン}` | 手先角`phi`の総移動量を制限する区間を開始 |
 | `sequence_group: end` | シーケンスグループを終了 |
+| `phi_travel: {start: true, limit: ラジアン}` | グループ内でphi総移動量の計測区間を開始 |
+| `phi_travel: end` | phi総移動量の計測区間を終了 |
 | `rotation_group: start`／`end` | 従来形式。第4関節の一方向制約を指定する互換表記 |
 
 1ステップに操作を2つ書くことはできない。通常の `move` は経路生成と経路追従の成功応答を待ってから次へ進む。絶対姿勢のワーク直上への移動に続けて、共通回収動作を記述する。経路APIは [README.md](README.md#実行とrosインターフェース) を参照。ポンプとエンドエフェクタはサービス応答の成功を待つが、吸着成立や機構の回転完了を観測するものではない。必要な待機を `wait` で指定する。
@@ -331,6 +333,27 @@ steps:
   - sequence_group: end
 ```
 
+Aの手首角の選択にもBの制約を反映したい場合は、外側の`sequence_group`へAとBの両方を含め、内側の`phi_travel`で計測区間を指定する。現在の同梱endingは次の設定で、A→Bの総移動量を30°に制限する。
+
+```yaml
+ending:
+  steps:
+    - sequence_group: start
+    - move: {absolute: [675, 200, 300, 0]}
+    - phi_travel: {start: true, limit: 0.5235987755982988}
+    - move: {absolute: lifecycle_pose}
+    - phi_travel: end
+    - sequence_group: end
+```
+
+外側の開始時にending全体を事前計画する。Aへ向かう回転は30°の累計に含めないが、A到達後にBへ進める巻き数を選ぶための先読みに含める。A到達後の`phi_travel`開始からB到達後の終了まで、非wrapの`Σ|Δphi|`を検査する。例えば区間内の0°→20°→0°は40°なので拒否する。制約を満たす候補がなければ、Aへの移動を始める前に失敗する。
+
+`phi_travel.limit`は有限の0以上のrad値で、`values`参照も可能。開始は`{start: true, limit: ...}`、終了は`end`。同じ`sequence_group`内で開始・終了を対応させ、少なくとも1件の通常MOVEを含める。複数区間を順番に指定でき、それぞれ独立して累計する。計測区間の入れ子・重複、groupやUIアクションをまたぐ指定、waypoint列の途中での開始・終了は拒否する。区間内の通常MOVEに付けた`waypoints`も累計対象になる。
+
+区間制限を含む計画ではphi補間を優先し、不成立なら既存の手首角補間も検査する。手首角補間では区間途中のphiの折り返しも総量へ加算する。既存XYZ経路と補間候補の検査であり、任意の迂回経路を探索するものではない。
+
+外側の`max_phi_travel`と併用した場合、外側はgroup全体、内側は各区間に適用し、内側の終了で外側の累計をリセットしない。外側に`rotation_group: true`を指定すれば方向制約もgroup全体へ適用する。endingでは一方向制約を指定しない。実行時の区間開始・終了はJoyへ通知し、直前までに受理した関節指令を基準に監視する。group終了・取消で内側の区間も解除する。
+
 | 開始時の設定 | 意味 |
 |---|---|
 | `sequence_group: start` または `{start: true}` | グループ全体を事前計画する。一方向制約・総移動量上限は追加しない |
@@ -366,7 +389,7 @@ steps:
 
 ### 従来の回転グループ（rotation_group）
 
-独立ステップの`rotation_group: start`／`rotation_group: end`は互換表記として使用できる。`sequence_group: {start: true, rotation_group: true}`／`sequence_group: end`と同じ意味で、`phi`の総移動量上限は設定しない。現在の同梱`sequences.yaml`のendingは`sequence_group`内の`rotation_group: true`で第4関節の一方向制約を指定し、`phi`の総移動量上限は未設定。**既存の回転グループ設定だけでは、A・Bの`phi`が同じでも途中の360°回転を制限しない。**
+独立ステップの`rotation_group: start`／`rotation_group: end`は互換表記として使用できる。`sequence_group: {start: true, rotation_group: true}`／`sequence_group: end`と同じ意味で、`phi`の総移動量上限は設定しない。現在の同梱`sequences.yaml`のendingは方向制約を外し、`phi_travel`でA→B間の総移動量を30°に制限する。**既存の回転グループ設定だけでは、A・Bの`phi`が同じでも途中の360°回転を制限しない。**
 
 シーケンスグループには`PlanRotationGroup`／`WristControl`サービスと`FollowRoute`の追加フィールドを使用する。今回の型更新に合わせ、ワークスペース全体を再ビルドし、シーケンサ・経路生成・経路追従・Joyを含む関係ノードを再起動する。
 

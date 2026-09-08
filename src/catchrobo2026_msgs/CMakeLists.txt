@@ -18,6 +18,7 @@ find_package(geometry_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RotationGroupRoute.msg"
+  "msg/PhiTravelInterval.msg"
   "srv/PlanRotationGroup.srv"
   "srv/WristControl.srv"
   "srv/InverseKinematics.srv"

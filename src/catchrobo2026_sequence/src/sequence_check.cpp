@@ -140,8 +140,9 @@ public:
           if (end == steps.size() || routes.empty()) {
             throw std::runtime_error("Sequence group requires a closing flag and at least one MOVE");
           }
+          const auto intervals = collect_phi_travel_intervals(steps, index, end);
           if (joints_) {
-            if (!check_group(step, index, routes)) {
+            if (!check_group(step, index, routes, intervals)) {
               break;
             }
             consumed_pending();
@@ -150,8 +151,10 @@ public:
               "Sequence group requires initial joint angles, including the unwrapped wrist angle");
           }
           index = end;
-        } else if (step.type == StepType::SEQUENCE_END) {
-          throw std::runtime_error("Sequence group end has no corresponding start");
+        } else if (step.type == StepType::SEQUENCE_END ||
+          step.type == StepType::PHI_TRAVEL_START || step.type == StepType::PHI_TRAVEL_END)
+        {
+          throw std::runtime_error("Group or phi interval flag has no corresponding sequence start");
         }
       } catch (const std::exception & error) {
         fail(index, "planning_error", error.what());
@@ -233,12 +236,20 @@ private:
   }
 
   bool check_group(
-    const Step & group, std::size_t index, const std::vector<Route> & routes)
+    const Step & group, std::size_t index, const std::vector<Route> & routes,
+    const std::vector<PhiTravelInterval> & intervals)
   {
     nav_director::PlanRotationGroup::Request request;
     request.allow_wrist_reversal = !group.rotation_group;
     request.limit_phi_travel = group.max_phi_travel.has_value();
     request.max_phi_travel = group.max_phi_travel.value_or(0.0);
+    for (const auto & interval : intervals) {
+      catchrobo2026_msgs::msg::PhiTravelInterval value;
+      value.start_target = static_cast<uint32_t>(interval.start_target);
+      value.end_target = static_cast<uint32_t>(interval.end_target);
+      value.max_phi_travel = interval.max_phi_travel;
+      request.phi_travel_intervals.push_back(value);
+    }
     for (const auto & route : routes) {
       for (const auto & target : route.targets) {
         request.targets.push_back(route_pose(target));
@@ -250,9 +261,20 @@ private:
       return fail(index, "sequence_group_infeasible", reply.message);
     }
     if (reply.routes.size() != routes.size() || !std::isfinite(reply.phi_travel) ||
-      reply.phi_travel < 0.0)
+      reply.phi_travel < 0.0 || reply.interval_phi_travel.size() != intervals.size())
     {
       return fail(index, "invalid_group_plan", "Sequence group planner returned invalid routes");
+    }
+    for (std::size_t i = 0; i < intervals.size(); ++i) {
+      const double amount = reply.interval_phi_travel[i];
+      if (!std::isfinite(amount) || amount < 0.0 || amount > intervals[i].max_phi_travel + 1e-5) {
+        return fail(index, "invalid_group_plan", "Sequence group exceeded a phi interval limit");
+      }
+      std::ostringstream message;
+      message << "Phi travel interval (target boundaries " << intervals[i].start_target << ".."
+              << intervals[i].end_target << "): " << amount << " rad / "
+              << intervals[i].max_phi_travel << " rad limit";
+      result_.diagnostics.push_back({"info", "phi_travel_interval", message.str(), index, 0, 0});
     }
     for (std::size_t i = 0; i < routes.size(); ++i) {
       const auto & route = reply.routes[i];

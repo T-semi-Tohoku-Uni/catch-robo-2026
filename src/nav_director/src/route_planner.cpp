@@ -110,6 +110,19 @@ void RoutePlanner::planRotationGroup(const PlanRotationGroup::Request &req,
         }
         previous_end = end;
     }
+    previous_end = 0;
+    for (const auto & interval : req.phi_travel_intervals) {
+        const auto boundary = [&req](uint32_t index) {
+            return index == 0 || std::binary_search(req.route_ends.begin(), req.route_ends.end(), index);
+        };
+        if (interval.start_target < previous_end || interval.start_target >= interval.end_target ||
+            !boundary(interval.start_target) || !boundary(interval.end_target) ||
+            !std::isfinite(interval.max_phi_travel) || interval.max_phi_travel < 0.0) {
+            res.message = "Phi intervals must be ordered, nonoverlapping MOVE ranges with finite limits";
+            return;
+        }
+        previous_end = interval.end_target;
+    }
     std::vector<Point3D> targets;
     std::vector<double> raw_angles;
     for (const auto &pose : req.targets) {
@@ -136,9 +149,13 @@ void RoutePlanner::planRotationGroup(const PlanRotationGroup::Request &req,
     const double start_wrist = rotation_constraints::clamp(current_wrist_);
     if (req.allow_wrist_reversal) {
         planMinimumPhi(targets, raw_angles, req, res);
+        if (!res.success && !req.phi_travel_intervals.empty()) {
+            res = PlanRotationGroup::Response{};
+            planMinimumPhi(targets, raw_angles, req, res, 0, true);
+        }
         return;
     }
-    if (req.limit_phi_travel) {
+    if (req.limit_phi_travel || !req.phi_travel_intervals.empty()) {
         // Phi interpolation can satisfy both a zero travel budget and wrist direction.
         for (int direction : {1, -1}) {
             PlanRotationGroup::Response candidate;
@@ -146,6 +163,16 @@ void RoutePlanner::planRotationGroup(const PlanRotationGroup::Request &req,
             if (candidate.success) {
                 res = std::move(candidate);
                 return;
+            }
+        }
+        if (!req.phi_travel_intervals.empty()) {
+            for (int direction : {1, -1}) {
+                PlanRotationGroup::Response candidate;
+                planMinimumPhi(targets, raw_angles, req, candidate, direction, true);
+                if (candidate.success) {
+                    res = std::move(candidate);
+                    return;
+                }
             }
         }
     }
@@ -160,6 +187,7 @@ void RoutePlanner::planRotationGroup(const PlanRotationGroup::Request &req,
         std::abs(increasing.back() - start_wrist) <=
             std::abs(decreasing.back() - start_wrist)) ? 1 : -1;
     std::vector<catchrobo2026_msgs::msg::RotationGroupRoute> selected_routes;
+    std::vector<double> selected_interval_travel;
     double selected_travel = std::numeric_limits<double>::infinity();
     int selected_direction = 0;
     std::string error;
@@ -167,10 +195,26 @@ void RoutePlanner::planRotationGroup(const PlanRotationGroup::Request &req,
         if ((direction > 0 && !can_increase) || (direction < 0 && !can_decrease)) continue;
         const auto &selected = direction > 0 ? increasing : decreasing;
         std::vector<catchrobo2026_msgs::msg::RotationGroupRoute> routes;
+        std::vector<double> route_travel, interval_travel;
         double travel = 0.0;
-        if (!buildWristRoutes(targets, req.route_ends, selected, req.limit_phi_travel,
-                routes, travel, error)) {
-            if (!req.limit_phi_travel) break;
+        const bool limited = req.limit_phi_travel || !req.phi_travel_intervals.empty();
+        if (!buildWristRoutes(targets, req.route_ends, selected, limited,
+                routes, travel, error, route_travel)) {
+            if (!limited) break;
+            continue;
+        }
+        bool intervals_valid = true;
+        for (const auto & interval : req.phi_travel_intervals) {
+            double amount = 0.0;
+            for (size_t i = 0; i < req.route_ends.size(); ++i) {
+                if (req.route_ends[i] > interval.start_target &&
+                    req.route_ends[i] <= interval.end_target) amount += route_travel[i];
+            }
+            interval_travel.push_back(amount);
+            intervals_valid &= amount <= interval.max_phi_travel + rotation_constraints::kTolerance;
+        }
+        if (!intervals_valid) {
+            error = "Phi travel exceeds a configured subinterval limit";
             continue;
         }
         if (req.limit_phi_travel && travel > req.max_phi_travel +
@@ -181,9 +225,10 @@ void RoutePlanner::planRotationGroup(const PlanRotationGroup::Request &req,
         if (selected_direction == 0 || travel < selected_travel) {
             selected_routes = std::move(routes);
             selected_travel = travel;
+            selected_interval_travel = std::move(interval_travel);
             selected_direction = direction;
         }
-        if (!req.limit_phi_travel) break;
+        if (!limited) break;
     }
     if (selected_direction == 0) {
         res.message = error;
@@ -192,6 +237,7 @@ void RoutePlanner::planRotationGroup(const PlanRotationGroup::Request &req,
     res.routes = std::move(selected_routes);
     res.direction = selected_direction;
     res.phi_travel = selected_travel;
+    res.interval_phi_travel = std::move(selected_interval_travel);
     res.success = true;
     res.message = "Rotation group planned";
 }
@@ -200,13 +246,14 @@ bool RoutePlanner::buildWristRoutes(const std::vector<Point3D> &targets,
                       const std::vector<uint32_t> &route_ends,
                       const std::vector<double> &selected, bool strict_base,
                       std::vector<catchrobo2026_msgs::msg::RotationGroupRoute> &routes,
-                      double &travel, std::string &error) {
+                      double &travel, std::string &error, std::vector<double> &route_travel) {
     // Finish every route before exposing any plan or touching shared waypoints.
     Point3D start_pose = cur_pose_;
     double route_start_wrist = rotation_constraints::clamp(current_wrist_);
     travel = 0.0;
     size_t begin = 0;
     for (const auto end : route_ends) {
+        const double travel_before = travel;
         std::vector<Point3D> points{start_pose};
         std::vector<double> wrists{route_start_wrist};
         for (size_t i = begin; i < end; ++i) {
@@ -273,6 +320,7 @@ bool RoutePlanner::buildWristRoutes(const std::vector<Point3D> &targets,
             route.wrist_angles.push_back(wrist);
         }
         routes.push_back(std::move(route));
+        route_travel.push_back(travel - travel_before);
         start_pose = targets[end - 1];
         route_start_wrist = selected[end - 1];
         begin = end;
@@ -283,7 +331,7 @@ bool RoutePlanner::buildWristRoutes(const std::vector<Point3D> &targets,
 void RoutePlanner::planMinimumPhi(const std::vector<Point3D> &targets,
                     const std::vector<double> &raw_angles,
                     const PlanRotationGroup::Request &request,
-                    PlanRotationGroup::Response &response, int direction) {
+                    PlanRotationGroup::Response &response, int direction, bool wrist_interpolation) {
     struct Geometry {
         size_t begin, end;
         std::vector<Point3D> samples;
@@ -336,27 +384,48 @@ void RoutePlanner::planMinimumPhi(const std::vector<Point3D> &targets,
         start_pose = targets[end - 1];
         begin = end;
     }
-    const auto edge_legal = [&edges, direction](size_t index, double phi0, double phi1) {
+    const auto edge_cost = [this, &edges, &target_bases, direction, wrist_interpolation](
+            size_t index, double phi0, double phi1) {
+        const double invalid = std::numeric_limits<double>::infinity();
         const auto &samples = edges[index];
         if (samples.size() < 2 || samples.front().ratio != 0.0 ||
-            samples.back().ratio != 1.0) return false;
+            samples.back().ratio != 1.0) return invalid;
+        const double wrist0 = phi0 - (index == 0 ? current_base_ : target_bases[index - 1]);
+        const double wrist1 = phi1 - target_bases[index];
+        if (wrist_interpolation && direction * (wrist1 - wrist0) <
+                -rotation_constraints::kTolerance) return invalid;
+        double travel = 0.0;
         for (size_t j = 1; j < samples.size(); ++j) {
             const auto &a = samples[j - 1];
             const auto &b = samples[j];
+            if (wrist_interpolation) {
+                const double amount = rotation_constraints::wrist_segment_phi_travel(
+                    a.point.x - robot_pos[0], a.point.y - robot_pos[1],
+                    b.point.x - robot_pos[0], b.point.y - robot_pos[1],
+                    wrist0 + (wrist1 - wrist0) * a.ratio,
+                    wrist0 + (wrist1 - wrist0) * b.ratio);
+                if (!std::isfinite(amount)) return invalid;
+                travel += amount;
+                continue;
+            }
             if (!rotation_constraints::legal_phi_segment(
                     a.point.x - robot_pos[0], a.point.y - robot_pos[1],
                     b.point.x - robot_pos[0], b.point.y - robot_pos[1],
                     phi0 + (phi1 - phi0) * a.ratio,
-                    phi0 + (phi1 - phi0) * b.ratio, direction)) return false;
+                    phi0 + (phi1 - phi0) * b.ratio, direction)) return invalid;
         }
-        return true;
+        return wrist_interpolation ? travel : std::abs(phi1 - phi0);
     };
     std::vector<double> wrists;
     double travel = 0.0;
     const double start_phi = current_base_ + rotation_constraints::clamp(current_wrist_);
-    if (!rotation_constraints::solve_minimum_phi(start_phi, target_bases, raw_angles,
-            edge_legal, wrists, travel)) {
-        response.message = "No continuous phi route fits the wrist limits and base branch";
+    std::vector<rotation_constraints::PhiTravelInterval> intervals;
+    for (const auto & interval : request.phi_travel_intervals) {
+        intervals.push_back({interval.start_target, interval.end_target, interval.max_phi_travel});
+    }
+    if (!rotation_constraints::solve_minimum_phi_cost(start_phi, target_bases, raw_angles,
+            edge_cost, wrists, travel, intervals)) {
+        response.message = "No continuous phi route fits the wrist limits, base branch and phi intervals";
         return;
     }
     if (request.limit_phi_travel && travel > request.max_phi_travel +
@@ -364,8 +433,47 @@ void RoutePlanner::planMinimumPhi(const std::vector<Point3D> &targets,
         response.message = "Minimum phi travel exceeds the configured limit";
         return;
     }
+    if (wrist_interpolation) {
+        std::vector<double> route_travel;
+        if (!buildWristRoutes(targets, request.route_ends, wrists, true,
+                response.routes, travel, response.message, route_travel)) {
+            response.routes.clear();
+            return;
+        }
+        for (const auto & interval : intervals) {
+            double amount = 0.0;
+            for (size_t i = 0; i < request.route_ends.size(); ++i) {
+                if (request.route_ends[i] > interval.start_target &&
+                    request.route_ends[i] <= interval.end_target) amount += route_travel[i];
+            }
+            if (amount > interval.max_phi_travel + rotation_constraints::kTolerance) {
+                response.routes.clear();
+                response.message = "Wrist interpolation exceeds a phi interval limit";
+                return;
+            }
+            response.interval_phi_travel.push_back(amount);
+        }
+        if (request.limit_phi_travel && travel > request.max_phi_travel +
+                rotation_constraints::kTolerance) {
+            response.routes.clear();
+            response.message = "Wrist interpolation exceeds the whole-group phi limit";
+            return;
+        }
+        response.direction = direction;
+        response.phi_travel = travel;
+        response.success = true;
+        response.message = "Sequence group planned with wrist interpolation and phi intervals";
+        return;
+    }
     std::vector<double> phis{start_phi};
     for (size_t i = 0; i < wrists.size(); ++i) phis.push_back(target_bases[i] + wrists[i]);
+    for (const auto & interval : intervals) {
+        double amount = 0.0;
+        for (size_t i = interval.start_target; i < interval.end_target; ++i) {
+            amount += std::abs(phis[i + 1] - phis[i]);
+        }
+        response.interval_phi_travel.push_back(amount);
+    }
     std::vector<catchrobo2026_msgs::msg::RotationGroupRoute> routes;
     for (const auto &shape : geometry) {
         catchrobo2026_msgs::msg::RotationGroupRoute route;

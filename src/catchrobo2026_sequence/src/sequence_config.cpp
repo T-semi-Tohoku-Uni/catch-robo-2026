@@ -339,7 +339,7 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
               const std::string at = where + ".steps[" + std::to_string(i) + "]";
               keys(step, at, {
                 "move", "waypoint", "call", "pump", "endeffector", "wait", "rotation_group",
-                "sequence_group"});
+                "sequence_group", "phi_travel"});
               if (step.size() != 1) {
                 fail(at, "a step must contain exactly one operation");
               }
@@ -413,6 +413,26 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
                   }
                   raw.step.type = value == "start" ?
                     StepType::SEQUENCE_START : StepType::SEQUENCE_END;
+                }
+              } else if (step["phi_travel"]) {
+                const auto interval = step["phi_travel"];
+                const auto interval_at = at + ".phi_travel";
+                if (interval.IsMap()) {
+                  keys(interval, interval_at, {"start", "limit"});
+                  if (scalar(interval["start"], interval_at + ".start") != "true") {
+                    fail(interval_at, "expected start: true and a limit in radians");
+                  }
+                  const double limit = numeric(interval["limit"], interval_at + ".limit");
+                  if (limit < 0.0) {
+                    fail(interval_at, "expected a nonnegative limit in radians");
+                  }
+                  raw.step.type = StepType::PHI_TRAVEL_START;
+                  raw.step.max_phi_travel = limit;
+                } else {
+                  if (scalar(interval, interval_at) != "end") {
+                    fail(interval_at, "expected end or {start: true, limit: radians}");
+                  }
+                  raw.step.type = StepType::PHI_TRAVEL_END;
                 }
               } else if (step["rotation_group"]) {
                 const auto value = scalar(step["rotation_group"], at + ".rotation_group");
@@ -652,6 +672,7 @@ std::vector<Step> SequenceConfig::compile_sequence(
   }
   bool in_sequence_group = false;
   bool sequence_group_has_move = false;
+  std::size_t group_start = 0;
   for (std::size_t i = 0; i < result.size(); ++i) {
     const auto at = where + ".steps[" + std::to_string(i) + "]";
     const bool deferred_tail = i + 1 == result.size() &&
@@ -667,6 +688,7 @@ std::vector<Step> SequenceConfig::compile_sequence(
         fail(at, "sequence groups cannot be nested");
       }
       in_sequence_group = true;
+      group_start = i;
       sequence_group_has_move = false;
     } else if (result[i].type == StepType::SEQUENCE_END) {
       if (!in_sequence_group) {
@@ -675,7 +697,12 @@ std::vector<Step> SequenceConfig::compile_sequence(
       if (!sequence_group_has_move) {
         fail(at, "sequence group must contain at least one movement");
       }
+      collect_phi_travel_intervals(result, group_start, i);
       in_sequence_group = false;
+    } else if ((result[i].type == StepType::PHI_TRAVEL_START ||
+      result[i].type == StepType::PHI_TRAVEL_END) && !in_sequence_group)
+    {
+      fail(at, "phi_travel must be inside a sequence_group");
     } else if (result[i].type == StepType::INITIALIZE && in_sequence_group) {
       fail(at, "initialization cannot run inside a sequence group");
     } else if (result[i].type == StepType::MOVE && in_sequence_group) {
@@ -684,6 +711,40 @@ std::vector<Step> SequenceConfig::compile_sequence(
   }
   if (in_sequence_group) {
     fail(where, "sequence_group start needs a matching end in the same action or hook");
+  }
+  return result;
+}
+
+std::vector<PhiTravelInterval> collect_phi_travel_intervals(
+  const std::vector<Step> & steps, std::size_t group_start, std::size_t group_end)
+{
+  std::vector<PhiTravelInterval> result;
+  std::optional<PhiTravelInterval> active;
+  std::size_t target_count = 0;
+  bool pending_waypoint = false;
+  for (std::size_t i = group_start + 1; i < group_end; ++i) {
+    const auto & step = steps.at(i);
+    if (step.type == StepType::MOVE) {
+      target_count += step.waypoints.size() + 1;
+      pending_waypoint = step.waypoint;
+    } else if (step.type == StepType::PHI_TRAVEL_START) {
+      if (active || pending_waypoint || !step.max_phi_travel ||
+        !std::isfinite(*step.max_phi_travel) || *step.max_phi_travel < 0.0)
+      {
+        fail("phi_travel", "invalid limit, nested interval or split waypoint route");
+      }
+      active = PhiTravelInterval{target_count, target_count, *step.max_phi_travel};
+    } else if (step.type == StepType::PHI_TRAVEL_END) {
+      if (!active || pending_waypoint || target_count == active->start_target) {
+        fail("phi_travel", "end needs a start and a complete MOVE in the same interval");
+      }
+      active->end_target = target_count;
+      result.push_back(*active);
+      active.reset();
+    }
+  }
+  if (active) {
+    fail("phi_travel", "start needs a matching end in the same sequence_group");
   }
   return result;
 }

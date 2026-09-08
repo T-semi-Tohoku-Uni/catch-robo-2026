@@ -363,3 +363,23 @@ def test_independent_place_tail_is_not_marked_feasible(checker, continuation_fil
     assert entry['status'] == 'UNKNOWN'
     assert entry['pending_waypoints']
     assert not entry['pending_resolution']
+
+
+def test_local_phi_interval_is_reported_separately_from_whole_group(checker, config_file):
+    config_file.write_text(config_file.read_text().replace(
+        '      - sequence_group: {start: true, max_phi_travel: 0}\n'
+        '      - move: {absolute: B}\n',
+        '      - sequence_group: start\n'
+        '      - move: {absolute: A}\n'
+        '      - phi_travel: {start: true, limit: 0.5235987755982988}\n'
+        '      - move: {absolute: B}\n'
+        '      - phi_travel: end\n'))
+    code, report = run_check(checker, config_file, '--initial-pose', 375, 238, 196.95,
+                             -math.pi, '--action', 'end')
+    assert code == 0
+    for entry in report['results']:
+        assert entry['status'] == 'FEASIBLE'
+        assert entry['phi_travel'] == pytest.approx(math.pi, abs=1e-5)
+        intervals = [d for d in entry['diagnostics'] if d['code'] == 'phi_travel_interval']
+        assert len(intervals) == 1
+        assert '0 rad / 0.523599 rad limit' in intervals[0]['message']
