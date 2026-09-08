@@ -61,18 +61,16 @@ void for_each_binding(Callback callback)
   }
 }
 
-TEST(BuiltinSequences, InitializationAndEndMoveToTheSharedLifecyclePose)
+TEST(BuiltinSequences, InitializationOnlySendsCommandAndEndUsesTheLifecyclePose)
 {
   const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   const auto steps = config.compile_initialization();
-  ASSERT_EQ(steps.size(), 2u);
+  ASSERT_EQ(steps.size(), 1u);
   EXPECT_EQ(steps[0].type, StepType::INITIALIZE);
-  EXPECT_EQ(steps[1].type, StepType::MOVE);
-  EXPECT_EQ(steps[1].pose, (Pose{670, -110, 220, 0}));
   const auto ending = config.compile_end();
   ASSERT_EQ(ending.size(), 1u);
   EXPECT_EQ(ending[0].type, StepType::MOVE);
-  EXPECT_EQ(ending[0].pose, steps[1].pose);
+  EXPECT_EQ(ending[0].pose, (Pose{670, -110, 220, 0}));
 }
 
 TEST(BuiltinSequences, EveryUiPositionIsConfigured)
@@ -150,6 +148,10 @@ TEST(BuiltinSequences, PlacementBindingsSelectDifferentTeamApproaches)
       const auto blue = config.compile("blue", "place", box, column);
       ASSERT_FALSE(red.empty());
       ASSERT_FALSE(blue.empty());
+      EXPECT_EQ(red.front().type, StepType::MOVE);
+      EXPECT_EQ(blue.front().type, StepType::MOVE);
+      EXPECT_EQ(red.front().pose, (Pose{150, 0, 400, 3.14159265358979}));
+      EXPECT_EQ(blue.front().pose, (Pose{1200, 0, 400, 3.14159265358979}));
       EXPECT_NE(red.front().pose, blue.front().pose);
     }
   }
@@ -161,15 +163,17 @@ TEST(BuiltinSequences, AllBindingsUseTheConfiguredPumpAndWaypointOrder)
   const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
       const auto steps = config.compile(team, kind, first, second);
-      ASSERT_EQ(steps.size(), kind == "pick" ? 5u : 6u);
+      ASSERT_EQ(steps.size(), kind == "pick" ? 5u : 7u);
+      const auto anchor_index = kind == "pick" ? 0u : 1u;
       EXPECT_EQ(steps[0].type, StepType::MOVE);
-      EXPECT_EQ(steps[1].type, StepType::PUMP);
-      EXPECT_EQ(steps[1].command, kind == "pick" ? 1 : -1);
-      EXPECT_EQ(steps[2].type, StepType::MOVE);
-      EXPECT_EQ(steps[3].type, StepType::MOVE);
+      EXPECT_EQ(steps[anchor_index].type, StepType::MOVE);
+      EXPECT_EQ(steps[anchor_index + 1].type, StepType::PUMP);
+      EXPECT_EQ(steps[anchor_index + 1].command, kind == "pick" ? 1 : -1);
+      EXPECT_EQ(steps[anchor_index + 2].type, StepType::MOVE);
+      EXPECT_EQ(steps[anchor_index + 3].type, StepType::MOVE);
       if (kind == "place") {
-        EXPECT_EQ(steps[4].type, StepType::PUMP);
-        EXPECT_EQ(steps[4].command, 0);
+        EXPECT_EQ(steps[anchor_index + 4].type, StepType::PUMP);
+        EXPECT_EQ(steps[anchor_index + 4].command, 0);
       }
       EXPECT_EQ(steps.back().type, StepType::ENDEFFECTOR);
       EXPECT_EQ(
@@ -184,13 +188,15 @@ TEST(BuiltinSequences, BothRelativeOffsetsUseTheFixedApproachAnchor)
   const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
       const auto steps = config.compile(team, kind, first, second);
-      ASSERT_EQ(steps.size(), kind == "pick" ? 5u : 6u);
-      for (const auto index : {2u, 3u}) {
-        const std::string offset = kind + (index == 2 ? "_approach_dz" : "_retreat_dz");
+      ASSERT_EQ(steps.size(), kind == "pick" ? 5u : 7u);
+      const auto anchor_index = kind == "pick" ? 0u : 1u;
+      for (const auto relative_index : {2u, 3u}) {
+        const auto index = anchor_index + relative_index;
+        const std::string offset = kind + (relative_index == 2 ? "_approach_dz" : "_retreat_dz");
         for (const auto axis : {0u, 1u, 3u}) {
-          EXPECT_DOUBLE_EQ(steps[index].pose[axis], steps[0].pose[axis]);
+          EXPECT_DOUBLE_EQ(steps[index].pose[axis], steps[anchor_index].pose[axis]);
         }
-        EXPECT_DOUBLE_EQ(steps[index].pose[2], steps[0].pose[2] + value(yaml, offset));
+        EXPECT_DOUBLE_EQ(steps[index].pose[2], steps[anchor_index].pose[2] + value(yaml, offset));
       }
     });
 }
@@ -212,7 +218,9 @@ TEST(BuiltinSequences, OneHeightEditMovesOnlyTheSelectedRegionAndItsRelativeWayp
           (name == "common_work_above_z" && kind == "pick" && first == 3) ||
           (name == "place_above_z" && kind == "place");
         if (changed) {
-          for (auto & step : expected) {
+          const auto anchor_index = kind == "pick" ? 0u : 1u;
+          for (std::size_t index = anchor_index; index < expected.size(); ++index) {
+            auto & step = expected[index];
             if (step.type == StepType::MOVE) {
               step.pose[2] += delta;
             }
@@ -237,9 +245,10 @@ TEST(BuiltinSequences, OneRelativeOffsetEditChangesOnlyItsWaypointAcrossTheMatch
       const auto after = SequenceConfig::from_yaml(YAML::Dump(yaml));
       for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
           auto expected = before.compile(team, kind, first, second);
-          ASSERT_EQ(expected.size(), kind == "pick" ? 5u : 6u);
+          ASSERT_EQ(expected.size(), kind == "pick" ? 5u : 7u);
           if (kind == changed_kind) {
-            expected[index].pose[2] += delta;
+            const auto anchor_index = kind == "pick" ? 0u : 1u;
+            expected[anchor_index + index].pose[2] += delta;
           }
           expect_same_steps(after.compile(team, kind, first, second), expected);
         });

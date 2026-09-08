@@ -16,7 +16,16 @@ colcon build --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -G Ninja
 source install/setup.bash
 ```
 
-既存のチェックアウトでブランチを切り替えた後も、`git submodule update --init --recursive` で記録済みのコミットへ揃えます。UIの配信用ファイルは同梱しているため、通常のビルドにnpmは不要です。Humble向けにも開発していますが、上記手順のローカル検証環境はJazzyです。
+実機の既存チェックアウトでは、ワークスペースのルートで次を一度実行します。
+
+```bash
+git config --local submodule.recurse true
+git submodule update --init --recursive
+```
+
+以後は通常の `git pull` で、初期化済みのUI・運動学も親リポジトリが記録するコミットへ揃います。この設定は対応するブランチ切替操作にも適用されます。設定は各クローンの `.git/config` に保存され、Gitで配布されないため、実機ごとに設定してください。新しくサブモジュールが追加されたときは `git submodule update --init --recursive` で初期化します。設定の詳細は [Git公式ドキュメント](https://git-scm.com/docs/git-config#Documentation/git-config.txt-submodulerecurse) を参照してください。
+
+更新後は上の手順で再ビルドし、稼働ノードを再起動します。UIの配信用ファイルは同梱しているため、通常のビルドにnpmは不要です。Humble向けにも開発していますが、上記手順のローカル検証環境はJazzyです。
 
 ## 実機の本番起動（CANブリッジ込み）
 
