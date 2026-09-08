@@ -1,6 +1,10 @@
 # All bindings are disabled until coordinates and motions are calibrated.
 # Coordinates: [x_mm, y_mm, z_mm, phi_rad], in the route generator's frame.
 version: 1
+before_initialization_sequence: null
+after_initialization_sequence: null
+start_sequence: null
+end_sequence: null
 
 values: {}
 poses: {}

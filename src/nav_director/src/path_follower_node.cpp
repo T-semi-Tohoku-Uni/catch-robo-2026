@@ -9,6 +9,8 @@
 #include <chrono>
 #include <limits>
 #include <stdexcept>
+#include <atomic>
+#include <thread>
 #include <cmath>
 #include <mutex>
 #include <vector>
@@ -60,11 +62,15 @@ public:
         RCLCPP_INFO(this->get_logger(), "Path Follower Node Initialized.");
     }
 
+    ~PathFollowerNode() override {
+        stopping_ = true;
+        if (worker_.joinable()) worker_.join();
+    }
+
 private:
     void pathCallback(const nav_msgs::msg::Path::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(path_mutex_);
         current_path_ = *msg;
-        ++path_revision_; // 追従ループ側で経路進捗と先読みをリセット
     }
 
     void jointCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
@@ -78,9 +84,29 @@ private:
 
     rclcpp_action::GoalResponse handleGoal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const FollowRoute::Goal> goal) {
         (void)uuid;
-        if (!goal->start) {
+        if (!goal->start || busy_ || stopping_) {
             return rclcpp_action::GoalResponse::REJECT;
         }
+        // Empty goals retain the manual API, using a snapshot at acceptance.
+        auto path = goal->path;
+        if (path.poses.empty()) {
+            std::lock_guard<std::mutex> lock(path_mutex_);
+            path = current_path_;
+        }
+        if (path.poses.empty()) {
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        for (const auto &pose : path.poses) {
+            const auto &p = pose.pose.position;
+            const auto &q = pose.pose.orientation;
+            const double norm = q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w;
+            if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
+                !std::isfinite(norm) || norm < 1e-12) {
+                return rclcpp_action::GoalResponse::REJECT;
+            }
+        }
+        accepted_path_ = std::move(path);
+        busy_ = true;
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
     }
 
@@ -90,22 +116,41 @@ private:
     }
 
     void handleAccepted(const std::shared_ptr<GoalHandleFollowRoute> goal_handle) {
-        std::thread{std::bind(&PathFollowerNode::executeLoop, this, std::placeholders::_1), goal_handle}.detach();
+        if (worker_.joinable()) worker_.join();
+        worker_ = std::thread([this, goal_handle, path = std::move(accepted_path_)]() {
+            try {
+                executeLoop(goal_handle, path);
+            } catch (const std::exception &error) {
+                RCLCPP_ERROR(get_logger(), "Route execution failed: %s", error.what());
+                if (rclcpp::ok() && goal_handle->is_active()) {
+                    auto result = std::make_shared<FollowRoute::Result>();
+                    result->success = false;
+                    busy_ = false;
+                    try {
+                        goal_handle->abort(result);
+                    } catch (const std::exception &terminal_error) {
+                        RCLCPP_ERROR(get_logger(), "Route abort failed: %s", terminal_error.what());
+                    }
+                }
+            }
+        });
     }
 
-    void executeLoop(const std::shared_ptr<GoalHandleFollowRoute> goal_handle) {
+    void executeLoop(const std::shared_ptr<GoalHandleFollowRoute> goal_handle,
+                     const nav_msgs::msg::Path &local_path) {
+        size_t current_path_index = 0;
         rclcpp::Rate loop_rate(20); // 20Hzで実行
         auto feedback = std::make_shared<FollowRoute::Feedback>();
         auto result = std::make_shared<FollowRoute::Result>();
 
-        size_t current_path_index = 0;
-        size_t path_revision = std::numeric_limits<size_t>::max();
+        bool lookahead_initialized = false;
         double smoothed_lookahead = lookahead_near_mm_;
         auto last_update = std::chrono::steady_clock::now();
 
-        while (rclcpp::ok()) {
+        while (rclcpp::ok() && !stopping_) {
             if (goal_handle->is_canceling()) {
                 result->success = false;
+                busy_ = false;
                 goal_handle->canceled(result);
                 return;
             }
@@ -114,22 +159,12 @@ private:
             float target_posrot[6] = {0.0};
             float target_joints[4] = {0.0};
             
-            nav_msgs::msg::Path local_path;
             float local_joints[4];
-            size_t local_revision;
 
             // データの排他制御コピー
             {
-                std::lock_guard<std::mutex> lock_p(path_mutex_);
                 std::lock_guard<std::mutex> lock_j(joint_mutex_);
-                local_path = current_path_;
-                local_revision = path_revision_;
                 for(int i=0; i<4; i++) local_joints[i] = current_joint_angles_[i];
-            }
-
-            if (local_path.poses.empty()) {
-                loop_rate.sleep();
-                continue;
             }
 
             // 1. 順運動学で現在地を計算
@@ -154,9 +189,8 @@ private:
             const double desired_lookahead = lookahead_near_mm_ +
                 blend * (lookahead_far_mm_ - lookahead_near_mm_);
             const auto now = std::chrono::steady_clock::now();
-            if (path_revision != local_revision) {
-                current_path_index = 0;
-                path_revision = local_revision;
+            if (!lookahead_initialized) {
+                lookahead_initialized = true;
                 smoothed_lookahead = desired_lookahead;
             } else {
                 const double dt = std::chrono::duration<double>(now - last_update).count();
@@ -233,6 +267,7 @@ private:
                 std::cos(target_yaw - current_posrot[3])));
             if (targeting_final && goal_distance <= 30.0 && yaw_error <= 0.05) {
                 result->success = true;
+                busy_ = false;
                 goal_handle->succeed(result);
                 RCLCPP_INFO(this->get_logger(), "Reached the end of the path with correct position and orientation.");
                 return;
@@ -311,7 +346,10 @@ private:
     std::mutex joint_mutex_;
     nav_msgs::msg::Path current_path_;
     float current_joint_angles_[4] = {0.0};
-    size_t path_revision_ = 0;
+    nav_msgs::msg::Path accepted_path_;
+    std::atomic<bool> busy_{false};
+    std::atomic<bool> stopping_{false};
+    std::thread worker_;
     double lookahead_near_mm_;
     double lookahead_far_mm_;
     double goal_distance_near_mm_;

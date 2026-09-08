@@ -21,7 +21,7 @@
 // サービス型のインクルード
 #include "catchrobo2026_msgs/srv/pump_control.hpp"
 #include "catchrobo2026_msgs/srv/endeffector_control.hpp"
-#include "catchrobo2026_msgs/srv/state_control.hpp"
+#include "std_srvs/srv/trigger.hpp"
 
 using namespace std::chrono_literals;
 
@@ -48,7 +48,7 @@ public:
         // 3. サービスクライアント
         pump_client_ = this->create_client<catchrobo2026_msgs::srv::PumpControl>("set_pump_state");
         endeffector_client_ = this->create_client<catchrobo2026_msgs::srv::EndeffectorControl>("set_endeffector_state");
-        state_client_ = this->create_client<catchrobo2026_msgs::srv::StateControl>("set_value");
+        state_client_ = this->create_client<std_srvs::srv::Trigger>("request_initialization");
 
         // 4. IK計算とパブリッシュを行うメインループタイマー (例: 20ms = 50Hz)
         publish_timer_ = this->create_wall_timer(
@@ -107,25 +107,23 @@ private:
         vel_z_ = msg->axes[4]; 
         vel_phi_ = msg->axes[3]; 
 
-        // --- X（×）ボタン(buttons[0])の押下ごとに1と0を交互に送信 ---
+        // Request a shared initialization toggle on each X button press.
         const bool current_x_button = msg->buttons[0] != 0;
         if (current_x_button && !prev_x_button_ && !state_request_pending_) {
             if (!state_client_->service_is_ready()) {
                 RCLCPP_WARN(this->get_logger(), "State service not ready.");
             } else {
-                auto request = std::make_shared<catchrobo2026_msgs::srv::StateControl::Request>();
-                request->command = next_state_command_;
+                auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
                 state_request_pending_ = true;
                 state_request_time_ = std::chrono::steady_clock::now();
                 state_request_id_ = state_client_->async_send_request(request,
-                    [this](rclcpp::Client<catchrobo2026_msgs::srv::StateControl>::SharedFuture future) {
+                    [this](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
                         state_request_pending_ = false;
                         if (!future.get()->success) {
                             RCLCPP_WARN(this->get_logger(), "State request was rejected.");
                             return;
                         }
-                        RCLCPP_INFO(this->get_logger(), "State command accepted: %d", next_state_command_);
-                        next_state_command_ = 1 - next_state_command_;
+                        RCLCPP_INFO(this->get_logger(), "Initialization request accepted.");
                     }).request_id;
             }
         }
@@ -283,14 +281,13 @@ private:
     
     rclcpp::Client<catchrobo2026_msgs::srv::PumpControl>::SharedPtr pump_client_;
     rclcpp::Client<catchrobo2026_msgs::srv::EndeffectorControl>::SharedPtr endeffector_client_;
-    rclcpp::Client<catchrobo2026_msgs::srv::StateControl>::SharedPtr state_client_;
+    rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr state_client_;
     
     rclcpp::TimerBase::SharedPtr publish_timer_; 
     
     robot_kinematics kin_; // 運動学クラスのインスタンス
 
     float current_pose_[6];
-    int32_t next_state_command_ = 1; // state_machine_nodeの初期値0から切り替える。
     bool prev_x_button_ = false;
     bool state_request_pending_ = false;
     int64_t state_request_id_ = 0;

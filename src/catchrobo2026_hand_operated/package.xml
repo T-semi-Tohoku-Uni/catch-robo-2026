@@ -12,6 +12,7 @@
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
   <depend>catchrobo2026_msgs</depend>
   
   <!-- 追加した依存関係 -->
