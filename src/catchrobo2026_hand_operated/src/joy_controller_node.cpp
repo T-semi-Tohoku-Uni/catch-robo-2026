@@ -374,8 +374,12 @@ private:
         
         // --- 速度として入力値を保持 ---
         if (!rotation_active_) {
-            vel_x_ = msg->axes[1];
-            vel_y_ = msg->axes[0];
+            // 左スティック・十字キーともに横を X、縦を Y に割り当てる。
+            // 十字キーの軸がないコントローラーではスティックのみ使用する。
+            const float dpad_x = msg->axes.size() > 6 ? msg->axes[6] : 0.0f;
+            const float dpad_y = msg->axes.size() > 7 ? msg->axes[7] : 0.0f;
+            vel_x_ = std::clamp(msg->axes[0] + dpad_x, -1.0f, 1.0f);
+            vel_y_ = std::clamp(msg->axes[1] + dpad_y, -1.0f, 1.0f);
             vel_z_ = msg->axes[4];
             vel_phi_ = msg->axes[3];
             if (std::isfinite(vel_x_) && std::isfinite(vel_y_) &&
