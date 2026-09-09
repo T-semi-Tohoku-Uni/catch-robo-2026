@@ -42,6 +42,80 @@ nav_director::PlannerState state(
   return planner.stateFromJoints(joints);
 }
 
+void checkFeedbackTolerance()
+{
+  nav_director::RoutePlanner planner;
+  const nav_director::Point3D fixture{700.0, 200.0, 300.0, 0.0};
+  const double tolerance = 6.0 * turn / 360.0;
+  for (const double boundary : {0.0, -turn}) {
+    const double outward = boundary == 0.0 ? 1.0 : -1.0;
+    for (const bool reversal : {false, true}) {
+      const auto measured = state(planner, fixture, boundary + outward * 5.9 * turn / 360.0);
+      const auto original = measured;
+      require(std::abs(measured.wrist - boundary) > 0.1,
+        "Raw feedback must retain the measured overshoot");
+      nav_director::PlanRotationGroup::Request request;
+      request.targets = {target({fixture.x, fixture.y, fixture.z + 10.0,
+        measured.base + boundary - outward * 0.2})};
+      request.route_ends = {1};
+      request.allow_wrist_reversal = reversal;
+      const auto accepted = planner.planGroup(measured, request, tolerance);
+      require(accepted.success, "5.9 degree feedback was rejected: " + accepted.message);
+      require(accepted.routes.size() == 1, "Tolerance changed the route count");
+      const auto & route = accepted.routes.front();
+      require(std::abs(route.wrist_angles.front() - boundary) < 1e-8,
+        "The planning start was wrapped instead of clamped to its nearest boundary");
+      for (size_t i = 0; i < route.path.poses.size(); ++i) {
+        const double wrist = route.wrist_angles.at(i);
+        require(wrist >= -turn && wrist <= 0.0, "A planned command exceeded the strict wrist range");
+        const auto & pose = route.path.poses[i].pose;
+        const auto & q = pose.orientation;
+        const double phi = 2.0 * std::atan2(q.z, q.w);
+        std::array<float, 4> joints{};
+        require(planner.solveIK({pose.position.x * 1000.0, pose.position.y * 1000.0,
+          pose.position.z * 1000.0, phi}, joints), "Tolerated feedback produced invalid IK");
+        require(std::abs(std::remainder(phi - joints[0] - wrist, turn)) < 1e-5,
+          "Planned pose and bounded wrist became inconsistent");
+        if (!route.phi_angles.empty()) {
+          require(std::abs(route.phi_angles.at(i) - joints[0] - wrist) < 1e-5,
+            "Unwrapped phi lost the physical wrist turn");
+        }
+      }
+      if (!route.phi_angles.empty()) {
+        require(std::abs(route.phi_angles.front() - measured.base - boundary) < 1e-5,
+          "Planning phi did not follow the clamped start wrist");
+      }
+      require(measured.wrist == original.wrist && measured.base == original.base &&
+        measured.pose.x == original.pose.x && measured.pose.y == original.pose.y &&
+        measured.pose.z == original.pose.z && measured.pose.phi == original.pose.phi,
+        "Planning changed raw feedback or its FK pose");
+      const auto normal = planner.generateRoute(measured, {{fixture.x, fixture.y,
+        fixture.z + 10.0, measured.pose.phi}});
+      require(std::abs(std::remainder(normal.front().phi - measured.pose.phi, turn)) < 1e-6,
+        "Normal routes inherited the group-only wrist clamp");
+      require(!planner.planGroup(measured, request).success,
+        "The default offline checker tolerance must remain strict");
+      require(!planner.planGroup(measured, request, 0.0).success,
+        "Zero tolerance accepted an out-of-range measured wrist");
+      const auto beyond = state(planner, fixture, boundary + outward * 6.1 * turn / 360.0);
+      require(!planner.planGroup(beyond, request, tolerance).success,
+        "6.1 degree feedback exceeded the configured tolerance");
+      const auto on_boundary = state(planner, fixture, boundary);
+      require(planner.planGroup(on_boundary, request, 0.0).success,
+        "Zero tolerance rejected a legal boundary");
+    }
+  }
+  const auto valid = state(planner, fixture, -1.0);
+  nav_director::PlanRotationGroup::Request request;
+  request.targets = {target(fixture)};
+  request.route_ends = {1};
+  for (const double invalid : {-0.001, turn / 2.0, std::numeric_limits<double>::infinity(),
+      std::numeric_limits<double>::quiet_NaN()}) {
+    require(!planner.planGroup(valid, request, invalid).success,
+      "Invalid feedback tolerance was accepted");
+  }
+}
+
 void check()
 {
   nav_director::RoutePlanner planner;
@@ -179,6 +253,7 @@ int main()
 {
   try {
     check();
+    checkFeedbackTolerance();
     std::cout << "Offline route planner checks passed\n";
     return 0;
   } catch (const std::exception & error) {

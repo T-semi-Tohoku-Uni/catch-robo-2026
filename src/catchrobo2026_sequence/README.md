@@ -170,3 +170,21 @@ UIのcancel／end／resetで現在動作を取り消します。UIは旧動作�
 `following route timeout` は `sequences.yaml` のトップレベルに `route_timeout_sec: 60.0` のように書いて変更できます。同梱値は30秒です。省略時はROSパラメータを使います。`debug:=true` では次の動作から反映し、実行中の動作の値は固定します。通常モードではノード再起動が必要です。詳しくは [設定方法](CONFIG.md#経路追従のタイムアウト) を参照してください。
 
 シーケンスグループでは開始・追従時に関節情報の鮮度と第4関節の制約を検査します。第4関節の指令速度には追従ノードの `rotation_speed_rad_sec`（既定1.0 rad/s）の上限を使います。グループ外の通常移動には従来の処理を使い、実機の到達可能性や衝突を保証する検査はありません。追従ノード自身に全経路の時間上限はなく、シーケンサ側のタイムアウトと取消処理を使用します。
+
+### 終了動作中の関節フィードバック異常
+
+旧ログの `Fresh current_joints required during rotation group` は受信途絶だけでなく、不正データや第4関節の範囲外でも出力されます。現在は `current_joints rejected during sequence group: reason=...` として原因、配列長、最新受信／最新有効値からの経過秒、期限、受信した4関節値を出力します。開始前の拒否は `at sequence group start` です。
+
+`last_valid_age_sec`は先頭4要素が有限数だった最終受信からの経過時間です。第4関節が範囲内であるかどうかは別に検査します。
+
+| reason | 判定内容 |
+|---|---|
+| `not_received` | まだ関節データを受信していない |
+| `too_few_values` | 最新配列の要素が4個未満 |
+| `non_finite` | 最新配列の先頭4要素にNaN/Infがある |
+| `wrist_out_of_range` | 第4関節の実測値が`[-2π, 0]`を設定した実測許容幅より大きく外れている（追加の数値許容`1e-6 rad`） |
+| `stale` | 最新の有効関節受信から`rotation_joint_timeout_sec`（既定1秒）を超えた |
+
+実測許容幅は [joint_feedback.yaml](../nav_director/config/joint_feedback.yaml) の `wrist_feedback_tolerance_deg`（既定6.0度）です。経路生成・追従・Joyへ同じファイルを渡し、起動時に読み込みます。実測値は−366°〜+6°まで受け付けますが、計画・指令の範囲は−360°〜0°を維持します。許容内の超過から開始するときは、開始用の計画・保持指令だけ最寄りの境界角へ収め、生の実測値と到達判定の許容は変えません。`0.0`にすると数値許容だけになります。
+
+同じ関節値の繰り返し受信でも時刻は更新されます。`direction=0`やグループ全体の`phi limit=disabled`でも、グループ中の関節監視は有効です。同梱終了経路は第4関節の境界角を通るため、通信途絶と実測範囲超過を区別するには`reason`と`q`を確認してください。診断ログには`wrist_feedback_tolerance_deg`と`wrist_feedback_range`も含めます。受信期限、NaN/Infや不足配列の拒否は維持しています。

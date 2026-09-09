@@ -19,6 +19,15 @@ inline bool legal(double angle)
          angle <= kTolerance;
 }
 
+// Measurement tolerance never expands the range of planned or commanded angles.
+inline bool legal_feedback(double angle, double tolerance_rad)
+{
+  return std::isfinite(angle) && std::isfinite(tolerance_rad) &&
+         tolerance_rad >= 0.0 && tolerance_rad < kTurn / 2.0 &&
+         angle >= -kTurn - tolerance_rad - kTolerance &&
+         angle <= tolerance_rad + kTolerance;
+}
+
 inline double clamp(double angle)
 {
   return std::max(-kTurn, std::min(0.0, angle));

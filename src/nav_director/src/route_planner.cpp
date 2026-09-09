@@ -64,12 +64,30 @@ std::vector<Point3D> RoutePlanner::generateRoute(
 }
 
 PlanRotationGroup::Response RoutePlanner::planGroup(
-    const PlannerState &state, const PlanRotationGroup::Request &request)
+    const PlannerState &state, const PlanRotationGroup::Request &request,
+    double wrist_feedback_tolerance_rad)
 {
+    PlanRotationGroup::Response response;
+    if (!std::isfinite(wrist_feedback_tolerance_rad) || wrist_feedback_tolerance_rad < 0.0 ||
+        wrist_feedback_tolerance_rad >= rotation_constraints::kTurn / 2.0) {
+        response.message = "Wrist feedback tolerance must be finite and within [0, pi) radians";
+        return response;
+    }
+    if (!finitePoint(state.pose) || !std::isfinite(state.base)) {
+        response.message = "Finite initial state within the wrist limits is required";
+        return response;
+    }
+    if (!rotation_constraints::legal_feedback(state.wrist, wrist_feedback_tolerance_rad)) {
+        response.message = "Finite initial wrist angle within the feedback tolerance is required";
+        return response;
+    }
     cur_pose_ = state.pose;
     current_base_ = state.base;
-    current_wrist_ = state.wrist;
-    PlanRotationGroup::Response response;
+    current_wrist_ = rotation_constraints::clamp(state.wrist);
+    if (current_wrist_ != state.wrist) {
+        // Correct only the planning copy, preserving the measured physical turn.
+        cur_pose_.phi = current_base_ + current_wrist_;
+    }
     planRotationGroup(request, response);
     return response;
 }

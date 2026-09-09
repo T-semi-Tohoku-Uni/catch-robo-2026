@@ -62,6 +62,13 @@ public:
         if (!std::isfinite(rotation_joint_timeout_sec_) || rotation_joint_timeout_sec_ <= 0.0) {
             throw std::invalid_argument("rotation_joint_timeout_sec must be finite and positive");
         }
+        const double wrist_feedback_tolerance_deg =
+            declare_parameter("wrist_feedback_tolerance_deg", 6.0);
+        if (!std::isfinite(wrist_feedback_tolerance_deg) ||
+            wrist_feedback_tolerance_deg < 0.0 || wrist_feedback_tolerance_deg >= 180.0) {
+            throw std::invalid_argument("wrist_feedback_tolerance_deg must be finite in [0, 180)");
+        }
+        wrist_feedback_tolerance_rad_ = wrist_feedback_tolerance_deg * M_PI / 180.0;
         wrist_service_ = create_service<WristControl>("wrist_control",
             std::bind(&JoyControllerNode::wrist_callback, this,
                 std::placeholders::_1, std::placeholders::_2));
@@ -87,6 +94,12 @@ private:
 
     static bool wrist_in_range(double angle) {
         return std::isfinite(angle) && angle >= -2.0 * M_PI - 1e-5 && angle <= 1e-5;
+    }
+
+    bool wrist_feedback_in_range(double angle) const {
+        return std::isfinite(angle) &&
+            angle >= -2.0 * M_PI - wrist_feedback_tolerance_rad_ - 1e-6 &&
+            angle <= wrist_feedback_tolerance_rad_ + 1e-6;
     }
 
     static bool read_pose(const geometry_msgs::msg::PoseStamped &msg, float (&pose)[6]) {
@@ -173,18 +186,23 @@ private:
             const double age = std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - current_joints_time_).count();
             if (!current_joints_valid_ || age > rotation_joint_timeout_sec_ ||
-                !wrist_in_range(current_joints_[3])) {
+                !wrist_feedback_in_range(current_joints_[3])) {
                 response->message = "Fresh finite current_joints within the wrist limit are required";
                 return;
             }
+            // Validate raw feedback before using its bounded planning start.
+            auto start_joints = current_joints_;
+            const double start_wrist = std::clamp(
+                static_cast<double>(start_joints[3]), -2.0 * M_PI, 0.0);
+            start_joints[3] = static_cast<float>(start_wrist);
             if (!wrist_in_range(request->wrist_angle) ||
-                std::abs(request->wrist_angle - current_joints_[3]) > 0.05) {
+                std::abs(request->wrist_angle - start_wrist) > 0.05) {
                 response->message = "Rotation start wrist angle does not match current_joints";
                 return;
             }
             float requested_pose[6];
             float actual_pose[6];
-            kin_.forward_kinematics(actual_pose, current_joints_.data());
+            kin_.forward_kinematics(actual_pose, start_joints.data());
             if (!read_pose(request->target, requested_pose) ||
                 !std::all_of(std::begin(actual_pose), std::end(actual_pose),
                     [](float value) { return std::isfinite(value); }) ||
@@ -204,14 +222,14 @@ private:
             phi_travel_ = 0.0;
             phi_interval_active_ = false;
             interval_phi_travel_ = 0.0;
-            last_commanded_phi_ = static_cast<double>(current_joints_[0]) + current_joints_[3];
+            last_commanded_phi_ = static_cast<double>(start_joints[0]) + start_wrist;
             rotation_fault_.clear();
-            hold_joints_ = current_joints_;
+            hold_joints_ = start_joints;
             hold_joints_active_ = true;
             std::copy(std::begin(actual_pose), std::end(actual_pose), current_pose_);
             clear_velocity();
             response->success = true;
-            response->message = "Rotation group started; holding current joints";
+            response->message = "Rotation group started; holding bounded start joints";
             return;
         }
 
@@ -574,6 +592,7 @@ private:
     std::chrono::steady_clock::time_point current_joints_time_;
     bool current_joints_valid_ = false;
     double rotation_joint_timeout_sec_ = 1.0;
+    double wrist_feedback_tolerance_rad_ = 6.0 * M_PI / 180.0;
     bool rotation_active_ = false;
     uint64_t rotation_group_id_ = 0;
     uint64_t highest_group_id_ = 0;

@@ -76,12 +76,14 @@ class Harness:
         response.success = True
         return response
 
-    def launch(self, package, executable, params=None, remaps=()):
+    def launch(self, package, executable, params=None, remaps=(), parameter_files=()):
         prefix = Path(get_package_prefix(package))
         args = [str(prefix / 'lib' / package / executable), '--ros-args',
                 '-r', f'__ns:={self.node.get_namespace()}']
         for remap in remaps:
             args += ['-r', remap]
+        for parameter_file in parameter_files:
+            args += ['--params-file', str(parameter_file)]
         for key, value in (params or {}).items():
             args += ['-p', f'{key}:={value}']
         child = subprocess.Popen(args, stdout=self.log, stderr=subprocess.STDOUT,

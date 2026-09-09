@@ -1,0 +1,5 @@
+/**:
+  ros__parameters:
+    # Extra tolerance for measured wrist feedback only, in degrees.
+    # Commands stay within [-2*pi, 0]; zero keeps numerical tolerance only.
+    wrist_feedback_tolerance_deg: 6.0

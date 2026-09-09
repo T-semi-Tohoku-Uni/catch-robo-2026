@@ -41,7 +41,11 @@ ROSの選択順は `ROBOT_ROS_DISTRO`、現在の `ROS_DISTRO`、`/opt/ros` に�
 
 本番launchは既存の `raspi_can.launch.py` でCANブリッジを起動し、activeへの遷移を確認してから自動操縦launch（UI・シーケンサ・経路生成／追従・Joy・機構ノード）を1回起動します。CANブリッジが終了すると全体も終了します。CANの設定は既存どおり `can0`、1 Mbps／CAN FD 2 Mbpsです。設定変更が必要な場合は既存launchの `sudo -n ip ...` が実行できる権限が必要です。
 
-既定のシーケンス・キュー・ポンプ設定は、このチェックアウトの `src/` 内のYAMLです。`sequence_file:=...`、`queue_config:=...`、`pump_config:=...`、`listen:=...`、`ipc_socket:=...`、`non_blocking:=...` を変更できます。`./run_production.sh --show-args` は引数を表示するだけで実機ノードを起動しません。起動後は `/current_joints` の実測値が届くことを確認してからUIで操作します。CANのactiveは関節角の受信確認ではありません。
+既定のシーケンス・キュー・ポンプ・関節フィードバック設定は、このチェックアウトの `src/` 内のYAMLです。`sequence_file:=...`、`queue_config:=...`、`pump_config:=...`、`joint_feedback_config:=...`、`listen:=...`、`ipc_socket:=...`、`non_blocking:=...` を変更できます。`./run_production.sh --show-args` は引数を表示するだけで実機ノードを起動しません。起動後は `/current_joints` の実測値が届くことを確認してからUIで操作します。CANのactiveは関節角の受信確認ではありません。
+
+手首の実測角の許容幅は [joint_feedback.yaml](src/nav_director/config/joint_feedback.yaml) の `wrist_feedback_tolerance_deg` で指定します。単位は度で、既定の `6.0` は実測値を −366°〜+6°まで受け付けます。有限の `0` 以上 `180` 未満を指定でき、`0` は数値誤差の許容だけを残します。この設定は経路生成・追従・Joyで共有し、指令角の範囲 −360°〜0°、到達判定の許容値、timeoutは変更しません。
+
+設定は起動時に読み込むため、編集後は3ノードを再起動してください。`debug:=true` による動作ごとの再読込は対象外です。本番launchは上記ソースYAML、`automatic.launch.py`・手動launch・navのテストlaunchはインストール済みYAMLを既定で使用します。後者でソース編集を反映する場合は再ビルドするか、`joint_feedback_config:="$PWD/src/nav_director/config/joint_feedback.yaml"` を指定して起動します。
 
 `install/_local_setup_util*.py` が欠損している場合、スクリプトは不完全な環境で起動を続けずエラーを表示します。新しい端末で対象ROS環境を読み込み、上のビルド手順で `install` を再生成してください。起動スクリプトはビルドを自動実行しません。フロントの同梱distを使用するためnpmは不要です。
 

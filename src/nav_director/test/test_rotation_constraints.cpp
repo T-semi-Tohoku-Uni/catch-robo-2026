@@ -41,6 +41,24 @@ int main()
         "Equivalent endpoint must not force an unnecessary turn");
   expect(legal(static_cast<float>(-kTurn)), "Float32 feedback must allow the lower limit");
   expect(!legal(-kTurn - 0.001) && !legal(0.001), "Out-of-limit wrists must be rejected");
+  const double feedback_tolerance = kTurn / 60.0;
+  for (const double boundary : {0.0, -kTurn}) {
+    const double sign = boundary == 0.0 ? 1.0 : -1.0;
+    expect(legal_feedback(boundary + sign * feedback_tolerance, feedback_tolerance),
+          "Measured wrists at the configured six-degree boundary must be accepted");
+    expect(!legal_feedback(boundary + sign * (feedback_tolerance + 0.001), feedback_tolerance),
+          "Measured wrists beyond the configured tolerance must be rejected");
+    expect(!legal(boundary + sign * feedback_tolerance),
+          "Measurement tolerance must not expand command limits");
+    expect(!legal_feedback(boundary + sign * 0.001, 0.0),
+          "Zero feedback tolerance must restore the numeric-only limit");
+  }
+  for (const double invalid : {-0.1, kTurn / 2.0,
+      std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+    expect(!legal_feedback(-1.0, invalid), "Invalid feedback tolerances must fail closed");
+    expect(!legal_feedback(invalid == -0.1 ? 1.0 : invalid, feedback_tolerance),
+          "Invalid measured angles must not be accepted");
+  }
   expect(!solve(-3.0, {std::numeric_limits<double>::quiet_NaN()}, 1, angles),
         "Non-finite targets must fail");
   expect(!solve(std::numeric_limits<double>::infinity(), {-2.0}, 1, angles),

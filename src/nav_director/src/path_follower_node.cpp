@@ -10,6 +10,8 @@
 #include <array>
 #include <chrono>
 #include <limits>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <atomic>
 #include <thread>
@@ -42,6 +44,13 @@ public:
             throw std::invalid_argument("Joint goal tolerances must be finite and nonnegative");
         }
         rotation_joint_timeout_sec_ = declare_parameter("rotation_joint_timeout_sec", 1.0);
+        const double wrist_feedback_tolerance_deg =
+            declare_parameter("wrist_feedback_tolerance_deg", 6.0);
+        if (!std::isfinite(wrist_feedback_tolerance_deg) ||
+            wrist_feedback_tolerance_deg < 0.0 || wrist_feedback_tolerance_deg >= 180.0) {
+            throw std::invalid_argument("wrist_feedback_tolerance_deg must be finite in [0, 180)");
+        }
+        wrist_feedback_tolerance_rad_ = wrist_feedback_tolerance_deg * M_PI / 180.0;
         rotation_speed_rad_sec_ = declare_parameter("rotation_speed_rad_sec", 1.0);
         if (!std::isfinite(rotation_joint_timeout_sec_) || rotation_joint_timeout_sec_ <= 0.0 ||
             !std::isfinite(rotation_speed_rad_sec_) || rotation_speed_rad_sec_ <= 0.0) {
@@ -92,6 +101,12 @@ private:
 
     void jointCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(joint_mutex_);
+        joint_sample_received_ = true;
+        joint_sample_received_at_ = std::chrono::steady_clock::now();
+        joint_sample_size_ = msg->data.size();
+        latest_joint_sample_.fill(std::numeric_limits<float>::quiet_NaN());
+        std::copy_n(msg->data.begin(), std::min(msg->data.size(), latest_joint_sample_.size()),
+            latest_joint_sample_.begin());
         joints_valid_ = msg->data.size() >= 4 &&
             std::all_of(msg->data.begin(), msg->data.begin() + 4,
                 [](float value) { return std::isfinite(value); });
@@ -100,6 +115,7 @@ private:
                 current_joint_angles_[i] = msg->data[i];
             }
             joints_received_at_ = std::chrono::steady_clock::now();
+            valid_joint_sample_received_ = true;
         }
     }
 
@@ -129,7 +145,13 @@ private:
                 }
             }
             std::lock_guard<std::mutex> lock(joint_mutex_);
-            if (!freshJoints() || std::abs(current_joint_angles_[3] -
+            if (!freshJoints()) {
+                RCLCPP_WARN(get_logger(), "current_joints rejected at sequence group start: %s",
+                    jointFeedbackDiagnostic().c_str());
+                return rclcpp_action::GoalResponse::REJECT;
+            }
+            // Compare the bounded planning start after validating the raw measurement.
+            if (std::abs(rotation_constraints::clamp(current_joint_angles_[3]) -
                     goal->wrist_angles.front()) > 0.05) {
                 return rclcpp_action::GoalResponse::REJECT;
             }
@@ -191,9 +213,51 @@ private:
 
     // The caller holds joint_mutex_.
     bool freshJoints() const {
-        return joints_valid_ && rotation_constraints::legal(current_joint_angles_[3]) &&
+        return joints_valid_ && rotation_constraints::legal_feedback(
+            current_joint_angles_[3], wrist_feedback_tolerance_rad_) &&
             std::chrono::duration<double>(std::chrono::steady_clock::now() -
                 joints_received_at_).count() <= rotation_joint_timeout_sec_;
+    }
+
+    // Report raw measurements and the independently configured feedback range.
+    // The caller holds joint_mutex_.
+    std::string jointFeedbackDiagnostic() const {
+        const auto now = std::chrono::steady_clock::now();
+        const double valid_age = std::chrono::duration<double>(now - joints_received_at_).count();
+        const char *reason = !joint_sample_received_ ? "not_received" :
+            joint_sample_size_ < 4 ? "too_few_values" :
+            !joints_valid_ ? "non_finite" :
+            !rotation_constraints::legal_feedback(current_joint_angles_[3],
+                wrist_feedback_tolerance_rad_) ? "wrist_out_of_range" :
+            valid_age > rotation_joint_timeout_sec_ ? "stale" : "ok";
+        std::ostringstream detail;
+        detail << std::fixed << std::setprecision(6)
+               << "reason=" << reason << ", sample_size=" << joint_sample_size_
+               << ", last_sample_age_sec=";
+        if (joint_sample_received_) {
+            detail << std::chrono::duration<double>(now - joint_sample_received_at_).count();
+        } else {
+            detail << "never";
+        }
+        detail << ", last_valid_age_sec=";
+        if (valid_joint_sample_received_) detail << valid_age;
+        else detail << "never";
+        detail << ", timeout_sec=" << rotation_joint_timeout_sec_ << ", q=[";
+        for (std::size_t i = 0; i < latest_joint_sample_.size(); ++i) {
+            if (i != 0) detail << ',';
+            if (joint_sample_received_ && i < joint_sample_size_) {
+                detail << std::setprecision(9) << latest_joint_sample_[i];
+            } else {
+                detail << "missing";
+            }
+        }
+        detail << "], wrist_range=[" << -rotation_constraints::kTurn << ",0]"
+               << ", wrist_tolerance_rad=" << rotation_constraints::kTolerance
+               << ", wrist_feedback_tolerance_deg=" << wrist_feedback_tolerance_rad_ * 180.0 / M_PI
+               << ", wrist_feedback_range=["
+               << -rotation_constraints::kTurn - wrist_feedback_tolerance_rad_ << ','
+               << wrist_feedback_tolerance_rad_ << ']';
+        return detail.str();
     }
 
     static double angleAt(const std::vector<double> &angles, double progress) {
@@ -396,7 +460,8 @@ private:
             {
                 std::lock_guard<std::mutex> lock_j(joint_mutex_);
                 if (constrained && !freshJoints()) {
-                    throw std::runtime_error("Fresh current_joints required during rotation group");
+                    throw std::runtime_error("current_joints rejected during sequence group: " +
+                        jointFeedbackDiagnostic());
                 }
                 for(int i=0; i<4; i++) local_joints[i] = current_joint_angles_[i];
                 // Compare feedback with the fixed endpoint, never a repeated old command.
@@ -654,6 +719,11 @@ private:
     float current_joint_angles_[4] = {0.0};
     bool joints_valid_ = false;
     std::chrono::steady_clock::time_point joints_received_at_;
+    bool joint_sample_received_ = false;
+    bool valid_joint_sample_received_ = false;
+    std::size_t joint_sample_size_ = 0;
+    std::array<float, 4> latest_joint_sample_{};
+    std::chrono::steady_clock::time_point joint_sample_received_at_;
     nav_msgs::msg::Path accepted_path_;
     std::atomic<bool> busy_{false};
     std::atomic<bool> stopping_{false};
@@ -666,6 +736,7 @@ private:
     double goal_joint_tolerance_first_rad_;
     double goal_joint_tolerance_remaining_rad_;
     double rotation_joint_timeout_sec_;
+    double wrist_feedback_tolerance_rad_;
     double rotation_speed_rad_sec_;
 };
 

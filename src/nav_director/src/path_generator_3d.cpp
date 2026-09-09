@@ -31,6 +31,14 @@ public:
         if (!std::isfinite(rotation_joint_timeout_sec_) || rotation_joint_timeout_sec_ <= 0.0) {
             throw std::invalid_argument("Invalid rotation_joint_timeout_sec");
         }
+        const double wrist_feedback_tolerance_deg =
+            declare_parameter("wrist_feedback_tolerance_deg", 6.0);
+        if (!std::isfinite(wrist_feedback_tolerance_deg) || wrist_feedback_tolerance_deg < 0.0 ||
+            wrist_feedback_tolerance_deg >= 180.0) {
+            throw std::invalid_argument("wrist_feedback_tolerance_deg must be within [0, 180)");
+        }
+        wrist_feedback_tolerance_rad_ = wrist_feedback_tolerance_deg *
+            rotation_constraints::kTurn / 360.0;
         // パブリッシャーの初期化
         pub_path_ = this->create_publisher<nav_msgs::msg::Path>("route", 10);
         pub_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("path_orientations", 10);
@@ -94,13 +102,15 @@ private:
             res->message = "Phi travel limit must be finite and nonnegative";
             return;
         }
-        if (!joints_valid_ || !rotation_constraints::legal(current_wrist_) ||
+        if (!joints_valid_ || !rotation_constraints::legal_feedback(
+                current_wrist_, wrist_feedback_tolerance_rad_) ||
             std::chrono::duration<double>(std::chrono::steady_clock::now() -
                 joints_received_at_).count() > rotation_joint_timeout_sec_) {
-            res->message = "Fresh finite current_joints within the wrist limits are required";
+            res->message = "Fresh finite current_joints within the wrist feedback tolerance are required";
             return;
         }
-        *res = planner_.planGroup({cur_pose_, current_base_, current_wrist_}, *req);
+        *res = planner_.planGroup({cur_pose_, current_base_, current_wrist_}, *req,
+            wrist_feedback_tolerance_rad_);
         for (auto &route : res->routes) {
             route.path.header.stamp = now();
             for (auto &pose : route.path.poses) pose.header = route.path.header;
@@ -209,6 +219,7 @@ private:
     Point3D cur_pose_;
     std::vector<Point3D> waypoints_;
     double rotation_joint_timeout_sec_;
+    double wrist_feedback_tolerance_rad_;
     double current_wrist_ = 0.0;
     double current_base_ = 0.0;
     bool joints_valid_ = false;

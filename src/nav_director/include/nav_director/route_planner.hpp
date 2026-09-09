@@ -43,8 +43,10 @@ public:
   // Targets exclude the start pose. Lengths are millimeters; angles are radians.
   std::vector<Point3D> generateRoute(
     const PlannerState & state, const std::vector<Point3D> & targets);
+  // Feedback tolerance only admits the start state; planned commands remain bounded.
   PlanRotationGroup::Response planGroup(
-    const PlannerState & state, const PlanRotationGroup::Request & request);
+    const PlannerState & state, const PlanRotationGroup::Request & request,
+    double wrist_feedback_tolerance_rad = 0.0);
 
 private:
   bool solveIK(const Point3D & point, float (&joints)[4]);
