@@ -14,7 +14,7 @@ pump_controller_node:
 
     # Pressure sensor array indices in L/C/R order; confirm the physical mapping.
     pressure_indices: [0, 1, 2]
-    pressure_threshold: 96  # 0x60
+    pressure_threshold: 300  # 0x60
     # Select ge (>=) or le (<=) after confirming the sensor direction.
     pressure_comparison: unconfigured
     max_pending_suction_checks: 8
