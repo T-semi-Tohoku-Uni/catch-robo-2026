@@ -103,20 +103,20 @@ end_sequence: ending
 
 values:
   # Provisional width commands; confirm the 0/1 mapping on hardware.
-  pick_endeffector_command: 0
-  place_endeffector_command: 1
+  pick_endeffector_command: 1
+  place_endeffector_command: 0
   # Initial CSV Z values; their physical clearance is not verified.
   work_above_z: 226.95
   common_work_above_z: 246.95
-  place_above_z: 324.35
+  place_above_z: 354.35
   # Each offset is relative to the last absolute pose, not the preceding move.
   pick_approach_dz: -60
-  pick_retreat_dz: 0
+  pick_retreat_dz: 60
   # Experimental retry settings; confirm pressure_comparison/indices in pump.yaml first.
   pick_max_attempts: 3
   pick_suction_timeout_sec: 2.0
-  place_approach_dz: -30
-  place_retreat_dz: 30
+  place_approach_dz: -60
+  place_retreat_dz: 0
 
 poses:
   lifecycle_pose: [670, -110, 220, 0]
