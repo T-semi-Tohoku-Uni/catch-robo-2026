@@ -20,6 +20,7 @@ Usage: ./run_production.sh team:=red [debug:=true] [launch arguments...]
 ROS環境とこのワークスペースのinstallを読み直し、CAN付き本番launchを起動します。
 ROS選択順: ROBOT_ROS_DISTRO → ROS_DISTRO → /opt/ros内の唯一の環境。
 --show-args でlaunch引数を表示できます。ビルドは自動実行しません。
+手首実測角の許容設定は joint_feedback_config:=/path/to/joint_feedback.yaml で変更できます。
 USAGE
     exit 0
 fi
@@ -63,7 +64,7 @@ source "$robot_ros_setup"
 # Avoid stale underlay paths recorded in install/setup.bash at build time.
 source "$robot_local_setup"
 
-for robot_package in catchrobo2026_sequence catchrobo2026_ui nhk2026_bridge; do
+for robot_package in catchrobo2026_sequence catchrobo2026_ui nav_director nhk2026_bridge; do
     robot_prefix=$(ros2 pkg prefix "$robot_package") || fail "$robot_package が見つかりません。colcon buildを実行してください。"
     if [[ "$robot_prefix" != "$robot_workspace/install" &&
           "$robot_prefix" != "$robot_workspace/install/"* ]]; then

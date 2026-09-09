@@ -1,0 +1,20 @@
+# Ordered intermediate and final poses in meters and quaternions.
+geometry_msgs/Pose[] targets
+# Exclusive target indices ending each MOVE route.
+uint32[] route_ends
+# False preserves the legacy single wrist direction constraint.
+bool allow_wrist_reversal
+# Bound cumulative absolute unwrapped field-yaw travel in radians.
+bool limit_phi_travel
+float64 max_phi_travel
+# Ordered, nonoverlapping subintervals, independent of the whole-group limit.
+catchrobo2026_msgs/PhiTravelInterval[] phi_travel_intervals
+---
+bool success
+string message
+# +1: increasing fourth-joint angle; -1: decreasing; 0: unrestricted.
+int8 direction
+catchrobo2026_msgs/RotationGroupRoute[] routes
+float64 phi_travel
+# Planned travel for each requested subinterval, in the same order.
+float64[] interval_phi_travel

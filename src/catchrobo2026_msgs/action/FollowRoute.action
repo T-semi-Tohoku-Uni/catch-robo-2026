@@ -2,6 +2,13 @@
 bool start
 # Explicit route; an empty path uses the latest received route.
 nav_msgs/Path path
+# Zero ID with empty angle arrays preserves normal following.
+# Nonzero ID requires an explicit path and wrist angles; direction 0 permits reversal.
+uint64 rotation_group_id
+int8 wrist_direction
+float64[] wrist_angles
+# Optional unwrapped field-yaw interpolation, matching path length.
+float64[] phi_angles
 ---
 # Result
 bool success

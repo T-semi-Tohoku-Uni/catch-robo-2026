@@ -25,8 +25,22 @@ find_package(visualization_msgs REQUIRED)
 # 運動学ライブラリの依存関係を追加 (別パッケージとして存在する場合)
 find_package(inverse_kinematics_package REQUIRED)
 
+# Share the exact production planner with offline validation tools.
+add_library(route_planner src/route_planner.cpp)
+add_library(nav_director::route_planner ALIAS route_planner)
+target_compile_features(route_planner PUBLIC cxx_std_17)
+target_include_directories(route_planner PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_include_directories(route_planner PRIVATE ${EIGEN3_INCLUDE_DIRS})
+ament_target_dependencies(route_planner
+  geometry_msgs nav_msgs tf2 tf2_geometry_msgs catchrobo2026_msgs
+  inverse_kinematics_package)
+
 # 実行ファイルの追加
 add_executable(path_generator_3d src/path_generator_3d.cpp)
+target_link_libraries(path_generator_3d route_planner)
 add_executable(path_follower_node src/path_follower_node.cpp) # 追加: 経路追従ノード
 add_executable(dummy_robot_node src/dummy_robot_node.cpp)   # 追加: ダミーロボットノード
 
@@ -83,7 +97,7 @@ ament_target_dependencies(dummy_robot_node
 )
 
 # ros2 run 等で実行できるようにインストール
-install(TARGETS 
+install(TARGETS
   path_generator_3d
   path_follower_node
   dummy_robot_node
@@ -93,10 +107,27 @@ install(TARGETS
 
 install(DIRECTORY
   launch
+  config
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(TARGETS route_planner EXPORT export_route_planner
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+install(DIRECTORY include/ DESTINATION include)
+ament_export_targets(export_route_planner HAS_LIBRARY_TARGET)
+ament_export_dependencies(
+  geometry_msgs nav_msgs tf2 tf2_geometry_msgs catchrobo2026_msgs
+  inverse_kinematics_package)
+
 if(BUILD_TESTING)
+  add_executable(test_route_planner test/test_route_planner.cpp)
+  target_link_libraries(test_route_planner route_planner)
+  add_test(NAME route_planner COMMAND test_route_planner)
+  add_executable(test_rotation_constraints test/test_rotation_constraints.cpp)
+  add_test(NAME rotation_constraints COMMAND test_rotation_constraints)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
   # comment the line when a copyright and license is added to all source files

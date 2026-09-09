@@ -8,9 +8,11 @@ UIの初期化・開始・終了操作と確定したPICK／PLACEを、YAMLに�
 
 起動時の既定ファイルは [config/sequences.yaml](config/sequences.yaml) です。運動学パッケージのCSVから転記した赤青共通の16 PICK座標と、赤青それぞれ8 PLACE座標を持ち、デバッグ用の初期手順を読み込んで実行できます。[config/sequences.example.yaml](config/sequences.example.yaml) は全位置未設定の雛形として残しています。
 
-各位置の絶対姿勢へ移動後、PICKは「相対移動→吸引→相対移動→オフ→PLACE用の幅に切替」、PLACEは「相対移動→開放→相対移動→オフ→PICK用の幅に切替」を実行します。各動作の退避・ポンプオフ直後に、次の動作用の幅指令を出します。初回はUIの「開始」でYAMLの開始シーケンスを実行し、PLACE用の幅を指令します。
+各位置の絶対姿勢へ移動後、PICKは「相対Z接近→接近高さでY−10 mm→吸引→相対退避→PLACE用の幅に切替」、PLACEは「開放→相対接近→相対退避→オフ→PICK用の幅に切替」を実行します。PLACEでは赤`[150, 0, 360, π]`／青`[1200, 0, 360, π]`を経由して各位置へ1経路で移動し、機構操作後には同じ陣営別経由点を次のPICK／PLACE用に保留します。初回はUIの「開始」でYAMLの開始シーケンスを実行し、PLACE用の幅を指令します。
 幅指令はYAMLの `values.pick_endeffector_command: 0`／`place_endeffector_command: 1` に仮置きしています。0/1の広い／狭い対応は手動で確認し、必要なら両値を入れ替えてください。幅切替後の待ち時間は追加しておらず、ROSサービスの受理応答でそのPICK／PLACEを完了します。
-現在の相対Zはapproachが `-10 mm`、retreatが `+10 mm` で、直近の絶対姿勢を固定基準にそれぞれZ−10／Z＋10 mmへ移動します。実機の高さ・移動量・PLACEの操作順は実機確認済みの値ではありません。
+PICKは直上Z=206.95 mmからZ−30 mmで接近し、同じ高さのY−10 mmを指示してから吸引し、元の直上位置へ退避します。PLACEは直上Z=294.35 mmを固定基準にZ−10／Z＋10 mmへ移動します。相対指令を直前の相対位置へ積算する方式ではありません。実機の高さ・移動量・PLACEの操作順は実機確認済みの値ではありません。
+
+吸引判定・条件分岐・最大回数付き再試行も利用できます。現在の同梱設定は吸引判定付きPICKを有効にし、`pick_common.steps` の `pick_without_suction_check` と `pick_with_suction_check` のコメントを入れ替えると切り替わります。実験側も現在の下降・Y補正・吸引・退避を共有します。通常へ戻すときは実験側をコメントアウトし、通常側を有効にします。同梱ポンプ設定は300以上を吸着成功とし、センサーのL/C/R対応は実機で確認が必要です。[切替方法と制約](CONFIG.md#実験用吸引自動化の切り替え) を参照してください。
 
 実機デバッグではワークスペースのルートから以下を実行し、編集するソースYAMLの絶対パスを指定します。`debug:=true` で初期化・開始・終了シーケンス・各PICK／PLACEの実行前に読み直すため、YAMLの編集を次の動作へ反映できます。
 
@@ -37,9 +39,76 @@ UIは開始中を「開始シーケンス」と表示し、完了後に通常の
 
 同梱YAMLの `sequences.before_initialization.steps` と `sequences.after_initialization.steps` に、初期化命令の前後に実行する手順を書けます。UIの「初期化」で前手順→初期化命令→後手順の順に実行し、全体成功後に初期化済みになります。初期化命令の応答は実機の原点復帰完了ではないため、必要な待機は後手順へ `wait` で設定してください。前後の相対移動は、それぞれの手順内の絶対移動を基準にします。
 
-UIの「終了」では現在動作の取消完了後に `sequences.ending.steps` を実行します。cancel／reset・動作失敗・Ctrl+Cでは実行しません。終了手順を中断する場合は取消ボタンを操作します。同梱設定では前手順は `steps: []`、後手順と終了手順は共通の `poses.lifecycle_pose: [670, -110, 220, 0]` への絶対移動です（x/y/zはmm、phiはrad）。参照先はトップレベルの `before_initialization_sequence`／`after_initialization_sequence`／`end_sequence` で変更できます。省略または `null` なら追加動作なしです。
+UIの「終了」では現在動作の取消完了後に `sequences.ending.steps` を実行します。cancel／reset・動作失敗・Ctrl+Cでは実行しません。終了手順を中断する場合は取消ボタンを操作します。同梱設定では初期化の前後手順は `steps: []`、終了手順は `[675, 200, 300, 0]` に到達してから `poses.lifecycle_pose: [670, -110, 220, 0]` へ移動します（x/y/zはmm、phiはrad）。2件とも通常の `move` で、それぞれの到達を待ちます。参照先はトップレベルの `before_initialization_sequence`／`after_initialization_sequence`／`end_sequence` で変更できます。省略または `null` なら追加動作なしです。
 
 詳細と編集例は [CONFIG.md](CONFIG.md#初期化前後終了シーケンス) を参照してください。
+
+## 次のPICK／PLACEへ向かう経由点
+
+PICK／PLACEの末尾に`waypoint`を置くと、経由点を保留して現在の動作を完了します。次のPICK／PLACEが始まったとき、その最初の移動経路へ保留点を追加します。経由点へ単独では移動せず、次の動作がなければその場で待ちます。
+
+```yaml
+place_blue_0_0:
+  steps:
+    - call: place_pre_blue_waypoint
+    - move: {absolute: place_blue_0_0_above}
+    - call: place_common
+    - call: place_pre_blue_waypoint
+```
+
+この例の末尾の青側経由点は、次のPICKが選ばれた時点で「現在位置→青側経由点→PICK直上」の1経路に含まれます。次動作に経由点があればその前に追加し、通常MOVEの終点で到達を待ちます。現在のPLACE中に退避先へ到達させたい場合は、末尾を通常の`move`にしてください。
+
+保留点は元の動作で解決した絶対座標として保持し、次の動作の相対座標基準を変えません。`debug:=true`の再読込後も保留済み座標は維持します。引き継ぐのは同じepochの後続PICK／PLACEだけで、START／INITIALIZE／END、resetによるepoch変更、取消・失敗・再読込失敗・再起動では破棄します。ライフサイクル手順やgroup内部の末尾には未接続waypointを置けません。次の移動がgroup内なら保留点もそのgroupで事前計画します。詳しくは[末尾経由点の設定](CONFIG.md#pickplace末尾の経由点を次の動作へ持ち越す)を参照してください。
+
+## シーケンスグループ
+
+`sequence_group`の開始・終了で区間を作り、`rotation_group: true`で第4関節角`q4`の一方向制約、`max_phi_travel`でフィールド基準の手先角`phi`の総移動量上限を指定します。両者は独立したオプションです。`phi = q0 + q4`なので、第4関節を一方向に動かす制約だけでは、手先の360°回転を防げません。
+
+次はAへの到達後からBまでの`phi`総移動量を90°（π/2rad）までに制限する書式例です。姿勢名と上限値は実際の手順に合わせて指定してください。
+
+```yaml
+steps:
+  - move: {absolute: target_a}
+  - sequence_group: {start: true, max_phi_travel: 1.5707963267948966}
+  - move: {absolute: target_b}
+  - sequence_group: end
+```
+
+総移動量は、巻き数を保った指令の`Σ|Δphi|`をグループ開始時から加算します。開始と終了が同じ角度でも、途中の1回転は360°です。単位はrad、有限の0以上を指定でき、`'$値名'`も使えます。`max_phi_travel`の省略時は上限なし、`rotation_group`の省略または`false`では第4関節の方向反転を許可します。両方の制約を使う場合は`sequence_group: {start: true, rotation_group: true, max_phi_travel: 1.5707963267948966}`とします。
+
+グループ全経路を事前計画し、設定した制約を満たせない場合は最初の操作前に失敗します。実行時にも指令の総移動量を検査しますが、これは指令に対するソフト上の制限であり、実際の機構の回転量や停止を保証するものではありません。`sequence_group: start`は追加の一方向制約・総移動量上限を指定せず、グループとして事前計画します。
+
+ポンプ・幅切替・待機・経由点を含められ、`call`／`extends`でも接続できます。同じUIアクション内で開始と終了を対応させ、初期化命令や経由点列の途中を境界にしないでください。従来の独立ステップ`rotation_group: start`／`end`は、第4関節の一方向制約を有効にする互換表記として残しています。現在の同梱endingは方向制約を指定せず、AへのMOVE後に`phi_travel: {start: true, limit: 0.5235987755982988}`、BへのMOVE後に`phi_travel: end`を置き、A→Bの総移動量を30°に制限します。外側の`sequence_group`は両方のMOVEを含むため、制限区間より前のAの巻き数も先読みして選びます。詳しくは[シーケンスグループの設定](CONFIG.md#シーケンスグループsequence_group)を参照してください。
+
+## 実行前のオフライン検査
+
+`check_sequence_config`は本番の設定展開・経路計算を使い、指定した開始状態からの到達可能性、第4関節の回転制約、`phi`総移動量の上限を検査します。ROSノードを起動せず、ロボットへ指令を送りません。
+
+ワークスペースをビルドし、`source install/setup.bash`した後に実行します。実運用で使うYAMLと同じファイルを`--config`に指定してください。
+
+```bash
+# 設定の書式・参照・展開だけを確認
+ros2 run catchrobo2026_sequence check_sequence_config \
+  --config src/catchrobo2026_sequence/config/sequences.yaml --syntax-only
+
+# lifecycle_poseを開始姿勢と仮定し、PICK → PLACE → ENDを連続して確認
+ros2 run catchrobo2026_sequence check_sequence_config \
+  --config src/catchrobo2026_sequence/config/sequences.yaml \
+  --team red --initial-pose-name lifecycle_pose \
+  --action pick:0,1 place:0,0 end
+```
+
+`--initial-pose-name`の代わりに、実際の開始関節角を`--initial-joints Q0 Q1 Q2 Q4`（すべてrad）で渡せます。姿勢の直接指定は`--initial-pose X Y Z PHI`（mm／rad）です。同じ姿勢に第4関節角0と−2πの両方が対応する場合は、`--initial-wrist`で実際の巻き数を指定しない限り`UNKNOWN`となります。
+
+`--all`または対象指定の省略では、開始・初期化・終了・有効な全PICK／PLACEを同じ開始状態から**個別に**確認します。操作間の連続確認は`--action`を実際の順序で指定してください。名前付き手順は`--sequence ending`で選べます。`--team`の既定は`both`で、各陣営は別々に検査します。
+
+結果は`FEASIBLE`（検査条件を満たす）、`INFEASIBLE`（不成立）、`UNKNOWN`（開始状態などが不明）です。終了コードはそれぞれ0・1・2で、設定不正は1、引数不正は2です。文法だけの検査の成功は、動作の実行可能性を意味しません。初期化を含める場合、完了後の関節角を`--after-initialization-joints Q0 Q1 Q2 Q4`で明示しないと、その先の経路は判定できません。
+
+通常MOVEの第4関節角が経路サンプル間でπを超えて変化する場合は`wrist_wrap_jump`警告を出します。`--warnings-as-errors`で警告も終了コード1にできます。`--json`では対象名・失敗位置・予測最終関節角・回転量をJSONで出力します。
+
+PICK／PLACEの末尾に経由点が残る場合、その時点では次の通常MOVEが決まらないため`UNKNOWN`として保留点を表示します。`--action place:0,0 pick:0,1`のような連続検査では、保留点と到達済み関節角を次の対象へ引き継ぎ、実際に連結した経路を検査します。保留だけを理由とする途中の`UNKNOWN`は、次の移動で解決できれば全体判定を妨げません。対象列の最後に保留点が残る場合と、`--all`で個別確認したPLACEの保留経路は未判定のままです。開始姿勢不明・初期化後不明・経路失敗はこの例外に含めず、後続を成功扱いにしません。`--action start`／`initialize`／`end`への切替では実行時と同じく保留点を破棄します。`--sequence`は汎用の手順列として扱うため、名前が`ending`でもライフサイクル境界にはなりません。UIの終了動作を再現する場合は`--action end`を使ってください。
+
+これは目標に正確に到達すると仮定した経路計算上の判定です。通常MOVEは生成経路のサンプルを検査し、グループは本番と共通の計画処理で制約を検査します。衝突、吸着・機構動作、追従誤差、初期化の物理動作、実行時間やタイムアウトは判定対象外です。
 
 ## 設定の読込
 
@@ -55,23 +124,33 @@ UIの「終了」では現在動作の取消完了後に `sequences.ending.steps
 
 `execute_sequence`（`catchrobo2026_msgs/action/ExecuteSequence`）の要求には `control_epoch`・`step_id`・種類・UI位置・`collector_mask` を含めます。種類はINITIALIZE=5／START=4／END=6／PICK=1／PLACE=2です。INITIALIZE／START／ENDは位置を使用せず `collector_mask=7` で送信します。PICKはrow=0..3／column=1..4、PLACEはbox=0..3／box_column=0..1です。機構選択はUIのbit0/1/2（L/C/R）で、設定ファイルには記述しません。
 
-各 `move` は既存の `generate_route`（`GenerateRoute`）へ絶対目標の `x,y,z,phi` を渡し、成功応答の `path` を `follow_route`（`FollowRoute`）の `path` へ渡し、`start=true` で開始します。空の経路が返った場合は失敗とし、以前の経路を再利用しません。追従成功の結果を待ってから次の手順へ進みます。各移動を独立した経路として扱うため、シーケンサから `waypoint` の蓄積は行いません。設定と生成サービスの位置単位はmm、角度はradです。生成ノードが配信する `route`（ROS Path）の位置単位はmです。
+シーケンスグループ外の `move` は `generate_route`（`GenerateRoute`）へ絶対目標の `x,y,z,phi` を渡し、成功応答の `path` を `follow_route`（`FollowRoute`）の `path` へ渡し、`start=true` で開始します。連続する `waypoint` は次の通常 `move` と一つの経路にまとめ、中間点での個別の到達待ちを省きます。`move` の `waypoints` オプションでも経由点列を指定でき、従来の `move.waypoint: true` も使用できます。経由点1件だけの共通手順を`call`／`extends`し、同じ動作内の後続`move`、またはPICK／PLACE末尾から次のUI動作の最初の移動へ接続できます。空の経路が返った場合は失敗とし、以前の経路を再利用しません。最後の移動先への追従成功を待ってから後続手順へ進みます。指定方法と制約は [経由点の設定](CONFIG.md#経由点waypoint) を参照してください。
 
-初期化前後・開始・終了・PICK／PLACEのすべての移動で、生成した経路を追従アクションへ直接渡します。`route` トピックの受信順に依存せず、実行中の経路は固定されます。追従中の追加ゴールは拒否します。手動の `FollowRoute(start=true)` は `path` を省略した場合、受理時に受信済みの `route` を固定して使い、未受信なら拒否します。経路生成側の `waypoint` 蓄積は従来どおりなので、他クライアントの経由点を残した状態では実行しないでください。
+到達判定では、最終的に送信する姿勢から計算した関節目標を固定し、送信後に受信した `current_joints` と比較します。通常MOVEはJoyと同じ第4関節の正規化を使い、groupは計画された巻き数を保持します。`target_joint_angles` の受信順や再配信には依存しません。位置30 mm・向き0.05 radに加え、関節0は0.05 rad、他の3関節は0.01 rad以内が既定の完了条件です。関節許容値はfollowerの `goal_joint_tolerance_first_rad`／`goal_joint_tolerance_remaining_rad` で設定でき、手動用launchでは全軸0.05 radを指定しています。手動補正は可能ですが、規定終点の許容範囲から外れたままなら完了を待ちます。
 
-`GenerateRoute`／`FollowRoute` の型に `nav_msgs/Path path` を追加しています。更新時はワークスペース全体を再ビルドし、関係するノードをすべて再起動してください。
+シーケンサからの `GenerateRoute` は毎回 `use_explicit_waypoints=true` とし、要求内の `waypoints` に経由点を列挙します。経由点なしの移動では空配列です。YAMLと要求の最終目標はmm／rad、要求内の経由点はROS Poseのm／Quaternionへ変換します。生成結果の `route`／`path` もmです。要求内で経由点と終点をまとめるため、取消や失敗で共有の `waypoint` 蓄積へ経由点が残りません。
+
+シーケンスグループでは `plan_rotation_group`（`PlanRotationGroup`）へ全目標・通常MOVEの終点位置・グループの制約・phi計測区間を渡し、経路列と各点の第4関節角・方向をまとめて取得します。各経路を `FollowRoute` の `path`／`wrist_angles`／`wrist_direction`／`rotation_group_id` と、phi補間用の `phi_angles` へ渡して順に実行します。Joyの `wrist_control`（`WristControl`）はグループとphi計測区間それぞれの開始・終了、および姿勢と第4関節角を一緒にした指令を受け付けます。
+
+初期化前後・開始・終了・PICK／PLACEのすべての移動で、生成した経路を追従アクションへ直接渡します。`route` トピックの受信順に依存せず、実行中の経路は固定されます。追従中の追加ゴールは拒否します。手動の `FollowRoute(start=true)` は `path` を省略した場合、受理時に受信済みの `route` を固定して使い、未受信なら拒否します。手動の `GenerateRoute` は `use_explicit_waypoints=false`（既定）で従来の `waypoint` 蓄積を使います。明示要求はこの蓄積を参照・消費しません。
+
+`GenerateRoute` の経由点指定、シーケンスグループ用の `PlanRotationGroup`／`WristControl`、`FollowRoute` の追加フィールドを使用します。更新時はワークスペース全体を再ビルドし、関係するノードをすべて再起動してください。
 
 ポンプ手順では、UIで選択された機構に設定の指令値、選択されていない機構にオフ（0）を指定して、`set_pump_state` に全3状態を渡します。例えばLとRを選んで吸引する場合は `(left, center, right)=(1,0,1)` です。初期化前後・開始・終了手順のポンプ操作は全3機構が対象です。ポンプの現在状態の読出しは行いません。
 
 姿勢の `phi` は経路追従の回転角です。`endeffector: 0`／`1` は回収機構の幅を切り替える既存の `set_endeffector_state` への指令です。0/1の広い／狭い対応は実機側で確認します。
 
-ポンプ／エンドエフェクタのサービス成功は指令の受理です。吸着・開放・機構動作の完了をセンサで確認する機能はありません。設定の `wait` で必要な待機時間を与えます。シーケンス全体が成功した場合だけUIへ成功を返し、UIが元のepoch・step ID・RUNNING状態を照合し、PICK／PLACEでは保持／配置を更新、STARTでは通常キューへの進行を許可します。部分回収の検出は行いません。
+`set_pump_state`／エンドエフェクタのサービス成功は指令の受理です。実験手順を有効にした場合、吸引成否は独立した `check_suction`（`CheckSuction`）で確認します。PICKの選択機構すべてが同じ新規圧力サンプルで閾値条件を満たすと成功し、満たさないまま期限を迎えた場合だけ設定の再試行へ進みます。監視は要求後に早期成功を保存するため、その後の落下の継続監視は行いません。サービス拒否や通信異常では直ちに動作を停止します。圧力の比較方向・配列対応・閾値は [ポンプ設定](../catchrobo2026_pump/README.md) を確認してください。
+
+開放・幅切替の完了は観測せず、必要に応じて `wait` を使います。シーケンス全体が成功した場合だけUIへ成功を返し、UIがepoch・step ID・状態を照合してPICK／PLACEの保持／配置を更新します。上限まで部分吸着のままの場合もPICK全体を失敗とし、部分成功としてUIを更新しません。
 
 ## 取消・失敗
 
 UIのcancel／end／resetで現在動作を取り消します。UIは旧動作の終端結果を受けるまで次を送信せず、古い成功通知を新しいステップへ適用しません。動作失敗時は完了を記録せずUIをFINISHEDへ進め、原因をcontrol_nodeのログへ出します。
 
-シーケンサは待機・サービス応答・追従結果を非同期で処理します。取消時は後続手順を止め、実行中のFollowRouteを取り消します。従来の追従ノードは取消を処理すると追従ループを終了し、実測角の保持指令は追加しません。これはモータの非常停止や停止確認を意味しません。ポンプ／エンドエフェクタの指令は保持し、勝手に開放しません。既に送信したサービス要求は取り消せないため、応答を待ってから動作を終えます。
+シーケンサは待機・サービス応答・追従結果を非同期で処理します。取消時は後続手順を止め、実行中のFollowRouteを取り消し、次の動作用に保留した経由点も破棄します。シーケンスグループ外では従来どおり追従ループを終了し、実測角の保持指令は追加しません。シーケンスグループ内ではJoyのグループ解除も要求し、最後に有効だった4関節の指令を保持します。これはモータの非常停止や停止確認を意味しません。ポンプ／エンドエフェクタの指令は保持し、勝手に開放しません。既に送信したサービス要求は取り消せないため、応答を待ってから動作を終えます。
+
+読み取り専用の吸引監視は取消時に結果を破棄し、その応答を停止完了の条件にはしません。ポンプ側は成功または期限まで監視を続けますが、遅れて届く結果が次のアクションへ混入することはありません。
 
 停止待ち時間を超えて結果が不明な場合は失敗を返し、以降の動作を拒否します。接続先の状態を確認したうえでノードを再起動する必要があります。プロセス強制終了・通信断時の実機停止、原点復帰、衝突回避、手動との自動切替は別途必要です。
 
@@ -80,10 +159,32 @@ UIのcancel／end／resetで現在動作を取り消します。UIは旧動作�
 | パラメータ | 既定秒 | 対象 |
 |---|---:|---|
 | `service_timeout_sec` | 3 | サービス待ち・応答・追従ゴールの受理 |
-| `route_timeout_sec` | 30 | 各移動の追従 |
+| `route_timeout_sec` | 30 | 経由点を含む1経路全体の追従。YAMLで指定した場合はそちらを優先 |
 | `sequence_timeout_sec` | 120 | INITIALIZE／START／END／PICK／PLACE全体 |
 | `stop_timeout_sec` | 3 | 取消・失敗後の未確定処理 |
 
+吸引監視応答の期限はYAMLの `suction_check.start.timeout` ＋ `service_timeout_sec` です。通常サービスの応答期限とは独立し、移動中も監視します。判定サービスの探索期限には `service_timeout_sec` を使用します。
+
 タイムアウトは0秒超〜86,400秒の有限値を指定します。`wait` の設定値にも0〜86,400秒の上限があり、動作全体には `sequence_timeout_sec` が適用されます。
 
-従来の経路生成・追従ノードには関節情報の鮮度検査、経路の到達可能性検査、追従ノード自身のタイムアウトはありません。シーケンサ側のタイムアウトと取消処理を使用します。
+`following route timeout` は `sequences.yaml` のトップレベルに `route_timeout_sec: 60.0` のように書いて変更できます。同梱値は30秒です。省略時はROSパラメータを使います。`debug:=true` では次の動作から反映し、実行中の動作の値は固定します。通常モードではノード再起動が必要です。詳しくは [設定方法](CONFIG.md#経路追従のタイムアウト) を参照してください。
+
+シーケンスグループでは開始・追従時に関節情報の鮮度と第4関節の制約を検査します。第4関節の指令速度には追従ノードの `rotation_speed_rad_sec`（既定1.0 rad/s）の上限を使います。グループ外の通常移動には従来の処理を使い、実機の到達可能性や衝突を保証する検査はありません。追従ノード自身に全経路の時間上限はなく、シーケンサ側のタイムアウトと取消処理を使用します。
+
+### 終了動作中の関節フィードバック異常
+
+旧ログの `Fresh current_joints required during rotation group` は受信途絶だけでなく、不正データや第4関節の範囲外でも出力されます。現在は `current_joints rejected during sequence group: reason=...` として原因、配列長、最新受信／最新有効値からの経過秒、期限、受信した4関節値を出力します。開始前の拒否は `at sequence group start` です。
+
+`last_valid_age_sec`は先頭4要素が有限数だった最終受信からの経過時間です。第4関節が範囲内であるかどうかは別に検査します。
+
+| reason | 判定内容 |
+|---|---|
+| `not_received` | まだ関節データを受信していない |
+| `too_few_values` | 最新配列の要素が4個未満 |
+| `non_finite` | 最新配列の先頭4要素にNaN/Infがある |
+| `wrist_out_of_range` | 第4関節の実測値が`[-2π, 0]`を設定した実測許容幅より大きく外れている（追加の数値許容`1e-6 rad`） |
+| `stale` | 最新の有効関節受信から`rotation_joint_timeout_sec`（既定1秒）を超えた |
+
+実測許容幅は [joint_feedback.yaml](../nav_director/config/joint_feedback.yaml) の `wrist_feedback_tolerance_deg`（既定6.0度）です。経路生成・追従・Joyへ同じファイルを渡し、起動時に読み込みます。実測値は−366°〜+6°まで受け付けますが、計画・指令の範囲は−360°〜0°を維持します。許容内の超過から開始するときは、開始用の計画・保持指令だけ最寄りの境界角へ収め、生の実測値と到達判定の許容は変えません。`0.0`にすると数値許容だけになります。
+
+同じ関節値の繰り返し受信でも時刻は更新されます。`direction=0`やグループ全体の`phi limit=disabled`でも、グループ中の関節監視は有効です。同梱終了経路は第4関節の境界角を通るため、通信途絶と実測範囲超過を区別するには`reason`と`q`を確認してください。診断ログには`wrist_feedback_tolerance_deg`と`wrist_feedback_range`も含めます。受信期限、NaN/Infや不足配列の拒否は維持しています。

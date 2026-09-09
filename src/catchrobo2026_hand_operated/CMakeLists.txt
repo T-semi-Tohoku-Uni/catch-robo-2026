@@ -27,6 +27,7 @@ find_package(inverse_kinematics_package REQUIRED)
 
 # 1. joy_controller_node
 add_executable(joy_controller_node src/joy_controller_node.cpp)
+target_compile_features(joy_controller_node PRIVATE cxx_std_17)
 ament_target_dependencies(joy_controller_node
   rclcpp
   sensor_msgs
@@ -53,6 +54,8 @@ install(DIRECTORY
 )
 
 if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_wrist_control test/test_wrist_control.py TIMEOUT 120)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
   # comment the line when a copyright and license is added to all source files

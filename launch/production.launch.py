@@ -38,6 +38,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'pump_config', default_value=str(
                 workspace / 'src/catchrobo2026_pump/config/pump.yaml')),
+        DeclareLaunchArgument(
+            'joint_feedback_config', default_value=str(
+                workspace / 'src/nav_director/config/joint_feedback.yaml')),
         DeclareLaunchArgument('debug', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('listen', default_value='0.0.0.0:8080'),
         DeclareLaunchArgument('ipc_socket', default_value='/tmp/catchrobo2026-control.sock'),
@@ -48,7 +51,7 @@ def generate_launch_description():
             Path(get_package_share_directory('catchrobo2026_sequence')) /
             'launch/automatic.launch.py')),
         launch_arguments={name: LaunchConfiguration(name) for name in (
-            'team', 'sequence_file', 'queue_config', 'pump_config',
+            'team', 'sequence_file', 'queue_config', 'pump_config', 'joint_feedback_config',
             'debug', 'listen', 'ipc_socket',
         )}.items(),
     )

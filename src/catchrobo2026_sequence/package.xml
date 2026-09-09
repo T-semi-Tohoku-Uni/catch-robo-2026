@@ -12,11 +12,13 @@
   <depend>rclcpp_action</depend>
   <depend>rcl_interfaces</depend>
   <depend>catchrobo2026_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_director</depend>
+  <depend>tf2</depend>
   <depend>yaml-cpp</depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
-  <exec_depend>nav_director</exec_depend>
   <exec_depend>catchrobo2026_state_machine</exec_depend>
   <exec_depend>catchrobo2026_ui</exec_depend>
   <exec_depend>catchrobo2026_pump</exec_depend>
@@ -24,7 +26,7 @@
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>rclpy</test_depend>
-  <test_depend>geometry_msgs</test_depend>
+  <test_depend>action_msgs</test_depend>
   <test_depend>nav_msgs</test_depend>
   <test_depend>python3-yaml</test_depend>
   <test_depend>catchrobo2026_hand_operated</test_depend>

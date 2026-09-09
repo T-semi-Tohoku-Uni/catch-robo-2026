@@ -10,11 +10,17 @@ from launch_ros.actions import Node
 def generate_launch_description():
     pump_config = os.path.join(
         get_package_share_directory('catchrobo2026_pump'), 'config', 'pump.yaml')
+    joint_feedback_config = os.path.join(
+        get_package_share_directory('nav_director'), 'config', 'joint_feedback.yaml')
     return LaunchDescription([
         DeclareLaunchArgument(
             'pump_config',
             default_value=pump_config,
             description='Pump controller parameter file'
+        ),
+        DeclareLaunchArgument(
+            'joint_feedback_config', default_value=joint_feedback_config,
+            description='Joint feedback tolerance parameter file'
         ),
         # ==================================
         # 自動制御 (アクション通信) 系
@@ -24,6 +30,7 @@ def generate_launch_description():
             package='nav_director',
             executable='path_generator_3d',
             name='path_generator_3d',
+            parameters=[LaunchConfiguration('joint_feedback_config')],
             output='screen'
         ),
         # 2. 経路追従ノード
@@ -31,6 +38,10 @@ def generate_launch_description():
             package='nav_director',
             executable='path_follower_node',
             name='path_follower_node',
+            parameters=[LaunchConfiguration('joint_feedback_config'), {
+                'goal_joint_tolerance_first_rad': 0.05,  # 配列の1要素目 [rad]
+                'goal_joint_tolerance_remaining_rad': 0.05,  # 配列の2〜4要素目 [rad]
+            }],
             output='screen'
         ),
 
@@ -49,6 +60,7 @@ def generate_launch_description():
             package='catchrobo2026_hand_operated',
             executable='joy_controller_node',
             name='joy_controller_node',
+            parameters=[LaunchConfiguration('joint_feedback_config')],
             output='screen'
         ),
         Node(

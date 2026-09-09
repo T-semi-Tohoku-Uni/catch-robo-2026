@@ -1,6 +1,8 @@
 # All bindings are disabled until coordinates and motions are calibrated.
 # Coordinates: [x_mm, y_mm, z_mm, phi_rad], in the route generator's frame.
 version: 1
+# Optional per-route timeout in seconds; omission uses the ROS parameter (default 30).
+# route_timeout_sec: 30.0
 before_initialization_sequence: null
 after_initialization_sequence: null
 start_sequence: null
@@ -110,3 +112,17 @@ bindings:
 #       - wait: '$grip_wait'
 #       - pump: off
 # Bind e.g. bindings.red.pick.'0,1' to red_pick_0_1 after calibration.
+
+# Independent constraints; max_phi_travel counts absolute unwrapped phi changes in radians.
+# Start after the first MOVE to limit only the movement between target_a and target_b.
+# Target poses and the limit below require calibration before use.
+# sequences:
+#   bounded_motion:
+#     steps:
+#       - move: {absolute: target_a}
+#       - sequence_group: {start: true, max_phi_travel: 1.5707963267948966}
+#       - move: {absolute: target_b}
+#       - sequence_group: end
+# Add rotation_group: true to the start options to require one wrist direction as well.
+# sequence_group: start omits both optional constraints.
+# Legacy rotation_group: start/end enables one wrist direction without a phi budget.

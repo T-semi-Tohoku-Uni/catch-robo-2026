@@ -14,17 +14,23 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(action_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/RotationGroupRoute.msg"
+  "msg/PhiTravelInterval.msg"
+  "srv/PlanRotationGroup.srv"
+  "srv/WristControl.srv"
   "srv/InverseKinematics.srv"
   "srv/Waypoint.srv"
   "srv/GenerateRoute.srv"
   "action/FollowRoute.action"
   "action/ExecuteSequence.action"
   "srv/PumpControl.srv"
+  "srv/CheckSuction.srv"
   "srv/EndeffectorControl.srv"
   "srv/StateControl.srv"
-  DEPENDENCIES action_msgs nav_msgs
+  DEPENDENCIES action_msgs nav_msgs geometry_msgs
 )
 
 if(BUILD_TESTING)

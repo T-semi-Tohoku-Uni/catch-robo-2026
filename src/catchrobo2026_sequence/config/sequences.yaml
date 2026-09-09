@@ -20,12 +20,48 @@
 # Step syntax examples (choose positions and wait times for your hardware):
 #   - move: {absolute: lifecycle_pose}
 #   - move: {absolute: [670, -110, 220, 0]}
+#   - waypoint: {absolute: [675, 200, 300, 0]}
+#   - move: {absolute: lifecycle_pose, waypoints: [[675, 200, 300, 0]]}
 #   - move: {relative: [0, 0, '$pick_approach_dz', 0]}
 #   - pump: suction                 # suction / off / release
 #   - endeffector: '$place_endeffector_command'  # 0 or 1; width, not angle
 #   - wait: 0.5                     # seconds
 #   - call: pick_common             # inline another sequence here
+#   - suction_check: {start: {timeout: 2.0}}
+#   - suction_check: wait           # save success or timeout for a later IF
+#   - if: {condition: suction_success, then: [{break: true}]}
+#   - for: {max_iterations: 3, steps: [{wait: 0.5}]}
+#   - fail: "Suction failed"
+# Match each suction start with wait; BREAK exits the innermost bounded FOR.
+# Put conditional branches around complete groups, never inside a preplanned group.
 # Relative moves use the last absolute target as a FIXED anchor, not the last move.
+# waypoint joins the next MOVE into one route, without an arrival wait here.
+# A waypoint-only common sequence can precede a MOVE through call or extends.
+# Consecutive waypoints must end in a normal MOVE before any other operation.
+# PICK/PLACE trailing waypoints carry to the next PICK/PLACE MOVE in the same epoch.
+# Lifecycle actions, reset, failure and cancel discard pending waypoints.
+# move.waypoints accepts pose names, [x,y,z,phi], {absolute: ...}, {relative: ...}.
+# Inline waypoints run before the move target and do not change its fixed anchor.
+# Inline relative entries use the absolute anchor BEFORE this move.
+# Legacy move: {absolute: ..., waypoint: true} remains supported.
+# Sequence groups preplan a span and keep unwrapped wrist commands:
+#   - sequence_group: {start: true, rotation_group: true, max_phi_travel: 1.5707963267948966}
+#   - move: {absolute: place_blue_0_0_above}
+#   - pump: release
+#   - wait: 0.5
+#   - move: {relative: [0, 0, '$place_retreat_dz', 0]}
+#   - sequence_group: end
+# rotation_group: true selects a single physical wrist direction within [-2*pi, 0].
+# Omit rotation_group to allow wrist reversal while retaining unwrapped commands.
+# max_phi_travel bounds SUM(abs(delta(q0 + q4))) in radians, not endpoint yaw difference.
+# Omit max_phi_travel for no total-yaw limit; zero requests constant world-frame phi.
+# The limit spans all moves, including travel from the group start to its first target.
+# The whole group is planned before its first operation; infeasible groups fail.
+# Match start/end after call/extends expansion; no nesting or movement-free groups.
+# A group cannot cross a UI action or initialization hook, or split a waypoint route.
+# Put start before the first waypoint and end after its final normal MOVE.
+# Legacy rotation_group: start/end is equivalent to a group with rotation_group: true.
+# Ending below limits phi travel only from A to B to 30 degrees.
 # Each lifecycle hook needs its own absolute anchor before any relative move.
 # PICK/PLACE pumps use the UI-selected collectors; other collectors receive off.
 # Lifecycle pump steps address all three collectors.
@@ -55,6 +91,11 @@
 # Relative Z offsets are provisional values for hardware tuning.
 version: 1
 
+# Timeout for one followed route, including its waypoints (seconds).
+# Overrides the ROS parameter; debug mode reloads it before each action.
+# The separate sequence_timeout_sec ROS parameter still limits the whole action.
+route_timeout_sec: 30.0
+
 before_initialization_sequence: before_initialization
 after_initialization_sequence: after_initialization
 start_sequence: startup
@@ -62,58 +103,61 @@ end_sequence: ending
 
 values:
   # Provisional width commands; confirm the 0/1 mapping on hardware.
-  pick_endeffector_command: 0
-  place_endeffector_command: 1
+  pick_endeffector_command: 1
+  place_endeffector_command: 0
   # Initial CSV Z values; their physical clearance is not verified.
-  work_above_z: 166.95
-  common_work_above_z: 186.95
-  place_above_z: 294.35
+  work_above_z: 246.95
+  common_work_above_z: 266.95
+  place_above_z: 374.35
   # Each offset is relative to the last absolute pose, not the preceding move.
-  pick_approach_dz: -10
-  pick_retreat_dz: 10
-  place_approach_dz: -10
-  place_retreat_dz: 10
+  pick_approach_dz: -80
+  pick_retreat_dz: 80
+  # Experimental retry settings; confirm pressure_comparison/indices in pump.yaml first.
+  pick_max_attempts: 3
+  pick_suction_timeout_sec: 2.0
+  place_approach_dz: -80
+  place_retreat_dz: 0
 
 poses:
   lifecycle_pose: [670, -110, 220, 0]
   # PICK: UI row 0; CSV ID = row * 6 + column + 1.
-  pick_0_1_above: [375, 138, '$work_above_z', -1.5707963267949]
-  pick_0_2_above: [575, 138, '$work_above_z', -1.5707963267949]
-  pick_0_3_above: [775, 138, '$work_above_z', -1.5707963267949]
-  pick_0_4_above: [975, 138, '$work_above_z', -1.5707963267949]
+  pick_0_1_above: [375, 238, '$work_above_z', -3.14159265358979]
+  pick_0_2_above: [575, 238, '$work_above_z', -3.14159265358979]
+  pick_0_3_above: [775, 238, '$work_above_z', -3.14159265358979]
+  pick_0_4_above: [975, 238, '$work_above_z', -3.14159265358979]
   # PICK: UI row 1; CSV ID = row * 6 + column + 1.
-  pick_1_1_above: [375, 338, '$work_above_z', -1.5707963267949]
-  pick_1_2_above: [575, 338, '$work_above_z', -1.5707963267949]
-  pick_1_3_above: [775, 338, '$work_above_z', -1.5707963267949]
-  pick_1_4_above: [975, 338, '$work_above_z', -1.5707963267949]
+  pick_1_1_above: [375, 438, '$work_above_z', -3.14159265358979]
+  pick_1_2_above: [575, 438, '$work_above_z', -3.14159265358979]
+  pick_1_3_above: [775, 438, '$work_above_z', -3.14159265358979]
+  pick_1_4_above: [975, 438, '$work_above_z', -3.14159265358979]
   # PICK: UI row 2; CSV ID = row * 6 + column + 1.
-  pick_2_1_above: [375, 538, '$work_above_z', -1.5707963267949]
-  pick_2_2_above: [575, 538, '$work_above_z', -1.5707963267949]
-  pick_2_3_above: [775, 538, '$work_above_z', -1.5707963267949]
-  pick_2_4_above: [975, 538, '$work_above_z', -1.5707963267949]
+  pick_2_1_above: [375, 638, '$work_above_z', -3.14159265358979]
+  pick_2_2_above: [575, 638, '$work_above_z', -3.14159265358979]
+  pick_2_3_above: [775, 638, '$work_above_z', -3.14159265358979]
+  pick_2_4_above: [975, 638, '$work_above_z', -3.14159265358979]
   # PICK: UI row 3; CSV ID = row * 6 + column + 1.
-  pick_3_1_above: [375, 457, '$common_work_above_z', 1.5707963267949]
-  pick_3_2_above: [575, 457, '$common_work_above_z', 1.5707963267949]
-  pick_3_3_above: [775, 457, '$common_work_above_z', 1.5707963267949]
-  pick_3_4_above: [975, 457, '$common_work_above_z', 1.5707963267949]
+  pick_3_1_above: [375, 557, '$common_work_above_z', 3.14159265358979]
+  pick_3_2_above: [575, 557, '$common_work_above_z', 3.14159265358979]
+  pick_3_3_above: [775, 557, '$common_work_above_z', 3.14159265358979]
+  pick_3_4_above: [975, 557, '$common_work_above_z', 3.14159265358979]
   # PLACE red: GroupIdx=box+1, RowIdx=box_column+1, ColIdx=2.
-  place_red_0_0_above: [167.28, -71.65, '$place_above_z', -1.5707963267949]
-  place_red_0_1_above: [204.02, -185.65, '$place_above_z', 1.5707963267949]
-  place_red_1_0_above: [167.28, -221.65, '$place_above_z', -1.5707963267949]
-  place_red_1_1_above: [204.02, -335.65, '$place_above_z', 1.5707963267949]
-  place_red_2_0_above: [167.28, -371.65, '$place_above_z', -1.5707963267949]
-  place_red_2_1_above: [204.02, -485.65, '$place_above_z', 1.5707963267949]
-  place_red_3_0_above: [167.28, -521.65, '$place_above_z', -1.5707963267949]
-  place_red_3_1_above: [204.02, -635.65, '$place_above_z', 1.5707963267949]
+  place_red_0_0_above: [114.13, -172, '$place_above_z', -3.14159265358979]
+  place_red_0_1_above: [150.87, -286, '$place_above_z', 3.14159265358979]
+  place_red_1_0_above: [114.13, -322, '$place_above_z', -3.14159265358979]
+  place_red_1_1_above: [150.87, -436, '$place_above_z', 3.14159265358979]
+  place_red_2_0_above: [114.13, -472, '$place_above_z', -3.14159265358979]
+  place_red_2_1_above: [150.87, -586, '$place_above_z', 3.14159265358979]
+  place_red_3_0_above: [114.13, -622, '$place_above_z', -3.14159265358979]
+  place_red_3_1_above: [150.87, -736, '$place_above_z', 3.14159265358979]
   # PLACE blue: GroupIdx=box+1, RowIdx=box_column+1, ColIdx=2.
-  place_blue_0_0_above: [1182.72, -71.65, '$place_above_z', -1.5707963267949]
-  place_blue_0_1_above: [1145.98, -185.65, '$place_above_z', 1.5707963267949]
-  place_blue_1_0_above: [1182.72, -221.65, '$place_above_z', -1.5707963267949]
-  place_blue_1_1_above: [1145.98, -335.65, '$place_above_z', 1.5707963267949]
-  place_blue_2_0_above: [1182.72, -371.65, '$place_above_z', -1.5707963267949]
-  place_blue_2_1_above: [1145.98, -485.65, '$place_above_z', 1.5707963267949]
-  place_blue_3_0_above: [1182.72, -521.65, '$place_above_z', -1.5707963267949]
-  place_blue_3_1_above: [1145.98, -635.65, '$place_above_z', 1.5707963267949]
+  place_blue_0_0_above: [1235.87, -172, '$place_above_z', -3.14159265358979]
+  place_blue_0_1_above: [1199.13, -286, '$place_above_z', 3.14159265358979]
+  place_blue_1_0_above: [1235.87, -322, '$place_above_z', -3.14159265358979]
+  place_blue_1_1_above: [1199.13, -436, '$place_above_z', 3.14159265358979]
+  place_blue_2_0_above: [1235.87, -472, '$place_above_z', -3.14159265358979]
+  place_blue_2_1_above: [1199.13, -586, '$place_above_z', 3.14159265358979]
+  place_blue_3_0_above: [1235.87, -622, '$place_above_z', -3.14159265358979]
+  place_blue_3_1_above: [1199.13, -736, '$place_above_z', 3.14159265358979]
 
 sequences:
   # Initialization and ending share the same target pose.
@@ -125,16 +169,49 @@ sequences:
     # - move: {absolute: lifecycle_pose}
   ending:
     steps:
+      - sequence_group: start
+      - move: {absolute: [675, 200, 300, 0]}
+      - phi_travel: {start: true, limit: 0.5235987755982988}  # 30 degrees, A to B only.
       - move: {absolute: lifecycle_pose}
+      - phi_travel: end
+      - sequence_group: end
   startup:
     steps:
-      - endeffector: '$place_endeffector_command'
+      - endeffector: '$pick_endeffector_command'
   pick_common:
+    # Keep exactly one call active. Comment the experimental call to restore normal PICK.
+    # Swap these two comment markers to enable the experiment; no reindentation needed.
     steps:
-      - pump: suction
-      - move: {relative: [0, 0, '$pick_approach_dz', 0]}
-      - move: {relative: [0, 0, '$pick_retreat_dz', 0]}
+#      - call: pick_without_suction_check
+       - call: pick_with_suction_check
+  pick_without_suction_check:
+    steps:
+      - call: pick_attempt
       - endeffector: '$place_endeffector_command'
+  pick_with_suction_check:
+    steps:
+      - for:
+          max_iterations: '$pick_max_attempts'
+          steps:
+            - suction_check: {start: {timeout: '$pick_suction_timeout_sec'}}
+            - call: pick_attempt
+            - suction_check: wait
+            - if:
+                condition: suction_success
+                then:
+                  - break: true
+      - if:
+          condition: suction_failure
+          then:
+            - fail: "Suction failed after the maximum number of attempts"
+      - endeffector: '$place_endeffector_command'
+  pick_attempt:
+    # Shared motion preserves the current approach, Y correction, suction and retreat order.
+    steps:
+      - move: {relative: [0, 0, '$pick_approach_dz', 0]}
+      - move: {relative: [0, -10, '$pick_approach_dz', 0]}
+      - pump: suction
+      - move: {relative: [0, 0, '$pick_retreat_dz', 0]}
   place_common:
     steps:
       - pump: release
@@ -142,6 +219,12 @@ sequences:
       - move: {relative: [0, 0, '$place_retreat_dz', 0]}
       - pump: off
       - endeffector: '$pick_endeffector_command'
+  place_pre_red_waypoint:
+    steps:
+      - waypoint: {absolute: [150, 0, 360, 3.14159265358979]}
+  place_pre_blue_waypoint:
+    steps:
+      - waypoint: {absolute: [1200, 0, 360, 3.14159265358979]}
 
   pick_0_1:
     steps:
@@ -209,68 +292,100 @@ sequences:
       - call: pick_common
   place_red_0_0:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_red_0_0_above}
       - call: place_common
+      - call: place_pre_red_waypoint
   place_red_0_1:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_red_0_1_above}
       - call: place_common
+      - call: place_pre_red_waypoint
   place_red_1_0:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_red_1_0_above}
       - call: place_common
+      - call: place_pre_red_waypoint
   place_red_1_1:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_red_1_1_above}
       - call: place_common
+      - call: place_pre_red_waypoint
   place_red_2_0:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_red_2_0_above}
       - call: place_common
+      - call: place_pre_red_waypoint
   place_red_2_1:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_red_2_1_above}
       - call: place_common
+      - call: place_pre_red_waypoint
   place_red_3_0:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_red_3_0_above}
       - call: place_common
+      - call: place_pre_red_waypoint
   place_red_3_1:
     steps:
+      - call: place_pre_red_waypoint
       - move: {absolute: place_red_3_1_above}
       - call: place_common
+      - call: place_pre_red_waypoint
   place_blue_0_0:
     steps:
+      - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_0_0_above}
       - call: place_common
+      - call: place_pre_blue_waypoint
   place_blue_0_1:
     steps:
+      - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_0_1_above}
       - call: place_common
+      - call: place_pre_blue_waypoint
   place_blue_1_0:
     steps:
+      - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_1_0_above}
       - call: place_common
+      - call: place_pre_blue_waypoint
   place_blue_1_1:
     steps:
+      - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_1_1_above}
       - call: place_common
+      - call: place_pre_blue_waypoint
   place_blue_2_0:
     steps:
+      - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_2_0_above}
       - call: place_common
+      - call: place_pre_blue_waypoint
   place_blue_2_1:
     steps:
+      - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_2_1_above}
       - call: place_common
+      - call: place_pre_blue_waypoint
   place_blue_3_0:
     steps:
+      - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_3_0_above}
       - call: place_common
+      - call: place_pre_blue_waypoint
   place_blue_3_1:
     steps:
+      - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_3_1_above}
       - call: place_common
+      - call: place_pre_blue_waypoint
 
 bindings:
   red:

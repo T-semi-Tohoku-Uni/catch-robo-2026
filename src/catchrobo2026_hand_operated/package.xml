@@ -22,6 +22,7 @@
   <depend>inverse_kinematics_package</depend>
 
   <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>nav_director</exec_depend>
   <exec_depend>catchrobo2026_pump</exec_depend>
   <exec_depend>catchrobo2026_endeffector</exec_depend>
   <exec_depend>catchrobo2026_state_machine</exec_depend>
@@ -30,6 +31,8 @@
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>rclpy</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

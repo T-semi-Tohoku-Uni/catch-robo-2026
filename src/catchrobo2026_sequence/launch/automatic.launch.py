@@ -23,6 +23,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'pump_config', default_value=package_path(
                 'catchrobo2026_pump', 'config', 'pump.yaml')),
+        DeclareLaunchArgument(
+            'joint_feedback_config', default_value=package_path(
+                'nav_director', 'config', 'joint_feedback.yaml')),
         DeclareLaunchArgument('ipc_socket', default_value='/tmp/catchrobo2026-control.sock'),
         DeclareLaunchArgument('listen', default_value='0.0.0.0:8080'),
         
@@ -46,8 +49,10 @@ def generate_launch_description():
             }.items()),
             
         # Existing Nodes
-        Node(package='nav_director', executable='path_generator_3d', output='screen'),
-        Node(package='nav_director', executable='path_follower_node', output='screen'),
+        Node(package='nav_director', executable='path_generator_3d',
+             parameters=[LaunchConfiguration('joint_feedback_config')], output='screen'),
+        Node(package='nav_director', executable='path_follower_node',
+             parameters=[LaunchConfiguration('joint_feedback_config')], output='screen'),
         Node(package='catchrobo2026_state_machine', executable='state_machine_node',
              name='state_machine_node', output='screen'),
         Node(package='catchrobo2026_pump', executable='pump_controller_node',
@@ -68,6 +73,7 @@ def generate_launch_description():
             package='catchrobo2026_hand_operated', 
             executable='joy_controller_node', 
             name='joy_controller_node', 
+            parameters=[LaunchConfiguration('joint_feedback_config')],
             output='screen'
         ),
         Node(
