@@ -395,18 +395,18 @@ ending:
 
 ### 実験用吸引自動化の切り替え
 
-同梱設定は通常PICKを既定とする。`pick_common.steps` の2行のコメントを入れ替えると実験用へ切り替わる。通常へ戻すときは実験側をコメントアウトし、通常側のコメントを外す。常に片方だけを有効にする。
+現在の同梱設定は吸引判定付きPICKを有効にしている。`pick_common.steps` の2行のコメントを入れ替えると通常PICKへ切り替わる。通常へ戻すときは実験側をコメントアウトし、通常側のコメントを外す。常に片方だけを有効にする。
 
 ```yaml
 pick_common:
   steps:
-    - call: pick_without_suction_check
-    # - call: pick_with_suction_check
+    # - call: pick_without_suction_check
+    - call: pick_with_suction_check
 ```
 
 両方とも共通の `pick_attempt`（下降→Y−10 mm補正→吸引→退避）を使うため、座標・移動順序・ポンプのタイミングは共通。実験側だけがその前後に監視開始／結果待ちを加え、最大3回・各判定2秒で再試行し、成功後に幅を切り替える。回数と期限は `values.pick_max_attempts`／`pick_suction_timeout_sec` で変更する。期限は監視要求から数えるので、移動時間も含む。通常側は圧力受信や判定サービスを必要としない。
 
-実験を有効にする前に [pump.yaml](../catchrobo2026_pump/config/pump.yaml) の `pressure_comparison` と `pressure_indices` を実機に合わせる。`unconfigured` のままなら判定要求は拒否される。`debug:=true` では次のUI動作から再読込し、通常モードでは再起動する。インストール済みYAMLを使う場合は再ビルドも必要。
+実験を有効にする前に [pump.yaml](../catchrobo2026_pump/config/pump.yaml) の `pressure_comparison` と `pressure_indices` を実機に合わせる。`unconfigured` のままなら判定要求は拒否される。同梱ポンプ設定は `pressure_threshold: 300`、`pressure_comparison: ge`（300以上で成功）。ポンプ設定は起動時読込のため、変更後はポンプノードを再起動する。`debug:=true` による次のUI動作前の再読込はシーケンス設定だけに適用され、通常モードではシーケンスノードも再起動する。インストール済みYAMLを使う場合は再ビルドも必要。
 
 ### 吸引判定と条件分岐・繰り返し
 

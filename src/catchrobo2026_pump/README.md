@@ -104,16 +104,19 @@ CAN ID `0x406` の3個のbig-endian 32bit整数は、ブリッジで
 配列が3要素でないものや非ゼロoffset、矛盾するlayoutは無視し、未受信として待ちます。
 クライアントが待機を中止しても、サービス側の監視は成功または期限まで残ります。
 
-| 起動パラメータ | 値 | 意味 |
+| 起動パラメータ | ノード内既定値 | 意味 |
 |---|---|---|
 | `pressure_indices` | `[0, 1, 2]` | L/C/Rに対応する受信配列index。0〜2を重複なく指定 |
 | `pressure_threshold` | `96`（`0x60`） | 比較の閾値、int32の範囲 |
 | `pressure_comparison` | `unconfigured` | `ge`は圧力>=閾値、`le`は圧力<=閾値 |
 | `max_pending_suction_checks` | `8` | 同時に監視する問い合わせ数。設定範囲1〜128 |
 
-比較方向と実機の圧力センサーのL/C/R対応は未確認です。
-`pressure_comparison` が `unconfigured` の間は吸引判定サービスだけを拒否します。
-確認後に `ge` または `le` と対応indexを設定して、ポンプノードを再起動してください。
+同梱の [pump.yaml](config/pump.yaml) は `pressure_threshold: 300`、
+`pressure_comparison: ge` を指定し、300以上を吸着成功とします。
+実機の圧力センサーのL/C/R対応は未確認のため、`pressure_indices` は実機に合わせて確認してください。
+設定を省略して `pressure_comparison` が `unconfigured` の場合は、吸引判定サービスだけを拒否します。
+ポンプ設定は起動時に読み込みます。変更後はポンプノードを再起動してください。
+`debug:=true` によるシーケンス設定の再読込は、ポンプ設定には適用されません。
 
 全機構の吸引を最大2秒待つ例:
 
