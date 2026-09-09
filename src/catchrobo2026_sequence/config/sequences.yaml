@@ -106,16 +106,16 @@ values:
   pick_endeffector_command: 1
   place_endeffector_command: 0
   # Initial CSV Z values; their physical clearance is not verified.
-  work_above_z: 226.95
-  common_work_above_z: 246.95
-  place_above_z: 354.35
+  work_above_z: 246.95
+  common_work_above_z: 266.95
+  place_above_z: 374.35
   # Each offset is relative to the last absolute pose, not the preceding move.
-  pick_approach_dz: -60
-  pick_retreat_dz: 60
+  pick_approach_dz: -80
+  pick_retreat_dz: 80
   # Experimental retry settings; confirm pressure_comparison/indices in pump.yaml first.
   pick_max_attempts: 3
   pick_suction_timeout_sec: 2.0
-  place_approach_dz: -60
+  place_approach_dz: -80
   place_retreat_dz: 0
 
 poses:
@@ -177,7 +177,7 @@ sequences:
       - sequence_group: end
   startup:
     steps:
-      - endeffector: '$place_endeffector_command'
+      - endeffector: '$pick_endeffector_command'
   pick_common:
     # Keep exactly one call active. Comment the experimental call to restore normal PICK.
     # Swap these two comment markers to enable the experiment; no reindentation needed.
