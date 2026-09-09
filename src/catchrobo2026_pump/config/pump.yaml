@@ -7,7 +7,7 @@ pump_controller_node:
 
     # CAN bit level for logical ON; the MCU maps 1 to GPIO Low and 0 to High.
     pump_on_level: false
-    valve_on_level: false
+    valve_on_level: true
 
     # Startup state for every collector: release=-1, off=0, suction=1.
     initial_state: 0
