@@ -114,15 +114,15 @@ TEST(BuiltinSequences, EveryUiPositionIsConfigured)
   }
 }
 
-TEST(BuiltinSequences, StartSequenceSelectsPlaceWidthAndTracksItsConfiguredValue)
+TEST(BuiltinSequences, StartSequenceSelectsPickWidthAndTracksItsConfiguredValue)
 {
   auto yaml = YAML::LoadFile(SEQUENCE_CONFIG_PATH);
   const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   const auto steps = config.compile_start();
   ASSERT_EQ(steps.size(), 1u);
   EXPECT_EQ(steps[0].type, StepType::ENDEFFECTOR);
-  EXPECT_EQ(steps[0].command, value(yaml, "place_endeffector_command"));
-  yaml["values"]["place_endeffector_command"] = 1 - steps[0].command;
+  EXPECT_EQ(steps[0].command, value(yaml, "pick_endeffector_command"));
+  yaml["values"]["pick_endeffector_command"] = 1 - steps[0].command;
   const auto changed = SequenceConfig::from_yaml(YAML::Dump(yaml)).compile_start();
   ASSERT_EQ(changed.size(), 1u);
   EXPECT_EQ(changed[0].type, StepType::ENDEFFECTOR);

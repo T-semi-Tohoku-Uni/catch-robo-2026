@@ -22,6 +22,7 @@ def rig(base_rig):  # noqa: F811
     rig.planned_phi_travel = 0.0
     rig.planned_interval_phi_travel = 0.0
     rig.begin_gate = None
+    rig.end_gate = None
     rig.pump_gate = None
     rig.wrist_mode = 'success'
 
@@ -61,6 +62,8 @@ def rig(base_rig):  # noqa: F811
         rig.wrist_requests.append(copy.deepcopy(request))
         if request.operation == WristControl.Request.BEGIN and rig.begin_gate is not None:
             await rig.begin_gate
+        if request.operation == WristControl.Request.END and rig.end_gate is not None:
+            await rig.end_gate
         response.success = not (
             (rig.wrist_mode == 'reject_begin' and request.operation == WristControl.Request.BEGIN)
             or (rig.wrist_mode == 'reject_end' and request.operation == WristControl.Request.END))
@@ -84,6 +87,8 @@ def rig(base_rig):  # noqa: F811
     yield rig
     if rig.begin_gate is not None and not rig.begin_gate.done():
         rig.begin_gate.set_result(True)
+    if rig.end_gate is not None and not rig.end_gate.done():
+        rig.end_gate.set_result(True)
     if rig.pump_gate is not None and not rig.pump_gate.done():
         rig.pump_gate.set_result(True)
 

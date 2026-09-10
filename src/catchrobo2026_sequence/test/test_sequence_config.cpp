@@ -61,6 +61,59 @@ public:
   std::string path;
 };
 
+TEST(SequenceConfig, ManualStepsExpandAndPreserveAbsoluteRelativeAnchor)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  manual_fragment: {steps: [{manual: {label: 'Adjust pickup position'}}]}
+  s:
+    steps:
+      - move: {absolute: [100, 200, 300, 0]}
+      - call: manual_fragment
+      - move: {relative: [0, 0, 20, 0]}
+      - manual: true
+)", "{'0,1': s}"));
+  const auto steps = config.compile("red", "pick", 0, 1);
+  ASSERT_EQ(steps.size(), 4u);
+  EXPECT_EQ(steps[1].type, StepType::MANUAL);
+  EXPECT_EQ(steps[1].message, "Adjust pickup position");
+  EXPECT_EQ(steps[2].pose, (Pose{100, 200, 320, 0}));
+  EXPECT_EQ(steps[3].type, StepType::MANUAL);
+  EXPECT_TRUE(steps[3].message.empty());
+}
+
+TEST(SequenceConfig, RejectsUnsafeOrMalformedManualSteps)
+{
+  for (const std::string steps : {
+      "{manual: false}", "{manual: 1}", "{manual: []}", "{manual: {}}",
+      "{manual: {label: foo, extra: true}}",
+      "{waypoint: {absolute: [1, 2, 3, 0]}}, {manual: true}, "
+      "{move: {absolute: [4, 5, 6, 0]}}",
+      "{sequence_group: start}, {move: {absolute: [1, 2, 3, 0]}}, "
+      "{manual: true}, {sequence_group: end}",
+      "{suction_check: {start: {timeout: 1}}}, {manual: true}, {suction_check: wait}"})
+  {
+    SCOPED_TRACE(steps);
+    EXPECT_THROW(SequenceConfig::from_yaml(document("{}",
+        "{s: {steps: [" + steps + "]}}", "{'0,1': s}")), ConfigError);
+  }
+}
+
+TEST(SequenceConfig, ManualStepsRunAfterCompletedSuctionCheck)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  s:
+    steps:
+      - suction_check: {start: {timeout: 1}}
+      - suction_check: wait
+      - manual: true
+      - if: {condition: suction_failure, then: [{manual: {label: 'Retry suction'}}]}
+)", "{'0,1': s}"));
+  const auto steps = config.compile("red", "pick", 0, 1);
+  ASSERT_EQ(steps.size(), 5u);
+  EXPECT_EQ(steps[2].type, StepType::MANUAL);
+  EXPECT_EQ(steps[4].type, StepType::MANUAL);
+}
+
 TEST(SequenceConfig, InspectionUsesResolvedPosesAndOnlyEnabledBindings)
 {
   const auto config = SequenceConfig::from_yaml(document(

@@ -32,6 +32,10 @@
 #   - if: {condition: suction_success, then: [{break: true}]}
 #   - for: {max_iterations: 3, steps: [{wait: 0.5}]}
 #   - fail: "Suction failed"
+#   - manual: true
+#   - manual: {label: "Adjust pickup position"}
+# Manual steps wait for UI resume; waiting time does not count toward sequence timeout.
+# Put manual steps outside groups, waypoint chains, and pending suction checks.
 # Match each suction start with wait; BREAK exits the innermost bounded FOR.
 # Put conditional branches around complete groups, never inside a preplanned group.
 # Relative moves use the last absolute target as a FIXED anchor, not the last move.

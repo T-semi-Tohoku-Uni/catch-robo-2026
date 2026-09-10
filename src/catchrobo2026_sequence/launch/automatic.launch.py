@@ -1,8 +1,9 @@
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 
 
@@ -17,6 +18,9 @@ def generate_launch_description():
             'sequence_file', default_value=package_path(
                 'catchrobo2026_sequence', 'config', 'sequences.yaml')),
         DeclareLaunchArgument('debug', default_value='false'),
+        DeclareLaunchArgument('joy_source', default_value='web', choices=['web', 'local']),
+        DeclareLaunchArgument('manual_config', default_value=package_path(
+            'catchrobo2026_ui', 'config', 'manual.yaml')),
         DeclareLaunchArgument(
             'queue_config', default_value=package_path(
                 'catchrobo2026_ui', 'config', 'queue.yaml')),
@@ -46,6 +50,8 @@ def generate_launch_description():
                 'listen': LaunchConfiguration('listen'),
                 'sequence_enabled': 'true',
                 'queue_config': LaunchConfiguration('queue_config'),
+                'manual_config': LaunchConfiguration('manual_config'),
+                'joy_source': LaunchConfiguration('joy_source'),
             }.items()),
             
         # Existing Nodes
@@ -67,6 +73,9 @@ def generate_launch_description():
             package='joy', 
             executable='joy_node', 
             name='joy_node', 
+            condition=IfCondition(PythonExpression([
+                "'", LaunchConfiguration('joy_source'), "' == 'local'"
+            ])),
             output='screen'
         ),
         Node(

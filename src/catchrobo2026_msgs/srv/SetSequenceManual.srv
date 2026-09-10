@@ -1,0 +1,11 @@
+# Apply only to the matching active sequence.
+uint64 control_epoch
+uint64 step_id
+# Request manual control at a safe boundary, or resume the paused sequence.
+bool manual
+# Required for resume or withdrawal: copy the latest feedback token.
+# Use zero before the first manual wait; ignored when manual is true.
+uint64 manual_token
+---
+bool success
+string message

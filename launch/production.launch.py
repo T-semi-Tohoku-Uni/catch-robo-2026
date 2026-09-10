@@ -36,6 +36,10 @@ def generate_launch_description():
             'queue_config', default_value=str(
                 workspace / 'src/catchrobo2026_ui/config/queue.yaml')),
         DeclareLaunchArgument(
+            'manual_config', default_value=str(
+                workspace / 'src/catchrobo2026_ui/config/manual.yaml')),
+        DeclareLaunchArgument('joy_source', default_value='web', choices=['web', 'local']),
+        DeclareLaunchArgument(
             'pump_config', default_value=str(
                 workspace / 'src/catchrobo2026_pump/config/pump.yaml')),
         DeclareLaunchArgument(
@@ -52,7 +56,7 @@ def generate_launch_description():
             'launch/automatic.launch.py')),
         launch_arguments={name: LaunchConfiguration(name) for name in (
             'team', 'sequence_file', 'queue_config', 'pump_config', 'joint_feedback_config',
-            'debug', 'listen', 'ipc_socket',
+            'debug', 'listen', 'ipc_socket', 'manual_config', 'joy_source',
         )}.items(),
     )
     bridge = IncludeLaunchDescription(
