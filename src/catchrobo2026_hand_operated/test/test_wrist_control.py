@@ -122,7 +122,7 @@ class WristControlTest(unittest.TestCase):
     @staticmethod
     def joy(x=0.0, wrist=0.0, initialize=False):
         result = Joy()
-        result.axes = [0.0, x, 0.0, wrist, 0.0, 0.0]
+        result.axes = [x, 0.0, 0.0, wrist, 0.0, 0.0]
         result.buttons = [int(initialize), 0, 0, 0, 0, 0]
         return result
 

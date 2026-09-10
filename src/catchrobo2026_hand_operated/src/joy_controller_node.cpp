@@ -75,7 +75,7 @@ public:
 
         // 4. IK計算とパブリッシュを行うメインループタイマー (例: 20ms = 50Hz)
         publish_timer_ = this->create_wall_timer(
-            20ms, std::bind(&JoyControllerNode::publish_timer_callback, this));
+            2ms, std::bind(&JoyControllerNode::publish_timer_callback, this));
 
         // 目標座標の初期値設定 [mm] および [rad]
         current_pose_[0] = 600.0f;  // X
@@ -374,8 +374,12 @@ private:
         
         // --- 速度として入力値を保持 ---
         if (!rotation_active_) {
-            vel_x_ = msg->axes[1];
-            vel_y_ = msg->axes[0];
+            // 左スティック・十字キーともに横を X、縦を Y に割り当てる。
+            // 十字キーの軸がないコントローラーではスティックのみ使用する。
+            const float dpad_x = msg->axes.size() > 6 ? msg->axes[6] : 0.0f;
+            const float dpad_y = msg->axes.size() > 7 ? msg->axes[7] : 0.0f;
+            vel_x_ = std::clamp(msg->axes[0] + dpad_x, -1.0f, 1.0f);
+            vel_y_ = std::clamp(msg->axes[1] + dpad_y, -1.0f, 1.0f);
             vel_z_ = msg->axes[4];
             vel_phi_ = msg->axes[3];
             if (std::isfinite(vel_x_) && std::isfinite(vel_y_) &&
@@ -488,10 +492,10 @@ private:
         }
 
         // 1. Joy入力による手動介入 (位置の微調整)
-        const float pos_gain = 5.0f;  
-        const float rot_gain = 0.05f; 
+        const float pos_gain = 1.0f;  
+        const float rot_gain = 0.01f; 
 
-        current_pose_[0] += vel_x_ * pos_gain;
+        current_pose_[0] -= vel_x_ * pos_gain;
         current_pose_[1] += vel_y_ * pos_gain;
         current_pose_[2] += vel_z_ * pos_gain;
         current_pose_[3] += vel_phi_ * rot_gain;
