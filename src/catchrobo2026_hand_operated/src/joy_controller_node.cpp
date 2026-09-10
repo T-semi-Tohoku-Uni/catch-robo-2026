@@ -75,7 +75,7 @@ public:
 
         // 4. IK計算とパブリッシュを行うメインループタイマー (例: 20ms = 50Hz)
         publish_timer_ = this->create_wall_timer(
-            100ms, std::bind(&JoyControllerNode::publish_timer_callback, this));
+            20ms, std::bind(&JoyControllerNode::publish_timer_callback, this));
 
         // 目標座標の初期値設定 [mm] および [rad]
         current_pose_[0] = 600.0f;  // X
@@ -495,8 +495,8 @@ private:
         const float pos_gain = 5.0f;  
         const float rot_gain = 0.05f; 
 
-        current_pose_[0] += vel_y_ * pos_gain;
-        current_pose_[1] += vel_x_ * pos_gain;
+        current_pose_[0] += vel_x_ * pos_gain;
+        current_pose_[1] += vel_y_ * pos_gain;
         current_pose_[2] += vel_z_ * pos_gain;
         current_pose_[3] += vel_phi_ * rot_gain;
 
