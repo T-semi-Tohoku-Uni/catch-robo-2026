@@ -45,6 +45,8 @@ ROSの選択順は `ROBOT_ROS_DISTRO`、現在の `ROS_DISTRO`、`/opt/ros` に�
 
 Joy入力は既定で `joy_source:=web` です。USBコントローラーをPCへ接続してWeb UIで機器・割当を選び、送信を有効にします。Raspberry Piの従来のJoy入力を使う場合は `joy_source:=local` とします。完全手動モード・シーケンス内の手動待ち・ジョグ操作の詳細は [UIの手動操作説明](src/catchrobo2026_ui/README.md#pcのusbコントローラーと手動操作) を参照してください。ジョグ距離は [manual.yaml](src/catchrobo2026_ui/config/manual.yaml) の `manual_step_cm` で設定します。
 
+同梱RVizでは、手動操作の指令姿勢を `/target_arm_markers`（Target Arm）、`/current_joints`から求めた実測姿勢を `/current_robot_markers`（Current Arm）で区別して表示します。`automatic.launch.py`だけを起動し実測入力がない場合、Current Armは表示されません。別PCのRVizで見る場合は`ROS_DOMAIN_ID`を合わせ、`ROS_LOCALHOST_ONLY=1`を解除してLAN上のDDS通信を有効にしてください。
+
 手首の実測角の許容幅は [joint_feedback.yaml](src/nav_director/config/joint_feedback.yaml) の `wrist_feedback_tolerance_deg` で指定します。単位は度で、既定の `6.0` は実測値を −366°〜+6°まで受け付けます。有限の `0` 以上 `180` 未満を指定でき、`0` は数値誤差の許容だけを残します。この設定は経路生成・追従・Joyで共有し、指令角の範囲 −360°〜0°、到達判定の許容値、timeoutは変更しません。
 
 設定は起動時に読み込むため、編集後は3ノードを再起動してください。`debug:=true` による動作ごとの再読込は対象外です。本番launchは上記ソースYAML、`automatic.launch.py`・手動launch・navのテストlaunchはインストール済みYAMLを既定で使用します。後者でソース編集を反映する場合は再ビルドするか、`joint_feedback_config:="$PWD/src/nav_director/config/joint_feedback.yaml"` を指定して起動します。
