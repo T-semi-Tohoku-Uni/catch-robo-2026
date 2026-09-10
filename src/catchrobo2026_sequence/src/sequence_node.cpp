@@ -23,6 +23,7 @@
 #include "catchrobo2026_msgs/srv/endeffector_control.hpp"
 #include "catchrobo2026_msgs/srv/generate_route.hpp"
 #include "catchrobo2026_msgs/srv/plan_rotation_group.hpp"
+#include "catchrobo2026_msgs/srv/set_sequence_manual.hpp"
 #include "catchrobo2026_msgs/srv/wrist_control.hpp"
 #include "catchrobo2026_msgs/srv/pump_control.hpp"
 #include "catchrobo2026_sequence/sequence_config.hpp"
@@ -32,6 +33,7 @@ using ExecuteSequence = catchrobo2026_msgs::action::ExecuteSequence;
 using FollowRoute = catchrobo2026_msgs::action::FollowRoute;
 using GenerateRoute = catchrobo2026_msgs::srv::GenerateRoute;
 using PlanRotationGroup = catchrobo2026_msgs::srv::PlanRotationGroup;
+using SetSequenceManual = catchrobo2026_msgs::srv::SetSequenceManual;
 using WristControl = catchrobo2026_msgs::srv::WristControl;
 using PumpControl = catchrobo2026_msgs::srv::PumpControl;
 using CheckSuction = catchrobo2026_msgs::srv::CheckSuction;
@@ -85,6 +87,11 @@ public:
         suction_checker_ = create_client<CheckSuction>("check_suction");
         endeffector_ = create_client<EndeffectorControl>("set_endeffector_state");
         follower_ = rclcpp_action::create_client<FollowRoute>(this, "follow_route");
+        manual_control_ = create_service<SetSequenceManual>("set_sequence_manual",
+            [this](SetSequenceManual::Request::SharedPtr request,
+                   SetSequenceManual::Response::SharedPtr response) {
+                set_manual(*request, *response);
+            });
         server_ = rclcpp_action::create_server<ExecuteSequence>(
             this, "execute_sequence",
             [this](const rclcpp_action::GoalUUID &, std::shared_ptr<const ExecuteSequence::Goal> goal) {
@@ -138,7 +145,7 @@ private:
         WAIT_WRIST_END, WRIST_END,
         WAIT_PHI_TRAVEL, PHI_TRAVEL,
         WAIT_PUMP_SET, PUMP_SET, WAIT_END, END, WAIT_INITIALIZE, INITIALIZE, DELAY,
-        WAIT_SUCTION_SERVICE, SUCTION_RESULT
+        WAIT_SUCTION_SERVICE, SUCTION_RESULT, MANUAL_WAIT
     };
 
     static Clock::time_point after(double seconds)
@@ -150,15 +157,85 @@ private:
             std::chrono::duration<double>(seconds));
     }
 
+    void publish_feedback()
+    {
+        auto feedback = std::make_shared<ExecuteSequence::Feedback>();
+        feedback->step_index = static_cast<uint32_t>(index_);
+        feedback->manual_token = manual_token_;
+        feedback->phase = manual_requested_ && phase_ != Phase::MANUAL_WAIT ?
+            "manual requested: " + phase_name_ : phase_name_;
+        goal_->publish_feedback(feedback);
+        feedback_at_ = Clock::now();
+    }
+
     void transition(Phase phase, const std::string &name, double timeout)
     {
         phase_ = phase;
         phase_name_ = name;
         deadline_ = after(timeout);
-        auto feedback = std::make_shared<ExecuteSequence::Feedback>();
-        feedback->step_index = static_cast<uint32_t>(index_);
-        feedback->phase = name;
-        goal_->publish_feedback(feedback);
+        publish_feedback();
+    }
+
+    void set_manual(const SetSequenceManual::Request &request,
+                    SetSequenceManual::Response &response)
+    {
+        if (!goal_ || stopping_ || faulted_ || goal_->is_canceling() ||
+            request.control_epoch != goal_->get_goal()->control_epoch ||
+            request.step_id != goal_->get_goal()->step_id) {
+            response.message = "no matching active sequence available for manual control";
+            return;
+        }
+        if (request.manual) {
+            manual_requested_ = true;
+            if (!try_enter_manual()) {
+                publish_feedback();
+            }
+            response.message = phase_ == Phase::MANUAL_WAIT ?
+                "manual waiting" : "manual requested; waiting for the active operation";
+        } else {
+            if (request.manual_token != manual_token_) {
+                response.message = "manual token does not match the current wait";
+                return;
+            }
+            manual_requested_ = false;
+            if (phase_ == Phase::MANUAL_WAIT) {
+                sequence_deadline_ += Clock::now() - manual_started_;
+                if (manual_consumes_step_) {
+                    ++index_;
+                }
+                transition(manual_resume_phase_,
+                    manual_resume_phase_ == Phase::DELAY ? "waiting" : "ready",
+                    manual_resume_phase_ == Phase::DELAY ? manual_remaining_sec_ : service_timeout_);
+                response.message = "automatic sequence resumed";
+            } else {
+                publish_feedback();
+                response.message = "manual request cleared";
+            }
+        }
+        response.success = true;
+    }
+
+    bool try_enter_manual()
+    {
+        if (!manual_requested_ || group_needs_release_ || suction_active_ ||
+            service_pending_ || route_pending_ || route_goal_ || wrist_end_pending_ ||
+            (phase_ != Phase::READY && phase_ != Phase::DELAY)) {
+            return false;
+        }
+        manual_resume_phase_ = phase_;
+        manual_consumes_step_ = phase_ == Phase::READY && index_ < steps_.size() &&
+            steps_[index_].type == StepType::MANUAL;
+        manual_remaining_sec_ = phase_ == Phase::DELAY ?
+            std::max(0.0, std::chrono::duration<double>(deadline_ - Clock::now()).count()) : 0.0;
+        manual_started_ = Clock::now();
+        ++manual_token_;
+        std::string label = "manual waiting";
+        if (manual_consumes_step_ && !steps_[index_].message.empty()) {
+            label += ": " + steps_[index_].message;
+        }
+        transition(Phase::MANUAL_WAIT, label, 0.0);
+        RCLCPP_INFO(get_logger(), "Manual control at step %zu: %s", index_, label.c_str());
+        return true;
     }
 
     void start(const std::shared_ptr<SequenceGoal> &goal)
@@ -175,6 +252,9 @@ private:
         staged_waypoints_.clear();
         index_ = 0;
         stopping_ = false;
+        manual_requested_ = false;
+        manual_consumes_step_ = false;
+        manual_token_ = 0;
         stop_message_.clear();
         cancel_sent_ = false;
         group_routes_.clear();
@@ -232,6 +312,7 @@ private:
         clear_pending_waypoints();
         staged_waypoints_.clear();
         stopping_ = true;
+        manual_requested_ = false;
         abandon_suction_check();
         stop_message_ = message;
         stop_deadline_ = after(stop_timeout_);
@@ -386,7 +467,7 @@ private:
         }
         if (goal_->is_canceling()) {
             begin_stop("UI canceled the sequence");
-        } else if (Clock::now() >= sequence_deadline_) {
+        } else if (phase_ != Phase::MANUAL_WAIT && Clock::now() >= sequence_deadline_) {
             begin_stop("sequence timeout");
         }
         if (stopping_) {
@@ -415,6 +496,13 @@ private:
                 }
                 finish(false, stop_message_ + "; stop unconfirmed, sequencer restart required");
             }
+            return;
+        }
+        if (manual_requested_ && Clock::now() - feedback_at_ >= std::chrono::milliseconds(200)) {
+            // Repeat manual status in case the initial feedback preceded goal acceptance.
+            publish_feedback();
+        }
+        if (phase_ == Phase::MANUAL_WAIT || try_enter_manual()) {
             return;
         }
         if (suction_pending_ && Clock::now() >= suction_deadline_) {
@@ -634,6 +722,12 @@ private:
             break;
         case StepType::WAIT:
             transition(Phase::DELAY, "waiting", step.seconds);
+            break;
+        case StepType::MANUAL:
+            manual_requested_ = true;
+            if (!try_enter_manual()) {
+                throw std::logic_error("manual step requires an inactive sequence group and suction check");
+            }
             break;
         case StepType::SEQUENCE_START:
             prepare_sequence_group();
@@ -905,12 +999,18 @@ private:
 
     std::string config_file_, team_, phase_name_, stop_message_;
     bool debug_{false}, stopping_{false}, faulted_{false};
+    bool manual_requested_{false}, manual_consumes_step_{false};
+    uint64_t manual_token_{0};
     bool service_pending_{false}, route_pending_{false}, cancel_sent_{false};
     bool suction_pending_{false}, suction_active_{false};
     uint64_t suction_generation_{0};
     double service_timeout_, route_timeout_, sequence_timeout_, stop_timeout_;
     double active_route_timeout_{0.0};
     Phase phase_{Phase::READY};
+    Phase manual_resume_phase_{Phase::READY};
+    double manual_remaining_sec_{0.0};
+    Clock::time_point manual_started_;
+    Clock::time_point feedback_at_;
     Clock::time_point deadline_, sequence_deadline_, stop_deadline_;
     Clock::time_point suction_deadline_;
     std::unique_ptr<SequenceConfig> config_;
@@ -949,6 +1049,7 @@ private:
     rclcpp::Client<EndeffectorControl>::SharedPtr endeffector_;
     rclcpp_action::Client<FollowRoute>::SharedPtr follower_;
     rclcpp_action::Server<ExecuteSequence>::SharedPtr server_;
+    rclcpp::Service<SetSequenceManual>::SharedPtr manual_control_;
     rclcpp::TimerBase::SharedPtr timer_;
 };
 

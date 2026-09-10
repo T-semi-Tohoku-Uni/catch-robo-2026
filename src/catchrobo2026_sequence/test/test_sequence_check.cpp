@@ -486,4 +486,15 @@ TEST(SequenceCheck, CheckedPrefixConsumptionDoesNotPredictTailAfterSuctionBranch
   EXPECT_FALSE(result.final_joints);
 }
 
+TEST(SequenceCheck, ManualOperationInvalidatesPredictedPose)
+{
+  const auto result = check_sequence_steps({move_to({600, 180, 290, -kPi}),
+      flag(StepType::MANUAL), move_to({610, 180, 290, -kPi})},
+    joints_at({500, 180, 290, -kPi}));
+  EXPECT_EQ(result.status, CheckStatus::UNKNOWN);
+  EXPECT_TRUE(has_code(result, "manual_state_unknown"));
+  EXPECT_EQ(result.route_count, 1u);
+  EXPECT_FALSE(result.final_joints);
+}
+
 }  // namespace

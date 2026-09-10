@@ -132,7 +132,8 @@ class Harness:
         return CancelResponse.ACCEPT
 
     def launch(self, steps, recovery_steps=None, *, sequences=None, poses=None,
-               config_options=None, debug=False, route_timeout_sec=15.0):
+               config_options=None, debug=False, route_timeout_sec=15.0,
+               sequence_timeout_sec=30.0):
         config = yaml.safe_load(
             (Path(__file__).parents[1] / 'config/sequences.example.yaml').read_text())
         config['sequences'] = {**(sequences or {}), 'tested': {'steps': steps}}
@@ -151,7 +152,8 @@ class Harness:
                 '-p', 'team:=red', '-p', f'sequence_file:={filename}',
                 '-p', f'debug:={str(debug).lower()}',
                 '-p', 'service_timeout_sec:=5.0', '-p', f'route_timeout_sec:={route_timeout_sec}',
-                '-p', 'sequence_timeout_sec:=30.0', '-p', 'stop_timeout_sec:=2.0']
+                '-p', f'sequence_timeout_sec:={sequence_timeout_sec}',
+                '-p', 'stop_timeout_sec:=2.0']
         self.children.append(subprocess.Popen(
             args, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True))
         assert self.sequence.wait_for_server(timeout_sec=15)

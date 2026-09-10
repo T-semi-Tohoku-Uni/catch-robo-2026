@@ -118,6 +118,10 @@ public:
         } else if (step.type == StepType::FAIL) {
           fail(index, "explicit_fail", step.message);
           break;
+        } else if (step.type == StepType::MANUAL) {
+          joints_.reset();
+          unknown(index, "manual_state_unknown",
+            "Manual operation can change the robot pose; subsequent motion requires live joints");
         } else if (step.type == StepType::INITIALIZE) {
           if (options.after_initialization_joints) {
             if (!set_joints(*options.after_initialization_joints, index, "initialization_state")) {
@@ -146,9 +150,10 @@ public:
           std::size_t end = index + 1;
           for (; end < steps.size() && steps[end].type != StepType::SEQUENCE_END; ++end) {
             if (steps[end].type == StepType::SEQUENCE_START ||
-              steps[end].type == StepType::INITIALIZE)
+              steps[end].type == StepType::INITIALIZE || steps[end].type == StepType::MANUAL)
             {
-              throw std::runtime_error("Sequence groups cannot nest or contain initialization");
+              throw std::runtime_error(
+                "Sequence groups cannot nest or contain initialization or manual operation");
             }
             if (steps[end].type == StepType::IF_SUCTION || steps[end].type == StepType::JUMP) {
               throw std::runtime_error("Sequence groups cannot contain conditionals or jumps");

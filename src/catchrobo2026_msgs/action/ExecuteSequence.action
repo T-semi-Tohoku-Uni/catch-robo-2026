@@ -20,3 +20,5 @@ string message
 ---
 uint32 step_index
 string phase
+# Increments on each manual wait within this action; initially zero.
+uint64 manual_token

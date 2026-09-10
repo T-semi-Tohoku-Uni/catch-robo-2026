@@ -322,7 +322,7 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
         for (std::size_t i = 0; i < steps.size(); ++i) {
           const YAML::Node step = steps[i];
           const std::string at = where + "[" + std::to_string(i) + "]";
-          keys(step, at, {"move", "waypoint", "call", "pump", "endeffector", "wait",
+          keys(step, at, {"move", "waypoint", "call", "pump", "endeffector", "wait", "manual",
             "rotation_group", "sequence_group", "phi_travel", "suction_check",
             "if", "for", "break", "fail"});
           if (step.size() != 1) {
@@ -535,6 +535,15 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
             }
             raw.step.type = StepType::JUMP;
             raw.loop_break = true;
+          } else if (step["manual"]) {
+            raw.step.type = StepType::MANUAL;
+            const auto manual = step["manual"];
+            if (manual.IsMap()) {
+              keys(manual, at + ".manual", {"label"});
+              raw.step.message = scalar(manual["label"], at + ".manual.label");
+            } else if (scalar(manual, at + ".manual") != "true") {
+              fail(at + ".manual", "expected true or {label: text}");
+            }
           } else if (step["fail"]) {
             raw.step.type = StepType::FAIL;
             raw.step.message = scalar(step["fail"], at + ".fail");
@@ -871,6 +880,10 @@ std::vector<Step> SequenceConfig::compile_sequence(
       next = Flow{};
       next[success] = flow[pending];
       next[failure] = flow[pending];
+    } else if (step.type == StepType::MANUAL) {
+      if (flow[pending].reachable) {
+        fail(at, "manual requires a completed suction_check wait on every path");
+      }
     } else if (step.type == StepType::IF_SUCTION) {
       if (flow[no_result].reachable || flow[pending].reachable) {
         fail(at, "suction condition needs a completed suction_check wait on every path");
@@ -932,6 +945,8 @@ std::vector<Step> SequenceConfig::compile_sequence(
       result[i].type == StepType::PHI_TRAVEL_END) && !in_sequence_group)
     {
       fail(at, "phi_travel must be inside a sequence_group");
+    } else if (result[i].type == StepType::MANUAL && in_sequence_group) {
+      fail(at, "manual cannot run inside a preplanned sequence group");
     } else if (result[i].type == StepType::INITIALIZE && in_sequence_group) {
       fail(at, "initialization cannot run inside a sequence group");
     } else if (result[i].type == StepType::MOVE && in_sequence_group) {
