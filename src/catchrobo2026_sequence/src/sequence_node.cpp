@@ -45,6 +45,24 @@ using catchrobo2026_sequence::SequenceConfig;
 using catchrobo2026_sequence::Step;
 using catchrobo2026_sequence::StepType;
 using catchrobo2026_sequence::MAX_DURATION_SEC;
+using catchrobo2026_sequence::MANUAL_CONTROL_ALL;
+
+static_assert(catchrobo2026_sequence::MANUAL_CONTROL_X ==
+  ExecuteSequence::Feedback::MANUAL_CONTROL_X);
+static_assert(catchrobo2026_sequence::MANUAL_CONTROL_Y ==
+  ExecuteSequence::Feedback::MANUAL_CONTROL_Y);
+static_assert(catchrobo2026_sequence::MANUAL_CONTROL_Z ==
+  ExecuteSequence::Feedback::MANUAL_CONTROL_Z);
+static_assert(catchrobo2026_sequence::MANUAL_CONTROL_PHI ==
+  ExecuteSequence::Feedback::MANUAL_CONTROL_PHI);
+static_assert(catchrobo2026_sequence::MANUAL_CONTROL_INITIALIZE ==
+  ExecuteSequence::Feedback::MANUAL_CONTROL_INITIALIZE);
+static_assert(catchrobo2026_sequence::MANUAL_CONTROL_PUMP ==
+  ExecuteSequence::Feedback::MANUAL_CONTROL_PUMP);
+static_assert(catchrobo2026_sequence::MANUAL_CONTROL_ENDEFFECTOR ==
+  ExecuteSequence::Feedback::MANUAL_CONTROL_ENDEFFECTOR);
+static_assert(catchrobo2026_sequence::MANUAL_CONTROL_ALL ==
+  ExecuteSequence::Feedback::MANUAL_CONTROL_ALL);
 
 namespace {
 volatile sig_atomic_t stop_requested = 0;
@@ -162,6 +180,8 @@ private:
         auto feedback = std::make_shared<ExecuteSequence::Feedback>();
         feedback->step_index = static_cast<uint32_t>(index_);
         feedback->manual_token = manual_token_;
+        feedback->manual_allowed_controls = phase_ == Phase::MANUAL_WAIT ?
+            manual_allowed_controls_ : 0u;
         feedback->phase = manual_requested_ && phase_ != Phase::MANUAL_WAIT ?
             "manual requested: " + phase_name_ : phase_name_;
         goal_->publish_feedback(feedback);
@@ -203,6 +223,7 @@ private:
                 if (manual_consumes_step_) {
                     ++index_;
                 }
+                manual_allowed_controls_ = 0u;
                 transition(manual_resume_phase_,
                     manual_resume_phase_ == Phase::DELAY ? "waiting" : "ready",
                     manual_resume_phase_ == Phase::DELAY ? manual_remaining_sec_ : service_timeout_);
@@ -229,6 +250,8 @@ private:
             std::max(0.0, std::chrono::duration<double>(deadline_ - Clock::now()).count()) : 0.0;
         manual_started_ = Clock::now();
         ++manual_token_;
+        manual_allowed_controls_ = manual_consumes_step_ ?
+            steps_[index_].manual_allowed_controls : MANUAL_CONTROL_ALL;
         std::string label = "manual waiting";
         if (manual_consumes_step_ && !steps_[index_].message.empty()) {
             label += ": " + steps_[index_].message;
@@ -255,6 +278,7 @@ private:
         manual_requested_ = false;
         manual_consumes_step_ = false;
         manual_token_ = 0;
+        manual_allowed_controls_ = 0u;
         stop_message_.clear();
         cancel_sent_ = false;
         group_routes_.clear();
@@ -313,6 +337,7 @@ private:
         staged_waypoints_.clear();
         stopping_ = true;
         manual_requested_ = false;
+        manual_allowed_controls_ = 0u;
         abandon_suction_check();
         stop_message_ = message;
         stop_deadline_ = after(stop_timeout_);
@@ -346,6 +371,7 @@ private:
                     message.c_str());
         goal_.reset();
         steps_.clear();
+        manual_allowed_controls_ = 0u;
     }
 
     void clear_pending_waypoints()
@@ -1001,6 +1027,7 @@ private:
     bool debug_{false}, stopping_{false}, faulted_{false};
     bool manual_requested_{false}, manual_consumes_step_{false};
     uint64_t manual_token_{0};
+    uint32_t manual_allowed_controls_{0u};
     bool service_pending_{false}, route_pending_{false}, cancel_sent_{false};
     bool suction_pending_{false}, suction_active_{false};
     uint64_t suction_generation_{0};

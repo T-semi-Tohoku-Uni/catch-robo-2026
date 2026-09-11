@@ -146,13 +146,15 @@ PICK／PLACEの末尾に経由点が残る場合、その時点では次の通�
 
 ## シーケンス途中の手動操縦
 
-手順へ `- manual: true` または `- manual: {label: '吸引位置を調整'}` を挿入すると、その位置で自動実行を待機し、UIの再開操作まで同じ `ExecuteSequence` を保持します。手動待機中はシーケンス全体のタイムアウトを進めません。後続MOVEは再開後に実際の現在関節角から計画します。相対MOVEの目標は従来どおりYAML内の直近の絶対姿勢を基準にするため、手動移動後の位置からの増分にはなりません。詳しくは [手動遷移の設定](CONFIG.md#手動操縦への遷移) を参照してください。
+手順へ `- manual: true` または `- manual: {label: '吸引位置を調整'}` を挿入すると、その位置で自動実行を待機し、UIの再開操作まで同じ `ExecuteSequence` を保持します。`mode: blacklist`と`disable`、または`mode: whitelist`と`enable`を使うと、待機ごとにWeb JoyのX/Y/Z/phi・初期化・ポンプ・エンドエフェクタ入力と、設定軸のジョグの許可範囲を指定できます。手動待機中はシーケンス全体のタイムアウトを進めません。後続MOVEは再開後に実際の現在関節角から計画します。相対MOVEの目標は従来どおりYAML内の直近の絶対姿勢を基準にするため、手動移動後の位置からの増分にはなりません。詳しくは [手動遷移の設定](CONFIG.md#手動操縦への遷移) を参照してください。
 
 UIボタンからは `set_sequence_manual`（`catchrobo2026_msgs/srv/SetSequenceManual`）へ、対象アクションと一致する `control_epoch`・`step_id` と `manual=true` を送信します。応答の `success=true` は要求の受理です。`ExecuteSequence` feedbackの `phase` が `manual requested: ...` の間は現在のMOVE、グループのEND確認、送信済みサービス応答、実行中の吸引判定の完了を待ちます。`manual waiting` または `manual waiting: ラベル` になってから手動操作を行えます。グループと吸引判定の外にある `wait` は即時に中断し、残り秒数を保存します。
 
 再開は同じ `control_epoch`・`step_id` と最新feedbackの `manual_token` を付けて `manual=false` を送ります。tokenは各アクション開始時に0で、YAML・UIのどちらからでも実際の手動待機に入るたびに1増えます。古い待機の再開要求が遅れて届いても、同じPICK内の次の待機を解放しません。まだ移行待ちなら同じサービスで要求を取り消せます。この場合も最新tokenとの一致が必要で、最初の待機に入る前は0、以後は直近の待機のtokenを使います。`manual=true` ではtokenを使用しません。
 
 手動への移行待ち・手動待機中は、同じ状態・手順番号・tokenのfeedbackを200ms間隔で再送します。先頭の `manual` などで最初のfeedbackがgoal受理応答より先に届いた場合も、UIが待機状態を再取得できます。この再送でtoken、待機時間、タイムアウトを変更することはありません。
+
+feedbackの`manual_allowed_controls`は手動待機中だけ有効で、X=1、Y=2、Z=4、phi=8、初期化=16、ポンプ=32、エンドエフェクタ=64のbit maskを返します。UIから任意に要求した手動待機と従来書式のmanualは全許可127、移行待ちを含む自動実行中は0です。maskは`manual_token`と同じ待機に属し、heartbeatでも変化せず、再開・取消・次actionで持ち越しません。
 
 再開前に手動Joy入力を中立に戻し、UIの微調整移動が完了している必要があります。古い識別子・token、取消中、停止未確認の状態ではサービス要求を拒否します。手動待機中もアクションの取消を受け付け、取消を成功完了へ置き換えません。feedback型も変更しているため、この機能の更新時は関連ノードをすべて再ビルド・再起動してください。
 

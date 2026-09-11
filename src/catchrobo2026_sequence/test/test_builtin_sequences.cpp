@@ -187,17 +187,21 @@ TEST(BuiltinSequences, AllBindingsUseTheConfiguredPumpAndWaypointOrder)
   const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
       const auto steps = config.compile(team, kind, first, second);
-      ASSERT_EQ(steps.size(), kind == "pick" ? 6u : 8u);
+      ASSERT_EQ(steps.size(), kind == "pick" ? 7u : 8u);
       const auto anchor_index = kind == "pick" ? 0u : 1u;
       EXPECT_EQ(steps[0].type, StepType::MOVE);
       EXPECT_EQ(steps[0].waypoint, kind == "place");
       EXPECT_EQ(steps[anchor_index].type, StepType::MOVE);
       EXPECT_FALSE(steps[anchor_index].waypoint);
       if (kind == "pick") {
-        EXPECT_EQ(steps[1].type, StepType::MOVE);
+        EXPECT_EQ(steps[1].type, StepType::PUMP);
+        EXPECT_EQ(steps[1].command, 1);
         EXPECT_EQ(steps[2].type, StepType::MOVE);
-        EXPECT_EQ(steps[3].type, StepType::PUMP);
-        EXPECT_EQ(steps[3].command, 1);
+        EXPECT_EQ(steps[3].type, StepType::MOVE);
+        EXPECT_EQ(steps[4].type, StepType::MANUAL);
+        EXPECT_EQ(steps[4].manual_allowed_controls,
+          MANUAL_CONTROL_ALL & ~MANUAL_CONTROL_X);
+        EXPECT_EQ(steps[5].type, StepType::MOVE);
       } else {
         EXPECT_EQ(steps[2].type, StepType::PUMP);
         EXPECT_EQ(steps[2].command, -1);
@@ -207,9 +211,9 @@ TEST(BuiltinSequences, AllBindingsUseTheConfiguredPumpAndWaypointOrder)
         EXPECT_EQ(steps[7].type, StepType::MOVE);
         EXPECT_TRUE(steps[7].waypoint);
         EXPECT_EQ(steps[7].pose, steps[0].pose);
+        EXPECT_EQ(steps[4].type, StepType::MOVE);
       }
-      EXPECT_EQ(steps[4].type, StepType::MOVE);
-      const auto width_index = kind == "pick" ? 5u : 6u;
+      constexpr std::size_t width_index = 6u;
       EXPECT_EQ(steps[width_index].type, StepType::ENDEFFECTOR);
       EXPECT_EQ(steps[width_index].command,
         value(yaml, kind == "pick" ? "place_endeffector_command" : "pick_endeffector_command"));
@@ -222,15 +226,16 @@ TEST(BuiltinSequences, RelativeMovesUseTheFixedAnchorIncludingPickupYCorrection)
   const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
       const auto steps = config.compile(team, kind, first, second);
-      ASSERT_EQ(steps.size(), kind == "pick" ? 6u : 8u);
+      ASSERT_EQ(steps.size(), kind == "pick" ? 7u : 8u);
       const auto anchor_index = kind == "pick" ? 0u : 1u;
       const auto relative_indices = kind == "pick" ?
-        std::vector<std::size_t>{1, 2, 4} : std::vector<std::size_t>{3, 4};
+        std::vector<std::size_t>{2, 3, 5} : std::vector<std::size_t>{3, 4};
       for (const auto index : relative_indices) {
         SCOPED_TRACE(index);
         auto expected = steps[anchor_index].pose;
-        expected[2] += value(yaml, kind + (index == 4 ? "_retreat_dz" : "_approach_dz"));
-        if (kind == "pick" && index == 2) {
+        const bool retreat = kind == "pick" ? index == 5 : index == 4;
+        expected[2] += value(yaml, kind + (retreat ? "_retreat_dz" : "_approach_dz"));
+        if (kind == "pick" && index == 3) {
           expected[1] -= 10.0;
         }
         EXPECT_EQ(steps[index].type, StepType::MOVE);
@@ -283,10 +288,11 @@ TEST(BuiltinSequences, OneRelativeOffsetEditChangesEveryUseAcrossTheMatchingBind
       const auto after = SequenceConfig::from_yaml(YAML::Dump(yaml));
       for_each_binding([&](const std::string & team, const std::string & kind, int first, int second) {
           auto expected = before.compile(team, kind, first, second);
-          ASSERT_EQ(expected.size(), kind == "pick" ? 6u : 8u);
+          ASSERT_EQ(expected.size(), kind == "pick" ? 7u : 8u);
           if (kind == changed_kind) {
-            const auto indices = phase == "retreat" ? std::vector<std::size_t>{4} :
-              kind == "pick" ? std::vector<std::size_t>{1, 2} : std::vector<std::size_t>{3};
+            const auto indices = phase == "retreat" ?
+              std::vector<std::size_t>{kind == "pick" ? 5u : 4u} :
+              kind == "pick" ? std::vector<std::size_t>{2, 3} : std::vector<std::size_t>{3};
             for (const auto index : indices) {
               expected[index].pose[2] += delta;
             }

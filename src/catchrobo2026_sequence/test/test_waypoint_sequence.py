@@ -146,10 +146,16 @@ class Harness:
         filename = self.directory / 'sequences.yaml'
         self.config_file = filename
         filename.write_text(yaml.safe_dump(config))
+        self.launch_file(filename, debug=debug, route_timeout_sec=route_timeout_sec,
+                         sequence_timeout_sec=sequence_timeout_sec)
+
+    def launch_file(self, filename, *, debug=False, route_timeout_sec=15.0,
+                    sequence_timeout_sec=30.0):
+        self.config_file = Path(filename)
         prefix = Path(get_package_prefix('catchrobo2026_sequence'))
         args = [str(prefix / 'lib/catchrobo2026_sequence/sequence_node'), '--ros-args',
                 '-r', f'__ns:={self.node.get_namespace()}',
-                '-p', 'team:=red', '-p', f'sequence_file:={filename}',
+                '-p', 'team:=red', '-p', f'sequence_file:={self.config_file}',
                 '-p', f'debug:={str(debug).lower()}',
                 '-p', 'service_timeout_sec:=5.0', '-p', f'route_timeout_sec:={route_timeout_sec}',
                 '-p', f'sequence_timeout_sec:={sequence_timeout_sec}',
@@ -174,10 +180,12 @@ class Harness:
         self.until(future.done)
         return future.result()
 
-    def start(self, kind=ExecuteSequence.Goal.END):
+    def start(self, kind=ExecuteSequence.Goal.END, *, row=0, column=0,
+              box=0, box_column=0, collector_mask=7):
         self.step_id += 1
         handle = self.resolve(self.sequence.send_goal_async(ExecuteSequence.Goal(
-            control_epoch=1, step_id=self.step_id, kind=kind, collector_mask=7),
+            control_epoch=1, step_id=self.step_id, kind=kind, row=row, column=column,
+            box=box, box_column=box_column, collector_mask=collector_mask),
             feedback_callback=lambda message: self.feedback.append(copy.deepcopy(message.feedback))))
         assert handle.accepted
         return handle, handle.get_result_async()

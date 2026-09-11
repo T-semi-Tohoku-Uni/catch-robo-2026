@@ -111,7 +111,7 @@ sequences:
 
 ## 手動操縦への遷移
 
-`manual` を置いた位置で自動実行を止め、UIで手動操縦した後に同じシーケンスの続きを再開できる。
+`manual` を置いた位置で自動実行を止め、UIで手動操縦した後に「手動完了・シーケンス再開」を押して続きを再開する。完全自動・半自動・完全手動の全モードに共通で、完了操作まで次の手順には進まない。Web Joyは手動待機に入ると自動で有効化を開始し、中立位置を確認して入力を受け付ける。機器未接続や割当未確認の場合は、画面に理由を表示して待機を続ける。
 
 ```yaml
 sequences:
@@ -120,11 +120,21 @@ sequences:
       - move: {absolute: [600, 200, 300, 0]}
       - manual: {label: '吸引位置を調整'}
       - pump: suction
-      - manual: true
+      - manual: {mode: blacklist, disable: [x]}
+      - manual: {mode: whitelist, enable: [y, z], label: '高さを調整'}
       - move: {relative: [0, 0, 30, 0]}
 ```
 
-`manual: true` はラベルなし、`manual: {label: '説明'}` はUIの進行表示へ説明を付ける。`call`・`extends`・IF/FOR内でも使える。`false` や数値、未知キーは拒否する。同梱の座標・動作列へは自動挿入しないので、操縦を挟みたい位置へ追加する。
+`manual: true` はラベルなし、`manual: {label: '説明'}` はUIの進行表示へ説明を付け、どちらも全操作を許可する。操作を制限する場合は次のいずれかを指定する。
+
+- `mode: blacklist` と `disable: [...]`: 列挙した操作だけを禁止する。空配列なら全操作を許可する。
+- `mode: whitelist` と `enable: [...]`: 列挙した操作だけを許可する。空配列なら全操作を禁止する。
+
+操作名は `x`、`y`、`z`、`phi`、`initialize`、`pump`、`endeffector` の7種。`label`はどちらのモードにも追加できる。対象は手動待機中のWeb Joyとジョグ入力であり、自動MOVEや初期化の軌道をX一定へ拘束する設定ではない。例えばX移動と初期化操作を両方禁止する場合は `disable: [x, initialize]` と書く。停止・取消・「手動完了・シーケンス再開」はこのポリシーに関係なく操作できる。
+
+`call`・`extends`・IF/FOR内でも使える。モードと対応リストの欠落、`disable`と`enable`の矛盾、文字列だけのリスト、未知の操作名・キー、`false`や数値は設定読込時に拒否する。同梱の `pick_attempt` ではY方向の補正後、退避前に `blacklist` でX操作だけを禁止している。ほかの動作にも、操縦を挟みたい位置へ追加できる。
+
+設定変更時は起動時に指定した `sequence_file` を確認する。`sequence.launch.py`／`automatic.launch.py` の既定はinstall内のYAMLなので、sourceの編集後にビルドして配布設定へ反映する。`debug:=false` ではノード再起動が必要で、`debug:=true` では指定ファイルを次の動作開始時に再読込する。手動完了後はJoyのON状態を保持したまま、自動シーケンス中の入力を中立にする。
 
 手動待機時間は `sequence_timeout_sec` の対象外。再開後のMOVEはその時点の現在関節角を使って新しく計画する。一方、上例の相対目標は固定基準 `[600, 200, 300, 0]` ＋ `[0, 0, 30, 0]` であり、手動で変更した現在位置を基準にはしない。オフライン検査は手動操縦後の姿勢を予測できないため、`manual_state_unknown` を示し、それ以後の経路をUNKNOWNとする。
 
