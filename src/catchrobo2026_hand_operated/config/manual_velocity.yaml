@@ -4,3 +4,28 @@
     manual_linear_speed_mm_s: 10.0
     # End-effector yaw speed at full stick input.
     manual_angular_speed_rad_s: 0.1
+
+/**/control_node:
+  ros__parameters:
+    gamepad_fixed_xy_step_mm: 10.0
+    gamepad_fixed_z_step_mm: 10.0
+    gamepad_x_axis: 0
+    gamepad_x_invert: true
+    gamepad_y_axis: 1
+    gamepad_y_invert: true
+    gamepad_z_axis: 3
+    gamepad_z_invert: true
+    gamepad_disabled_axes: [2]
+    gamepad_dpad_left_button: 14
+    gamepad_dpad_right_button: 15
+    gamepad_dpad_up_button: 12
+    gamepad_dpad_down_button: 13
+    gamepad_z_up_button: 4
+    gamepad_z_down_button: 5
+    gamepad_phi_ccw_button: 6
+    gamepad_phi_cw_button: 7
+    gamepad_initialize_button: 2
+    gamepad_pump_button: 3
+    gamepad_endeffector_button: 1
+    gamepad_deadzone: 0.12
+    gamepad_gain: 1.0

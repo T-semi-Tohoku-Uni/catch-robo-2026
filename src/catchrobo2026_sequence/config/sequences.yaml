@@ -197,8 +197,8 @@ sequences:
     # Shared motion preserves the current approach, Y correction, suction and retreat order.
     steps:
       - pump: suction
-      - move: {relative: [0, 0, '$pick_approach_dz', 0]}
-      - move: {relative: [0, -10, '$pick_approach_dz', 0]}
+#      - move: {relative: [0, 0, '$pick_approach_dz', 0]}
+#      - move: {relative: [0, -10, '$pick_approach_dz', 0]}
       - manual: {mode: blacklist, disable: [x]}
       - move: {relative: [0, 0, '$pick_retreat_dz', 0]}
   place_common:

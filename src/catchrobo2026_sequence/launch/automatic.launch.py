@@ -54,6 +54,7 @@ def generate_launch_description():
                 'sequence_enabled': 'true',
                 'queue_config': LaunchConfiguration('queue_config'),
                 'manual_config': LaunchConfiguration('manual_config'),
+                'manual_velocity_config': LaunchConfiguration('manual_velocity_config'),
                 'joy_source': LaunchConfiguration('joy_source'),
             }.items()),
             
