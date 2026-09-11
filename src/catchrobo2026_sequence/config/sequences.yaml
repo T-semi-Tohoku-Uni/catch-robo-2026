@@ -153,8 +153,8 @@ poses:
   place_red_1_1_above: [150.87, -436, '$place_above_z', -3.14159265358979]
   place_red_2_0_above: [117.13, -472, '$place_above_z', -3.14159265358979]
   place_red_2_1_above: [150.87, -586, '$place_above_z', -3.14159265358979]
-  place_red_3_0_above: [117.13, -622, '$place_above_z', -3.14159265358979]
-  place_red_3_1_above: [150.87, -736, '$place_above_z', -3.14159265358979]
+  place_red_3_0_above: [117.13, -622, 350, -3.14159265358979]
+  place_red_3_1_above: [150.87, -736, 350, -3.14159265358979]
   # PLACE blue: GroupIdx=box+1, RowIdx=box_column+1, ColIdx=2.
   place_blue_0_0_above: [1232.87, -172, '$place_above_z', -3.14159265358979]
   place_blue_0_1_above: [1199.13, -286, '$place_above_z', -3.14159265358979]
@@ -162,8 +162,8 @@ poses:
   place_blue_1_1_above: [1199.13, -436, '$place_above_z', -3.14159265358979]
   place_blue_2_0_above: [1232.87, -472, '$place_above_z', -3.14159265358979]
   place_blue_2_1_above: [1199.13, -586, '$place_above_z', -3.14159265358979]
-  place_blue_3_0_above: [1232.87, -622, '$place_above_z', -3.14159265358979]
-  place_blue_3_1_above: [1199.13, -736, '$place_above_z', -3.14159265358979]
+  place_blue_3_0_above: [1232.87, -622, 350, -3.14159265358979]
+  place_blue_3_1_above: [1199.13, -736, 350, -3.14159265358979]
 
 sequences:
   # Initialization and ending share the same target pose.
