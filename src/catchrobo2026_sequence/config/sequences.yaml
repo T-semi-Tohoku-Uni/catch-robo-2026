@@ -160,8 +160,8 @@ poses:
   place_blue_0_1_above: [1199.13, -286, '$place_above_z', 0]
   place_blue_1_0_above: [1232.87, -322, '$place_above_z', -3.14159265358979]
   place_blue_1_1_above: [1199.13, -436, '$place_above_z', 0]
-  place_blue_2_0_above: [1232.87, -472, '$place_above_z', -3.14159265358979]
-  place_blue_2_1_above: [1199.13, -586, '$place_above_z', -3.14159265358979]
+  place_blue_2_0_above: [1232.87, -472, 360, -3.14159265358979]
+  place_blue_2_1_above: [1199.13, -586, 360, -3.14159265358979]
   place_blue_3_0_above: [1232.87, -622, 350, -3.14159265358979]
   place_blue_3_1_above: [1199.13, -736, 350, -3.14159265358979]
 
