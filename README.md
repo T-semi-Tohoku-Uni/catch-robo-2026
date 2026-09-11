@@ -74,7 +74,7 @@ ros2 launch catchrobo2026_sequence automatic.launch.py \
 
 ## 手動操縦とダミー動作確認
 
-手動操縦は次のコマンドで起動します。実機の `current_joints` を供給するCANブリッジ等は別途起動します。`pump_config:=/path/to/pump.yaml` でポンプ設定を差し替えられます。
+手動操縦は次のコマンドで起動します。実機の `current_joints` を供給するCANブリッジ等は別途起動します。`pump_config:=/path/to/pump.yaml` でポンプ設定を差し替えられます。各並進軸の最大速度は `src/catchrobo2026_hand_operated/config/manual_velocity.yaml` の `manual_linear_speed_mm_s`、最大先端回転速度は `manual_angular_speed_rad_s` で設定します。どちらもスティック最大入力時の1秒あたりの速度で、UIとローカルJoyに共通です。別設定は `manual_velocity_config:=/path/to/manual_velocity.yaml` で指定できます。設定はJoyノード起動時に読み込むため、変更後は対象パッケージをビルドしてlaunchを再起動してください。
 
 ```bash
 ros2 launch catchrobo2026_hand_operated handoperated.launch.py

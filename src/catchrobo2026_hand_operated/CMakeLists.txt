@@ -8,6 +8,7 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
@@ -30,6 +31,7 @@ add_executable(joy_controller_node src/joy_controller_node.cpp)
 target_compile_features(joy_controller_node PRIVATE cxx_std_17)
 ament_target_dependencies(joy_controller_node
   rclcpp
+  rcl_interfaces
   sensor_msgs
   std_msgs
   std_srvs
@@ -49,7 +51,7 @@ install(TARGETS
 )
 
 install(DIRECTORY
-  launch
+  launch config
   DESTINATION share/${PROJECT_NAME}
 )
 

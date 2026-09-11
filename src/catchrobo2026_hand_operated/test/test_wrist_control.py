@@ -14,9 +14,12 @@ from ament_index_python.packages import get_package_prefix
 from catchrobo2026_msgs.srv import WristControl
 from geometry_msgs.msg import PoseStamped
 import rclpy
+from rclpy.parameter import Parameter
+from rclpy.parameter_client import AsyncParameterClient
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Float32MultiArray
 from std_srvs.srv import Trigger
+from visualization_msgs.msg import MarkerArray
 
 os.environ['ROS_DOMAIN_ID'] = '232'
 os.environ['ROS_AUTOMATIC_DISCOVERY_RANGE'] = 'LOCALHOST'
@@ -29,14 +32,23 @@ class WristControlTest(unittest.TestCase):
         rclpy.init()
         cls.node = rclpy.create_node('wrist_test', namespace=f'/wrist_test_{os.getpid()}')
         cls.samples = []
+        cls.marker_samples = []
         cls.initializations = []
         cls.node.create_subscription(
             Float32MultiArray, 'target_joint_angles',
             lambda message: cls.samples.append((time.monotonic(), list(message.data))), 100)
+        cls.node.create_subscription(
+            MarkerArray, 'target_arm_markers',
+            lambda message: cls.marker_samples.append((
+                time.monotonic(),
+                [message.markers[-1].points[-1].x,
+                 message.markers[-1].points[-1].y,
+                 message.markers[-1].points[-1].z])), 100)
         cls.pose_pub = cls.node.create_publisher(PoseStamped, 'target_pose', 10)
         cls.joints_pub = cls.node.create_publisher(Float32MultiArray, 'current_joints', 10)
         cls.joy_pub = cls.node.create_publisher(Joy, 'joy', 10)
         cls.client = cls.node.create_client(WristControl, 'wrist_control')
+        cls.parameter_client = AsyncParameterClient(cls.node, 'joy_controller_node')
 
         def initialize(request, response):
             cls.initializations.append(request)
@@ -45,14 +57,17 @@ class WristControlTest(unittest.TestCase):
 
         cls.node.create_service(Trigger, 'request_initialization', initialize)
         cls.log = tempfile.TemporaryFile(mode='w+')
-        executable = (Path(get_package_prefix('catchrobo2026_hand_operated')) /
-                      'lib/catchrobo2026_hand_operated/joy_controller_node')
+        cls.executable = (Path(get_package_prefix('catchrobo2026_hand_operated')) /
+                          'lib/catchrobo2026_hand_operated/joy_controller_node')
         cls.child = subprocess.Popen(
-            [str(executable), '--ros-args', '-r', f'__ns:={cls.node.get_namespace()}',
-             '-p', 'rotation_joint_timeout_sec:=0.3'],
+            [str(cls.executable), '--ros-args', '-r', f'__ns:={cls.node.get_namespace()}',
+             '-p', 'rotation_joint_timeout_sec:=0.3',
+             '-p', 'manual_linear_speed_mm_s:=25.0',
+             '-p', 'manual_angular_speed_rad_s:=0.25'],
             stdout=cls.log, stderr=cls.log, start_new_session=True)
         deadline = time.monotonic() + 10.0
-        while not (cls.client.service_is_ready() and cls.samples and
+        while not (cls.client.service_is_ready() and cls.parameter_client.services_are_ready() and
+                   cls.samples and
                    cls.pose_pub.get_subscription_count() and
                    cls.joints_pub.get_subscription_count() and
                    cls.joy_pub.get_subscription_count()):
@@ -89,6 +104,57 @@ class WristControlTest(unittest.TestCase):
             self.request(WristControl.Request.END)
         self.joy_pub.publish(self.joy())
         self.spin(0.04)
+
+    def test_manual_linear_velocity_and_neutral_hold(self):
+        future = self.parameter_client.get_parameters([
+            'manual_linear_speed_mm_s', 'manual_angular_speed_rad_s'])
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+        self.assertTrue(future.done())
+        self.assertEqual([value.double_value for value in future.result().values], [25.0, 0.25])
+        future = self.parameter_client.set_parameters([
+            Parameter('manual_linear_speed_mm_s', value=10.0)])
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+        self.assertFalse(future.result().results[0].successful)
+
+        self.marker_samples.clear()
+        self.joy_pub.publish(self.joy(x=1.0))
+        self.spin(0.08)
+        moving = [sample for _, sample in self.marker_samples]
+        self.assertGreater(len(moving), 5)
+        deltas = [moving[index + 1][0] - moving[index][0]
+                  for index in range(len(moving) - 1)]
+        # 25 mm/s at a 2 ms control period is 0.05 mm per callback.
+        for delta in deltas[-5:]:
+            self.assertAlmostEqual(delta, -0.00005, delta=2e-6)
+
+        self.marker_samples.clear()
+        self.joy_pub.publish(self.joy())
+        self.spin(0.05)
+        neutral = [sample for _, sample in self.marker_samples]
+        self.assertGreater(len(neutral), 3)
+        for first, second in zip(neutral[-4:], neutral[-3:]):
+            self.assertAlmostEqual(second[0], first[0], delta=1e-7)
+            self.assertAlmostEqual(second[1], first[1], delta=1e-7)
+            self.assertAlmostEqual(second[2], first[2], delta=1e-7)
+
+        self.samples.clear()
+        self.joy_pub.publish(self.joy(wrist=1.0))
+        self.spin(0.05)
+        wrist_motion = [sample for _, sample in self.samples]
+        self.assertGreater(len(wrist_motion), 5)
+        phi = [joints[0] + joints[3] for joints in wrist_motion]
+        for first, second in zip(phi[-6:-1], phi[-5:]):
+            self.assertAlmostEqual(second - first, 0.0005, delta=2e-5)
+
+    def test_invalid_manual_velocity_parameters_are_rejected(self):
+        for index, value in enumerate(['-1.0', '.nan']):
+            result = subprocess.run(
+                [str(self.executable), '--ros-args',
+                 '-r', f'__ns:=/invalid_velocity_{os.getpid()}_{index}',
+                 '-p', f'manual_linear_speed_mm_s:={value}'],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, timeout=5.0, check=False)
+            self.assertNotEqual(result.returncode, 0, result.stdout)
 
     def spin(self, duration):
         deadline = time.monotonic() + duration
@@ -400,11 +466,11 @@ class WristControlTest(unittest.TestCase):
         self.assert_hold(self.joints())
         self.joy_pub.publish(self.joy(wrist=1.0))
         self.spin(0.1)
-        self.assertGreater(self.samples[-1][1][3], -1.9)
+        self.assertGreater(self.samples[-1][1][3], -1.98)
         last_wrist = self.samples[-1][1][3]
         self.assertTrue(self.request(WristControl.Request.END).success)
         self.spin(0.1)
-        self.assertGreater(self.samples[-1][1][3], last_wrist + 0.1)
+        self.assertGreater(self.samples[-1][1][3], last_wrist + 0.015)
 
 
 if __name__ == '__main__':

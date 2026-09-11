@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <limits>
 #include <string>
 #include <vector>
 #include <chrono>
@@ -9,6 +10,7 @@
 #include <stdexcept>
 
 #include "rclcpp/rclcpp.hpp"
+#include "rcl_interfaces/msg/parameter_descriptor.hpp"
 #include "sensor_msgs/msg/joy.hpp"
 #include "std_msgs/msg/float32_multi_array.hpp"
 #include "std_msgs/msg/int32_multi_array.hpp"
@@ -28,6 +30,12 @@
 #include "std_srvs/srv/trigger.hpp"
 
 using namespace std::chrono_literals;
+
+namespace {
+constexpr auto kPublishPeriod = 2ms;
+constexpr float kPublishPeriodSeconds =
+    std::chrono::duration<float>(kPublishPeriod).count();
+}
 
 class JoyControllerNode : public rclcpp::Node {
 public:
@@ -69,13 +77,29 @@ public:
             throw std::invalid_argument("wrist_feedback_tolerance_deg must be finite in [0, 180)");
         }
         wrist_feedback_tolerance_rad_ = wrist_feedback_tolerance_deg * M_PI / 180.0;
+        rcl_interfaces::msg::ParameterDescriptor velocity_descriptor;
+        velocity_descriptor.read_only = true;
+        velocity_descriptor.description = "Maximum manual velocity at full Joy input";
+        manual_linear_speed_mm_s_ = declare_parameter(
+            "manual_linear_speed_mm_s", 50.0, velocity_descriptor);
+        manual_angular_speed_rad_s_ = declare_parameter(
+            "manual_angular_speed_rad_s", 0.5, velocity_descriptor);
+        const double max_manual_rate = std::numeric_limits<float>::max();
+        if (!std::isfinite(manual_linear_speed_mm_s_) || manual_linear_speed_mm_s_ < 0.0 ||
+            manual_linear_speed_mm_s_ > max_manual_rate) {
+            throw std::invalid_argument("manual_linear_speed_mm_s must be finite and nonnegative");
+        }
+        if (!std::isfinite(manual_angular_speed_rad_s_) || manual_angular_speed_rad_s_ < 0.0 ||
+            manual_angular_speed_rad_s_ > max_manual_rate) {
+            throw std::invalid_argument("manual_angular_speed_rad_s must be finite and nonnegative");
+        }
         wrist_service_ = create_service<WristControl>("wrist_control",
             std::bind(&JoyControllerNode::wrist_callback, this,
                 std::placeholders::_1, std::placeholders::_2));
 
-        // 4. IK計算とパブリッシュを行うメインループタイマー (例: 20ms = 50Hz)
+        // Keep the command period explicit so configured speeds have stable units.
         publish_timer_ = this->create_wall_timer(
-            2ms, std::bind(&JoyControllerNode::publish_timer_callback, this));
+            kPublishPeriod, std::bind(&JoyControllerNode::publish_timer_callback, this));
 
         // 目標座標の初期値設定 [mm] および [rad]
         current_pose_[0] = 600.0f;  // X
@@ -492,8 +516,10 @@ private:
         }
 
         // 1. Joy入力による手動介入 (位置の微調整)
-        const float pos_gain = 1.0f;  
-        const float rot_gain = 0.01f; 
+        const float pos_gain = static_cast<float>(manual_linear_speed_mm_s_) *
+            kPublishPeriodSeconds;
+        const float rot_gain = static_cast<float>(manual_angular_speed_rad_s_) *
+            kPublishPeriodSeconds;
 
         current_pose_[0] -= vel_x_ * pos_gain;
         current_pose_[1] += vel_y_ * pos_gain;
@@ -597,6 +623,8 @@ private:
     bool current_joints_valid_ = false;
     double rotation_joint_timeout_sec_ = 1.0;
     double wrist_feedback_tolerance_rad_ = 6.0 * M_PI / 180.0;
+    double manual_linear_speed_mm_s_ = 50.0;
+    double manual_angular_speed_rad_s_ = 0.5;
     bool rotation_active_ = false;
     uint64_t rotation_group_id_ = 0;
     uint64_t highest_group_id_ = 0;

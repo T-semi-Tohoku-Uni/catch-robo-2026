@@ -1,0 +1,6 @@
+/**/joy_controller_node:
+  ros__parameters:
+    # Cartesian speed at full stick input.
+    manual_linear_speed_mm_s: 10.0
+    # End-effector yaw speed at full stick input.
+    manual_angular_speed_rad_s: 0.1

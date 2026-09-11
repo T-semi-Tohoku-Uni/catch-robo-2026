@@ -30,6 +30,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'joint_feedback_config', default_value=package_path(
                 'nav_director', 'config', 'joint_feedback.yaml')),
+        DeclareLaunchArgument(
+            'manual_velocity_config', default_value=package_path(
+                'catchrobo2026_hand_operated', 'config', 'manual_velocity.yaml')),
         DeclareLaunchArgument('ipc_socket', default_value='/tmp/catchrobo2026-control.sock'),
         DeclareLaunchArgument('listen', default_value='0.0.0.0:8080'),
         
@@ -82,7 +85,8 @@ def generate_launch_description():
             package='catchrobo2026_hand_operated', 
             executable='joy_controller_node', 
             name='joy_controller_node', 
-            parameters=[LaunchConfiguration('joint_feedback_config')],
+            parameters=[LaunchConfiguration('joint_feedback_config'),
+                        LaunchConfiguration('manual_velocity_config')],
             output='screen'
         ),
         Node(
