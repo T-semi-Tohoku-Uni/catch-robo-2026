@@ -176,7 +176,7 @@ sequences:
   ending:
     steps:
       - sequence_group: start
-      - move: {absolute: [675, 200, 300, 0]}
+      - move: {absolute: [675, 400, 300, 0]}
       - phi_travel: {start: true, limit: 0.5235987755982988}  # 30 degrees, A to B only.
       - move: {absolute: lifecycle_pose}
       - phi_travel: end
