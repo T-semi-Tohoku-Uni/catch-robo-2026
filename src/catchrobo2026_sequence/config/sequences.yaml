@@ -116,12 +116,12 @@ values:
   common_work_above_z: 266.95
   place_above_z: 374.35
   # Each offset is relative to the last absolute pose, not the preceding move.
-  pick_approach_dz: -80
-  pick_retreat_dz: 80
+  pick_approach_dz: -20
+  pick_retreat_dz: 70
   # Experimental retry settings; confirm pressure_comparison/indices in pump.yaml first.
   pick_max_attempts: 3
   pick_suction_timeout_sec: 2.0
-  place_approach_dz: -80
+  place_approach_dz: -20
   place_retreat_dz: 0
 
 poses:
