@@ -2,6 +2,7 @@
 #define CATCHROBO2026_SEQUENCE__SEQUENCE_CONFIG_HPP_
 
 #include <array>
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -14,6 +15,14 @@ namespace catchrobo2026_sequence
 
 using Pose = std::array<double, 4>;
 inline constexpr double MAX_DURATION_SEC = 86400.0;
+inline constexpr uint32_t MANUAL_CONTROL_X = 1u;
+inline constexpr uint32_t MANUAL_CONTROL_Y = 2u;
+inline constexpr uint32_t MANUAL_CONTROL_Z = 4u;
+inline constexpr uint32_t MANUAL_CONTROL_PHI = 8u;
+inline constexpr uint32_t MANUAL_CONTROL_INITIALIZE = 16u;
+inline constexpr uint32_t MANUAL_CONTROL_PUMP = 32u;
+inline constexpr uint32_t MANUAL_CONTROL_ENDEFFECTOR = 64u;
+inline constexpr uint32_t MANUAL_CONTROL_ALL = 127u;
 
 enum class StepType
 {
@@ -34,6 +43,7 @@ struct Step
   std::size_t jump_index{0};
   bool condition_success{true};
   std::string message;
+  uint32_t manual_allowed_controls{MANUAL_CONTROL_ALL};
   bool rotation_group{false};
   std::optional<double> max_phi_travel;
 };

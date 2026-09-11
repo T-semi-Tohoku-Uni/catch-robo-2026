@@ -22,3 +22,13 @@ uint32 step_index
 string phase
 # Increments on each manual wait within this action; initially zero.
 uint64 manual_token
+# Controls allowed by the current manual gate; zero outside MANUAL_WAIT.
+uint32 MANUAL_CONTROL_X=1
+uint32 MANUAL_CONTROL_Y=2
+uint32 MANUAL_CONTROL_Z=4
+uint32 MANUAL_CONTROL_PHI=8
+uint32 MANUAL_CONTROL_INITIALIZE=16
+uint32 MANUAL_CONTROL_PUMP=32
+uint32 MANUAL_CONTROL_ENDEFFECTOR=64
+uint32 MANUAL_CONTROL_ALL=127
+uint32 manual_allowed_controls

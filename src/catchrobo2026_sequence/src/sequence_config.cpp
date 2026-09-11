@@ -539,10 +539,58 @@ SequenceConfig SequenceConfig::from_yaml(const std::string & yaml)
             raw.step.type = StepType::MANUAL;
             const auto manual = step["manual"];
             if (manual.IsMap()) {
-              keys(manual, at + ".manual", {"label"});
-              raw.step.message = scalar(manual["label"], at + ".manual.label");
+              const auto manual_at = at + ".manual";
+              keys(manual, manual_at, {"mode", "disable", "enable", "label"});
+              if (manual["label"]) {
+                raw.step.message = scalar(manual["label"], manual_at + ".label");
+              }
+              if (!manual["mode"]) {
+                if (manual["disable"] || manual["enable"]) {
+                  fail(manual_at + ".mode", "mode is required with disable or enable");
+                }
+                if (!manual["label"]) {
+                  fail(manual_at, "expected label or a manual control policy");
+                }
+              } else {
+                const auto mode = scalar(manual["mode"], manual_at + ".mode");
+                const bool blacklist = mode == "blacklist";
+                const bool whitelist = mode == "whitelist";
+                if (!blacklist && !whitelist) {
+                  fail(manual_at + ".mode", "expected blacklist or whitelist");
+                }
+                const auto list_key = blacklist ? "disable" : "enable";
+                const auto other_key = blacklist ? "enable" : "disable";
+                if (manual[other_key]) {
+                  fail(manual_at + "." + other_key, "incompatible with mode " + mode);
+                }
+                const auto controls = manual[list_key];
+                if (!controls || !controls.IsSequence()) {
+                  fail(manual_at + "." + list_key, "expected a list");
+                }
+                uint32_t listed = 0u;
+                for (std::size_t j = 0; j < controls.size(); ++j) {
+                  const auto control_at = manual_at + "." + list_key +
+                    "[" + std::to_string(j) + "]";
+                  const auto name = scalar(controls[j], control_at);
+                  uint32_t bit = 0u;
+                  if (name == "x") bit = MANUAL_CONTROL_X;
+                  else if (name == "y") bit = MANUAL_CONTROL_Y;
+                  else if (name == "z") bit = MANUAL_CONTROL_Z;
+                  else if (name == "phi") bit = MANUAL_CONTROL_PHI;
+                  else if (name == "initialize") bit = MANUAL_CONTROL_INITIALIZE;
+                  else if (name == "pump") bit = MANUAL_CONTROL_PUMP;
+                  else if (name == "endeffector") bit = MANUAL_CONTROL_ENDEFFECTOR;
+                  else fail(control_at, "unknown manual control '" + name + "'");
+                  if ((listed & bit) != 0u) {
+                    fail(control_at, "duplicate manual control '" + name + "'");
+                  }
+                  listed |= bit;
+                }
+                raw.step.manual_allowed_controls = blacklist ?
+                  MANUAL_CONTROL_ALL & ~listed : listed;
+              }
             } else if (scalar(manual, at + ".manual") != "true") {
-              fail(at + ".manual", "expected true or {label: text}");
+              fail(at + ".manual", "expected true, {label: text}, or a manual control policy");
             }
           } else if (step["fail"]) {
             raw.step.type = StepType::FAIL;

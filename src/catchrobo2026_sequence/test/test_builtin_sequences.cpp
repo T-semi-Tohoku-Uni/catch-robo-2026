@@ -199,6 +199,8 @@ TEST(BuiltinSequences, AllBindingsUseTheConfiguredPumpAndWaypointOrder)
         EXPECT_EQ(steps[2].type, StepType::MOVE);
         EXPECT_EQ(steps[3].type, StepType::MOVE);
         EXPECT_EQ(steps[4].type, StepType::MANUAL);
+        EXPECT_EQ(steps[4].manual_allowed_controls,
+          MANUAL_CONTROL_ALL & ~MANUAL_CONTROL_X);
         EXPECT_EQ(steps[5].type, StepType::MOVE);
       } else {
         EXPECT_EQ(steps[2].type, StepType::PUMP);

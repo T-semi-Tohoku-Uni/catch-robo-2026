@@ -120,11 +120,19 @@ sequences:
       - move: {absolute: [600, 200, 300, 0]}
       - manual: {label: '吸引位置を調整'}
       - pump: suction
-      - manual: true
+      - manual: {mode: blacklist, disable: [x]}
+      - manual: {mode: whitelist, enable: [y, z], label: '高さを調整'}
       - move: {relative: [0, 0, 30, 0]}
 ```
 
-`manual: true` はラベルなし、`manual: {label: '説明'}` はUIの進行表示へ説明を付ける。`call`・`extends`・IF/FOR内でも使える。`false` や数値、未知キーは拒否する。同梱の `pick_attempt` ではY方向の補正後、退避前に配置している。ほかの動作にも、操縦を挟みたい位置へ追加できる。
+`manual: true` はラベルなし、`manual: {label: '説明'}` はUIの進行表示へ説明を付け、どちらも全操作を許可する。操作を制限する場合は次のいずれかを指定する。
+
+- `mode: blacklist` と `disable: [...]`: 列挙した操作だけを禁止する。空配列なら全操作を許可する。
+- `mode: whitelist` と `enable: [...]`: 列挙した操作だけを許可する。空配列なら全操作を禁止する。
+
+操作名は `x`、`y`、`z`、`phi`、`initialize`、`pump`、`endeffector` の7種。`label`はどちらのモードにも追加できる。対象は手動待機中のWeb Joyとジョグ入力であり、自動MOVEや初期化の軌道をX一定へ拘束する設定ではない。例えばX移動と初期化操作を両方禁止する場合は `disable: [x, initialize]` と書く。停止・取消・「手動完了・シーケンス再開」はこのポリシーに関係なく操作できる。
+
+`call`・`extends`・IF/FOR内でも使える。モードと対応リストの欠落、`disable`と`enable`の矛盾、文字列だけのリスト、未知の操作名・キー、`false`や数値は設定読込時に拒否する。同梱の `pick_attempt` ではY方向の補正後、退避前に `blacklist` でX操作だけを禁止している。ほかの動作にも、操縦を挟みたい位置へ追加できる。
 
 設定変更時は起動時に指定した `sequence_file` を確認する。`sequence.launch.py`／`automatic.launch.py` の既定はinstall内のYAMLなので、sourceの編集後にビルドして配布設定へ反映する。`debug:=false` ではノード再起動が必要で、`debug:=true` では指定ファイルを次の動作開始時に再読込する。手動完了後はJoyのON状態を保持したまま、自動シーケンス中の入力を中立にする。
 

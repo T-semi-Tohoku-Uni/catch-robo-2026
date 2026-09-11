@@ -34,6 +34,8 @@
 #   - fail: "Suction failed"
 #   - manual: true
 #   - manual: {label: "Adjust pickup position"}
+#   - manual: {mode: blacklist, disable: [x]}
+#   - manual: {mode: whitelist, enable: [y, z], label: "Adjust height"}
 # Manual steps wait for UI resume; waiting time does not count toward sequence timeout.
 # Put manual steps outside groups, waypoint chains, and pending suction checks.
 # Match each suction start with wait; BREAK exits the innermost bounded FOR.
@@ -197,7 +199,7 @@ sequences:
       - pump: suction
       - move: {relative: [0, 0, '$pick_approach_dz', 0]}
       - move: {relative: [0, -10, '$pick_approach_dz', 0]}
-      - manual: true
+      - manual: {mode: blacklist, disable: [x]}
       - move: {relative: [0, 0, '$pick_retreat_dz', 0]}
   place_common:
     steps:

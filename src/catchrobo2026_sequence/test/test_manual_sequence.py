@@ -38,7 +38,8 @@ def wait_manual(rig):
 
 
 def test_yaml_manual_stops_before_next_move_and_rejects_stale_control(rig):
-    rig.launch([move([600, 200, 300, 0]), {'manual': {'label': 'Adjust pickup'}},
+    rig.launch([move([600, 200, 300, 0]), {'manual': {
+        'mode': 'whitelist', 'enable': ['y', 'z'], 'label': 'Adjust pickup'}},
                 move([550, 200, 300, 0])])
     _, result = rig.start()
     rig.until(lambda: len(rig.follows) == 1)
@@ -47,14 +48,24 @@ def test_yaml_manual_stops_before_next_move_and_rejects_stale_control(rig):
     assert rig.feedback[-1].phase == 'manual waiting: Adjust pickup'
     assert rig.feedback[-1].step_index == 1
     assert rig.feedback[-1].manual_token == 1
+    assert rig.feedback[-1].manual_allowed_controls == (
+        ExecuteSequence.Feedback.MANUAL_CONTROL_Y |
+        ExecuteSequence.Feedback.MANUAL_CONTROL_Z)
     rig.observe(0.15)
     assert len(rig.plans) == 1 and not result.done()
     assert not set_manual(rig, False, epoch=2).success
     assert not set_manual(rig, False, step_id=rig.step_id + 1).success
     assert waiting(rig)
+    rig.feedback.clear()
     assert set_manual(rig, True).success
+    rig.until(lambda: bool(rig.feedback))
+    assert rig.feedback[-1].manual_allowed_controls == (
+        ExecuteSequence.Feedback.MANUAL_CONTROL_Y |
+        ExecuteSequence.Feedback.MANUAL_CONTROL_Z)
     assert set_manual(rig, False).success
     rig.until(lambda: len(rig.follows) == 2)
+    rig.until(lambda: rig.feedback[-1].phase == 'following route')
+    assert rig.feedback[-1].manual_allowed_controls == 0
     assert len(rig.plans) == 2
     rig.complete_follow(1)
     rig.assert_succeeded(result)
@@ -73,6 +84,9 @@ def test_source_pick_waits_at_manual_gate_before_retreat(rig):
     wait_manual(rig)
     assert rig.feedback[-1].step_index == 4
     assert rig.feedback[-1].manual_token == 1
+    assert rig.feedback[-1].manual_allowed_controls == (
+        ExecuteSequence.Feedback.MANUAL_CONTROL_ALL &
+        ~ExecuteSequence.Feedback.MANUAL_CONTROL_X)
     assert len(rig.plans) == len(rig.follows) == 3
     assert len(rig.pumps) == 1 and not rig.endeffectors
     rig.observe(0.4)
@@ -99,6 +113,8 @@ def test_ui_manual_waits_for_move_completion_without_canceling_it(rig):
     wait_manual(rig)
     assert not rig.pumps and len(rig.follows) == 1
     assert rig.feedback[-1].manual_token == 1
+    assert (rig.feedback[-1].manual_allowed_controls ==
+            ExecuteSequence.Feedback.MANUAL_CONTROL_ALL)
     assert not set_manual(rig, False, token=0).success
     assert waiting(rig) and not rig.pumps
     assert set_manual(rig, False).success
@@ -243,7 +259,10 @@ def test_ui_manual_waits_for_suction_check_completion(suction_rig):
 
 
 def test_delayed_resume_cannot_release_the_next_manual_wait_in_one_pick(rig):
-    rig.launch([{'manual': True}, {'pump': 'off'}, {'manual': True}, {'pump': 'suction'}],
+    rig.launch([{'manual': {'mode': 'blacklist', 'disable': ['x']}},
+                {'pump': 'off'},
+                {'manual': {'mode': 'whitelist', 'enable': ['phi']}},
+                {'pump': 'suction'}, {'wait': 0.3}, {'pump': 'off'}],
                config_options={'bindings': {
                    'red': {'pick': {'0,1': 'tested'}, 'place': {}},
                    'blue': {'pick': {}, 'place': {}},
@@ -258,18 +277,30 @@ def test_delayed_resume_cannot_release_the_next_manual_wait_in_one_pick(rig):
     wait_manual(rig)
     first_token = rig.feedback[-1].manual_token
     assert first_token == 1
+    assert rig.feedback[-1].manual_allowed_controls == (
+        ExecuteSequence.Feedback.MANUAL_CONTROL_ALL &
+        ~ExecuteSequence.Feedback.MANUAL_CONTROL_X)
     delayed_resume = SetSequenceManual.Request(
         control_epoch=1, step_id=rig.step_id, manual=False, manual_token=first_token)
     assert set_manual(rig, False, token=first_token).success
     rig.until(lambda: waiting(rig) and rig.feedback[-1].manual_token == 2)
+    assert (rig.feedback[-1].manual_allowed_controls ==
+            ExecuteSequence.Feedback.MANUAL_CONTROL_PHI)
     assert len(rig.pumps) == 1 and rig.pumps[0].left == 0
     rejected = rig.resolve(rig.manual.call_async(delayed_resume))
     assert not rejected.success and 'token' in rejected.message
     rig.observe(0.15)
     assert waiting(rig) and len(rig.pumps) == 1 and not result.done()
     assert set_manual(rig, False, token=2).success
+    rig.until(lambda: len(rig.pumps) == 2 and rig.feedback[-1].phase == 'waiting')
+    assert set_manual(rig, True).success
+    rig.until(lambda: waiting(rig) and rig.feedback[-1].manual_token == 3)
+    assert (rig.feedback[-1].manual_allowed_controls ==
+            ExecuteSequence.Feedback.MANUAL_CONTROL_ALL)
+    assert set_manual(rig, False, token=3).success
     rig.assert_succeeded(result)
-    assert len(rig.pumps) == 2 and rig.pumps[1].left == 1
+    assert len(rig.pumps) == 3
+    assert rig.pumps[1].left == 1 and rig.pumps[2].left == 0
 
 
 def test_manual_token_changes_for_ui_waits_and_resets_in_the_next_action(rig):
@@ -292,6 +323,7 @@ def test_manual_token_changes_for_ui_waits_and_resets_in_the_next_action(rig):
     _, next_result = rig.start(ExecuteSequence.Goal.START)
     rig.until(lambda: len(rig.follows) == 3)
     rig.until(lambda: rig.feedback[-1].manual_token == 0)
+    assert rig.feedback[-1].manual_allowed_controls == 0
     assert set_manual(rig, True).success
     assert not set_manual(rig, False, token=2).success
     assert set_manual(rig, False, token=0).success
@@ -300,13 +332,18 @@ def test_manual_token_changes_for_ui_waits_and_resets_in_the_next_action(rig):
 
 
 def test_manual_wait_feedback_repeats_without_changing_token_or_advancing(rig):
-    rig.launch([{'manual': {'label': 'Adjust pickup'}}, move([600, 200, 300, 0])])
+    rig.launch([{'manual': {
+        'mode': 'blacklist', 'disable': ['x'], 'label': 'Adjust pickup'}},
+                move([600, 200, 300, 0])])
     _, result = rig.start()
     wait_manual(rig)
     rig.feedback.clear()
     rig.until(lambda: len(rig.feedback) >= 3)
     assert all(feedback.phase == 'manual waiting: Adjust pickup' and
                feedback.manual_token == 1 and feedback.step_index == 0
+               and feedback.manual_allowed_controls ==
+               (ExecuteSequence.Feedback.MANUAL_CONTROL_ALL &
+                ~ExecuteSequence.Feedback.MANUAL_CONTROL_X)
                for feedback in rig.feedback)
     assert not rig.plans and not result.done()
     assert set_manual(rig, False).success
@@ -330,6 +367,7 @@ def test_pending_manual_feedback_repeats_while_the_active_move_continues(rig):
     rig.until(lambda: len(rig.feedback) >= 3)
     assert all(feedback.phase == 'manual requested: following route' and
                feedback.manual_token == 0 and feedback.step_index == 0
+               and feedback.manual_allowed_controls == 0
                for feedback in rig.feedback)
     assert rig.cancel_count == 0 and not rig.pumps and not result.done()
     assert set_manual(rig, False, token=0).success

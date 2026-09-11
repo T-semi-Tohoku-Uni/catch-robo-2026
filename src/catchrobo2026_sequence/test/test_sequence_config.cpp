@@ -79,6 +79,50 @@ TEST(SequenceConfig, ManualStepsExpandAndPreserveAbsoluteRelativeAnchor)
   EXPECT_EQ(steps[2].pose, (Pose{100, 200, 320, 0}));
   EXPECT_EQ(steps[3].type, StepType::MANUAL);
   EXPECT_TRUE(steps[3].message.empty());
+  EXPECT_EQ(steps[1].manual_allowed_controls, MANUAL_CONTROL_ALL);
+  EXPECT_EQ(steps[3].manual_allowed_controls, MANUAL_CONTROL_ALL);
+}
+
+TEST(SequenceConfig, ManualPoliciesPropagateAcrossExtendsCallsAndLoops)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  inherited:
+    steps:
+      - manual: {mode: blacklist, disable: [x, initialize], label: 'No X'}
+  called:
+    steps:
+      - manual: {mode: whitelist, enable: [y, z]}
+  s:
+    extends: inherited
+    steps:
+      - call: called
+      - for: {max_iterations: 2, steps: [{manual: {label: 'All controls'}}]}
+)", "{'0,1': s}"));
+  const auto steps = config.compile("red", "pick", 0, 1);
+  ASSERT_EQ(steps.size(), 4u);
+  EXPECT_EQ(steps[0].message, "No X");
+  EXPECT_EQ(steps[0].manual_allowed_controls,
+    MANUAL_CONTROL_ALL & ~(MANUAL_CONTROL_X | MANUAL_CONTROL_INITIALIZE));
+  EXPECT_EQ(steps[1].manual_allowed_controls, MANUAL_CONTROL_Y | MANUAL_CONTROL_Z);
+  EXPECT_EQ(steps[2].manual_allowed_controls, MANUAL_CONTROL_ALL);
+  EXPECT_EQ(steps[3].manual_allowed_controls, MANUAL_CONTROL_ALL);
+}
+
+TEST(SequenceConfig, ManualPoliciesAllowEmptyLists)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  s:
+    steps:
+      - manual: {mode: blacklist, disable: []}
+      - manual: {mode: whitelist, enable: [], label: 'Observe only'}
+      - manual: {mode: whitelist, enable: [x, y, z, phi, initialize, pump, endeffector]}
+)", "{'0,1': s}"));
+  const auto steps = config.compile("red", "pick", 0, 1);
+  ASSERT_EQ(steps.size(), 3u);
+  EXPECT_EQ(steps[0].manual_allowed_controls, MANUAL_CONTROL_ALL);
+  EXPECT_EQ(steps[1].manual_allowed_controls, 0u);
+  EXPECT_EQ(steps[1].message, "Observe only");
+  EXPECT_EQ(steps[2].manual_allowed_controls, MANUAL_CONTROL_ALL);
 }
 
 TEST(SequenceConfig, RejectsUnsafeOrMalformedManualSteps)
@@ -86,6 +130,15 @@ TEST(SequenceConfig, RejectsUnsafeOrMalformedManualSteps)
   for (const std::string steps : {
       "{manual: false}", "{manual: 1}", "{manual: []}", "{manual: {}}",
       "{manual: {label: foo, extra: true}}",
+      "{manual: {disable: [x]}}", "{manual: {enable: [y]}}",
+      "{manual: {mode: deny, disable: [x]}}",
+      "{manual: {mode: blacklist}}", "{manual: {mode: whitelist}}",
+      "{manual: {mode: blacklist, disable: x}}",
+      "{manual: {mode: whitelist, enable: y}}",
+      "{manual: {mode: blacklist, disable: [x], enable: [y]}}",
+      "{manual: {mode: whitelist, enable: [y], disable: [x]}}",
+      "{manual: {mode: blacklist, disable: [roll]}}",
+      "{manual: {mode: whitelist, enable: [x, x]}}",
       "{waypoint: {absolute: [1, 2, 3, 0]}}, {manual: true}, "
       "{move: {absolute: [4, 5, 6, 0]}}",
       "{sequence_group: start}, {move: {absolute: [1, 2, 3, 0]}}, "
