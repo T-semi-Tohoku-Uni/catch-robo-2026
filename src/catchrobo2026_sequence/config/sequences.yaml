@@ -187,34 +187,17 @@ sequences:
     # Swap these two comment markers to enable the experiment; no reindentation needed.
     steps:
        - call: pick_without_suction_check
-#       - call: pick_with_suction_check
   pick_without_suction_check:
     steps:
       - call: pick_attempt
       - endeffector: '$place_endeffector_command'
-  pick_with_suction_check:
-    steps:
-      - for:
-          max_iterations: '$pick_max_attempts'
-          steps:
-            - suction_check: {start: {timeout: '$pick_suction_timeout_sec'}}
-            - call: pick_attempt
-            - suction_check: wait
-            - if:
-                condition: suction_success
-                then:
-                  - break: true
-      - if:
-          condition: suction_failure
-          then:
-            - fail: "Suction failed after the maximum number of attempts"
-      - endeffector: '$place_endeffector_command'
   pick_attempt:
     # Shared motion preserves the current approach, Y correction, suction and retreat order.
     steps:
+      - pump: suction
       - move: {relative: [0, 0, '$pick_approach_dz', 0]}
       - move: {relative: [0, -10, '$pick_approach_dz', 0]}
-      - pump: suction
+      - manual: true
       - move: {relative: [0, 0, '$pick_retreat_dz', 0]}
   place_common:
     steps:

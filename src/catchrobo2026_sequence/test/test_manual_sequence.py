@@ -1,5 +1,7 @@
 """Verify manual handoff and resumption against gated ROS operations."""
 
+from pathlib import Path
+
 from action_msgs.msg import GoalStatus
 from catchrobo2026_msgs.action import ExecuteSequence
 from catchrobo2026_msgs.srv import SetSequenceManual, WristControl
@@ -57,6 +59,31 @@ def test_yaml_manual_stops_before_next_move_and_rejects_stale_control(rig):
     rig.complete_follow(1)
     rig.assert_succeeded(result)
     assert not set_manual(rig, False).success
+
+
+def test_source_pick_waits_at_manual_gate_before_retreat(rig):
+    config_file = Path(__file__).parents[1] / 'config/sequences.yaml'
+    rig.launch_file(config_file)
+    _, result = rig.start(ExecuteSequence.Goal.PICK, row=0, column=1)
+
+    for index in range(3):
+        rig.until(lambda: len(rig.follows) == index + 1)
+        rig.complete_follow(index)
+
+    wait_manual(rig)
+    assert rig.feedback[-1].step_index == 4
+    assert rig.feedback[-1].manual_token == 1
+    assert len(rig.plans) == len(rig.follows) == 3
+    assert len(rig.pumps) == 1 and not rig.endeffectors
+    rig.observe(0.4)
+    assert len(rig.plans) == len(rig.follows) == 3 and not result.done()
+
+    assert set_manual(rig, False).success
+    rig.until(lambda: len(rig.follows) == 4)
+    assert len(rig.plans) == 4
+    rig.complete_follow(3)
+    rig.assert_succeeded(result)
+    assert len(rig.endeffectors) == 1
 
 
 def test_ui_manual_waits_for_move_completion_without_canceling_it(rig):
