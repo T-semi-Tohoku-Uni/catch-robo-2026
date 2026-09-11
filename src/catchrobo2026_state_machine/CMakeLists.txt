@@ -13,6 +13,7 @@ find_package(std_srvs REQUIRED)
 find_package(catchrobo2026_msgs REQUIRED)
 
 add_executable(state_machine_node src/state_machine_node.cpp)
+target_compile_features(state_machine_node PRIVATE cxx_std_17)
 ament_target_dependencies(state_machine_node
   rclcpp
   std_msgs
@@ -26,6 +27,8 @@ install(TARGETS
 )
 
 if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_state_persistence test/test_state_persistence.py TIMEOUT 30)
   find_package(ament_lint_auto REQUIRED)
   set(ament_cmake_copyright_FOUND TRUE)
   set(ament_cmake_cpplint_FOUND TRUE)

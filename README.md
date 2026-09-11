@@ -41,6 +41,8 @@ ROSの選択順は `ROBOT_ROS_DISTRO`、現在の `ROS_DISTRO`、`/opt/ros` に�
 
 本番launchは既存の `raspi_can.launch.py` でCANブリッジを起動し、activeへの遷移を確認してから自動操縦launch（UI・シーケンサ・経路生成／追従・Joy・機構ノード）を1回起動します。CANブリッジが終了すると全体も終了します。CANの設定は既存どおり `can0`、1 Mbps／CAN FD 2 Mbpsです。設定変更が必要な場合は既存launchの `sudo -n ip ...` が実行できる権限が必要です。
 
+UIのRESETは、同じlaunchプロセスとROS daemonを維持したまま、このlaunchが起動したプロセスを全て停止確認してから起動し直します。本番launchではCANブリッジ、UI control、Web backend、シーケンサ、経路生成／追従、state machine、ポンプ、エンドエフェクタ、Joy controller、可視化、および`joy_source:=local`時のjoy_nodeが対象です。`automatic.launch.py`単独ではCANブリッジ以外が対象です。別のlaunchや手動コマンドで起動したノード、ダミーノードは対象外です。再起動中はRESETの重複要求を拒否し、UIは再接続後にOFF・未初期化・既定キューへ戻ります。state machineの初期化出力値はセッション内のファイルへ保持し、Joyは再起動後の新しい`current_joints`を受信するまで指令を出しません。このためRESET自体はアームの原点復帰を要求しません。
+
 既定のシーケンス・キュー・ポンプ・関節フィードバック・手動操作設定は、このチェックアウトの `src/` 内のYAMLです。`sequence_file:=...`、`queue_config:=...`、`pump_config:=...`、`joint_feedback_config:=...`、`manual_config:=...`、`joy_source:=web|local`、`listen:=...`、`ipc_socket:=...`、`non_blocking:=...` を変更できます。`./run_production.sh --show-args` は引数を表示するだけで実機ノードを起動しません。起動後は `/current_joints` の実測値が届くことを確認してからUIで操作します。CANのactiveは関節角の受信確認ではありません。
 
 Joy入力は既定で `joy_source:=web` です。USBコントローラーをPCへ接続してWeb UIで機器・割当を選び、送信を有効にします。Raspberry Piの従来のJoy入力を使う場合は `joy_source:=local` とします。完全手動モード・シーケンス内の手動待ち・ジョグ操作の詳細は [UIの手動操作説明](src/catchrobo2026_ui/README.md#pcのusbコントローラーと手動操作) を参照してください。ジョグ距離は [manual.yaml](src/catchrobo2026_ui/config/manual.yaml) の `manual_step_cm` で設定します。

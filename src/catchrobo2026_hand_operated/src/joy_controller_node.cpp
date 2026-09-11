@@ -69,6 +69,8 @@ public:
             throw std::invalid_argument("wrist_feedback_tolerance_deg must be finite in [0, 180)");
         }
         wrist_feedback_tolerance_rad_ = wrist_feedback_tolerance_deg * M_PI / 180.0;
+        require_current_joints_on_start_ =
+            declare_parameter("require_current_joints_on_start", false);
         wrist_service_ = create_service<WristControl>("wrist_control",
             std::bind(&JoyControllerNode::wrist_callback, this,
                 std::placeholders::_1, std::placeholders::_2));
@@ -137,6 +139,25 @@ private:
         if (current_joints_valid_) {
             std::copy_n(msg->data.begin(), 4, current_joints_.begin());
             current_joints_time_ = std::chrono::steady_clock::now();
+            if (require_current_joints_on_start_ && !startup_feedback_received_ &&
+                wrist_feedback_in_range(current_joints_[3])) {
+                hold_joints_ = current_joints_;
+                hold_joints_[3] = static_cast<float>(std::clamp(
+                    static_cast<double>(hold_joints_[3]), -2.0 * M_PI, 0.0));
+                float actual_pose[6];
+                kin_.forward_kinematics(actual_pose, hold_joints_.data());
+                if (!std::all_of(std::begin(actual_pose), std::end(actual_pose),
+                        [](float value) { return std::isfinite(value); })) {
+                    RCLCPP_ERROR(get_logger(),
+                        "Initial current_joints cannot produce a finite hold pose");
+                    return;
+                }
+                std::copy(std::begin(actual_pose), std::end(actual_pose), current_pose_);
+                hold_joints_active_ = true;
+                startup_feedback_received_ = true;
+                clear_velocity();
+                RCLCPP_INFO(get_logger(), "Holding initial current_joints after startup");
+            }
         }
     }
 
@@ -483,6 +504,10 @@ private:
             RCLCPP_WARN(this->get_logger(), "Pump request timed out. Press again to retry.");
         }
 
+        if (require_current_joints_on_start_ && !startup_feedback_received_) {
+            return;
+        }
+
         if (hold_joints_active_) {
             std_msgs::msg::Float32MultiArray msg_out;
             msg_out.data.assign(hold_joints_.begin(), hold_joints_.end());
@@ -595,6 +620,8 @@ private:
     std::array<float, 4> current_joints_{};
     std::chrono::steady_clock::time_point current_joints_time_;
     bool current_joints_valid_ = false;
+    bool require_current_joints_on_start_ = false;
+    bool startup_feedback_received_ = false;
     double rotation_joint_timeout_sec_ = 1.0;
     double wrist_feedback_tolerance_rad_ = 6.0 * M_PI / 180.0;
     bool rotation_active_ = false;

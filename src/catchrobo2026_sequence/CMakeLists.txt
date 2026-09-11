@@ -59,6 +59,7 @@ if(BUILD_TESTING)
     TIMEOUT 120)
   ament_add_pytest_test(test_rotation_group_sequence test/test_rotation_group_sequence.py TIMEOUT 120)
   ament_add_pytest_test(test_rotation_group_navigation test/test_rotation_group_navigation.py TIMEOUT 180)
+  ament_add_pytest_test(test_runtime_restart test/test_runtime_restart.py TIMEOUT 30)
   ament_add_pytest_test(test_check_sequence_config test/test_check_sequence_config.py
     TIMEOUT 120
     ENV CHECK_SEQUENCE_CONFIG_EXECUTABLE=$<TARGET_FILE:check_sequence_config>)
