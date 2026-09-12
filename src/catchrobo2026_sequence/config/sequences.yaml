@@ -100,7 +100,7 @@ version: 1
 # Timeout for one followed route, including its waypoints (seconds).
 # Overrides the ROS parameter; debug mode reloads it before each action.
 # The separate sequence_timeout_sec ROS parameter still limits the whole action.
-route_timeout_sec: 30.0
+route_timeout_sec: 180.0
 
 before_initialization_sequence: before_initialization
 after_initialization_sequence: after_initialization
@@ -121,7 +121,7 @@ values:
   # Experimental retry settings; confirm pressure_comparison/indices in pump.yaml first.
   pick_max_attempts: 3
   pick_suction_timeout_sec: 2.0
-  place_approach_dz: -20
+  place_approach_dz: 0
   place_retreat_dz: 0
 
 poses:
@@ -199,22 +199,30 @@ sequences:
       - pump: suction
 #      - move: {relative: [0, 0, '$pick_approach_dz', 0]}
 #      - move: {relative: [0, -10, '$pick_approach_dz', 0]}
-      - manual: {mode: blacklist, disable: [x]}
+#      - manual: {mode: blacklist, disable: [x]}
+      - manual: true
       - move: {relative: [0, 0, '$pick_retreat_dz', 0]}
   place_common:
     steps:
       - move: {relative: [0, 0, '$place_approach_dz', 0]}
-      - manual: {mode: whitelist, enable: [x, y, z]}
+#      - manual: {mode: whitelist, enable: [x, y, z]}
+      - manual: true
       - pump: release
       - move: {relative: [0, 0, '$place_retreat_dz', 0]}
       - pump: off
       - endeffector: '$pick_endeffector_command'
-  place_pre_red_waypoint:
+  place_pre_red_waypoint0:
     steps:
       - waypoint: {absolute: [150, 0, 360, -3.14159265358979]}
-  place_pre_blue_waypoint:
+  place_pre_blue_waypoint0:
     steps:
       - waypoint: {absolute: [1200, 0, 360, -3.14159265358979]}
+  place_pre_red_waypoint1:
+    steps:
+      - waypoint: {absolute: [150, 0, 360, 0]}
+  place_pre_blue_waypoint1:
+    steps:
+      - waypoint: {absolute: [1200, 0, 360, 0]}
 
   pick_0_1:
     steps:
@@ -282,100 +290,100 @@ sequences:
       - call: pick_common
   place_red_0_0:
     steps:
-      - call: place_pre_red_waypoint
+      - call: place_pre_red_waypoint0
       - move: {absolute: place_red_0_0_above}
       - call: place_common
-      - call: place_pre_red_waypoint
+      - call: place_pre_red_waypoint0
   place_red_0_1:
     steps:
-      - call: place_pre_red_waypoint
+      - call: place_pre_red_waypoint1
       - move: {absolute: place_red_0_1_above}
       - call: place_common
-      - call: place_pre_red_waypoint
+      - call: place_pre_red_waypoint1
   place_red_1_0:
     steps:
-      - call: place_pre_red_waypoint
+      - call: place_pre_red_waypoint0
       - move: {absolute: place_red_1_0_above}
       - call: place_common
-      - call: place_pre_red_waypoint
+      - call: place_pre_red_waypoint0
   place_red_1_1:
     steps:
-      - call: place_pre_red_waypoint
+      - call: place_pre_red_waypoint1
       - move: {absolute: place_red_1_1_above}
       - call: place_common
-      - call: place_pre_red_waypoint
+      - call: place_pre_red_waypoint1
   place_red_2_0:
     steps:
-      - call: place_pre_red_waypoint
+      - call: place_pre_red_waypoint0
       - move: {absolute: place_red_2_0_above}
       - call: place_common
-      - call: place_pre_red_waypoint
+      - call: place_pre_red_waypoint0
   place_red_2_1:
     steps:
-      - call: place_pre_red_waypoint
+      - call: place_pre_red_waypoint0
       - move: {absolute: place_red_2_1_above}
       - call: place_common
-      - call: place_pre_red_waypoint
+      - call: place_pre_red_waypoint0
   place_red_3_0:
     steps:
-      - call: place_pre_red_waypoint
+      - call: place_pre_red_waypoint0
       - move: {absolute: place_red_3_0_above}
       - call: place_common
-      - call: place_pre_red_waypoint
+      - call: place_pre_red_waypoint0
   place_red_3_1:
     steps:
-      - call: place_pre_red_waypoint
+      - call: place_pre_red_waypoint0
       - move: {absolute: place_red_3_1_above}
       - call: place_common
-      - call: place_pre_red_waypoint
+      - call: place_pre_red_waypoint0
   place_blue_0_0:
     steps:
-      - call: place_pre_blue_waypoint
+      - call: place_pre_blue_waypoint0
       - move: {absolute: place_blue_0_0_above}
       - call: place_common
-      - call: place_pre_blue_waypoint
+      - call: place_pre_blue_waypoint0
   place_blue_0_1:
     steps:
-      - call: place_pre_blue_waypoint
+      - call: place_pre_blue_waypoint1
       - move: {absolute: place_blue_0_1_above}
       - call: place_common
-      - call: place_pre_blue_waypoint
+      - call: place_pre_blue_waypoint1
   place_blue_1_0:
     steps:
-      - call: place_pre_blue_waypoint
+      - call: place_pre_blue_waypoint0
       - move: {absolute: place_blue_1_0_above}
       - call: place_common
-      - call: place_pre_blue_waypoint
+      - call: place_pre_blue_waypoint0
   place_blue_1_1:
     steps:
-      - call: place_pre_blue_waypoint
+      - call: place_pre_blue_waypoint1
       - move: {absolute: place_blue_1_1_above}
       - call: place_common
-      - call: place_pre_blue_waypoint
+      - call: place_pre_blue_waypoint1
   place_blue_2_0:
     steps:
-      - call: place_pre_blue_waypoint
+      - call: place_pre_blue_waypoint0
       - move: {absolute: place_blue_2_0_above}
       - call: place_common
-      - call: place_pre_blue_waypoint
+      - call: place_pre_blue_waypoint0
   place_blue_2_1:
     steps:
-      - call: place_pre_blue_waypoint
+      - call: place_pre_blue_waypoint0
       - move: {absolute: place_blue_2_1_above}
       - call: place_common
-      - call: place_pre_blue_waypoint
+      - call: place_pre_blue_waypoint0
   place_blue_3_0:
     steps:
-      - call: place_pre_blue_waypoint
+      - call: place_pre_blue_waypoint0
       - move: {absolute: place_blue_3_0_above}
       - call: place_common
-      - call: place_pre_blue_waypoint
+      - call: place_pre_blue_waypoint0
   place_blue_3_1:
     steps:
-      - call: place_pre_blue_waypoint
+      - call: place_pre_blue_waypoint0
       - move: {absolute: place_blue_3_1_above}
       - call: place_common
-      - call: place_pre_blue_waypoint
+      - call: place_pre_blue_waypoint0
 
 bindings:
   red:
