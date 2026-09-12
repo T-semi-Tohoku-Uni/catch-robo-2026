@@ -244,9 +244,9 @@ sequences:
   pick_0_1:
     steps:
       # The initial zero-yaw pose may be at -360 degrees; preplan the half turn.
-      - sequence_group: {start: true, max_phi_travel: 3.141592653589793}
+#      - sequence_group: {start: true, max_phi_travel: 3.141592653589793}
       - move: {absolute: pick_0_1_above}
-      - sequence_group: end
+#      - sequence_group: end
       - call: pick_common
   pick_0_2:
     steps:
