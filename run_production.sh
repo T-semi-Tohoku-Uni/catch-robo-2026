@@ -73,6 +73,8 @@ for robot_package in catchrobo2026_sequence catchrobo2026_ui nav_director nhk202
 done
 
 # マイコンのリセット処理
+sudo ip link set can0 down
+sudo ip link set can0 up type can bitrate 1000000 dbitrate 2000000 fd on
 cansend can0 001#00000001
 
 cd -- "$robot_workspace"

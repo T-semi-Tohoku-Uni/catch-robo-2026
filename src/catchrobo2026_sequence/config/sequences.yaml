@@ -100,7 +100,7 @@ version: 1
 # Timeout for one followed route, including its waypoints (seconds).
 # Overrides the ROS parameter; debug mode reloads it before each action.
 # The separate sequence_timeout_sec ROS parameter still limits the whole action.
-route_timeout_sec: 30.0
+route_timeout_sec: 180.0
 
 before_initialization_sequence: before_initialization
 after_initialization_sequence: after_initialization
