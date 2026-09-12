@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <limits>
 #include <string>
 #include <vector>
 #include <chrono>
@@ -9,6 +10,11 @@
 #include <stdexcept>
 
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp/parameter_map.hpp"
+#include "rcl_interfaces/msg/parameter_descriptor.hpp"
+#include "rcl_yaml_param_parser/parser.h"
+#include "rcutils/allocator.h"
+#include "rcutils/error_handling.h"
 #include "sensor_msgs/msg/joy.hpp"
 #include "std_msgs/msg/float32_multi_array.hpp"
 #include "std_msgs/msg/int32_multi_array.hpp"
@@ -28,6 +34,15 @@
 #include "std_srvs/srv/trigger.hpp"
 
 using namespace std::chrono_literals;
+
+namespace {
+constexpr auto kPublishPeriod = 2ms;
+constexpr float kPublishPeriodSeconds =
+    std::chrono::duration<float>(kPublishPeriod).count();
+constexpr auto kManualVelocityReloadPeriod = 500ms;
+constexpr double kDefaultManualLinearSpeedMmS = 50.0;
+constexpr double kDefaultManualAngularSpeedRadS = 0.5;
+}
 
 class JoyControllerNode : public rclcpp::Node {
 public:
@@ -69,13 +84,39 @@ public:
             throw std::invalid_argument("wrist_feedback_tolerance_deg must be finite in [0, 180)");
         }
         wrist_feedback_tolerance_rad_ = wrist_feedback_tolerance_deg * M_PI / 180.0;
+        rcl_interfaces::msg::ParameterDescriptor velocity_descriptor;
+        velocity_descriptor.read_only = true;
+        velocity_descriptor.description = "Maximum manual velocity at full Joy input";
+        manual_linear_speed_mm_s_ = declare_parameter(
+            "manual_linear_speed_mm_s", kDefaultManualLinearSpeedMmS, velocity_descriptor);
+        manual_angular_speed_rad_s_ = declare_parameter(
+            "manual_angular_speed_rad_s", kDefaultManualAngularSpeedRadS, velocity_descriptor);
+        if (!valid_manual_rate(manual_linear_speed_mm_s_)) {
+            throw std::invalid_argument("manual_linear_speed_mm_s must be finite and nonnegative");
+        }
+        if (!valid_manual_rate(manual_angular_speed_rad_s_)) {
+            throw std::invalid_argument("manual_angular_speed_rad_s must be finite and nonnegative");
+        }
+
+        rcl_interfaces::msg::ParameterDescriptor reload_descriptor;
+        reload_descriptor.read_only = true;
+        reload_descriptor.description = "Reload manual velocity YAML while debug mode is enabled";
+        debug_ = declare_parameter("debug", false, reload_descriptor);
+        manual_velocity_config_ = declare_parameter(
+            "manual_velocity_config", std::string{}, reload_descriptor);
+        if (debug_) {
+            reload_manual_velocity_config();
+            manual_velocity_reload_timer_ = create_wall_timer(
+                kManualVelocityReloadPeriod,
+                std::bind(&JoyControllerNode::manual_velocity_reload_timer_callback, this));
+        }
         wrist_service_ = create_service<WristControl>("wrist_control",
             std::bind(&JoyControllerNode::wrist_callback, this,
                 std::placeholders::_1, std::placeholders::_2));
 
-        // 4. IK計算とパブリッシュを行うメインループタイマー (例: 20ms = 50Hz)
+        // Keep the command period explicit so configured speeds have stable units.
         publish_timer_ = this->create_wall_timer(
-            2ms, std::bind(&JoyControllerNode::publish_timer_callback, this));
+            kPublishPeriod, std::bind(&JoyControllerNode::publish_timer_callback, this));
 
         // 目標座標の初期値設定 [mm] および [rad]
         current_pose_[0] = 600.0f;  // X
@@ -91,6 +132,95 @@ public:
 private:
     using PumpRequest = catchrobo2026_msgs::srv::PumpControl::Request;
     using WristControl = catchrobo2026_msgs::srv::WristControl;
+
+    static bool valid_manual_rate(double value) {
+        return std::isfinite(value) && value >= 0.0 &&
+            value <= static_cast<double>(std::numeric_limits<float>::max());
+    }
+
+    static std::string take_rcutils_error(const std::string &fallback) {
+        const auto error = rcutils_get_error_string();
+        const std::string message = error.str[0] == '\0' ? fallback : error.str;
+        rcutils_reset_error();
+        return message;
+    }
+
+    bool reload_manual_velocity_config() {
+        try {
+            if (manual_velocity_config_.empty()) {
+                throw std::invalid_argument("manual_velocity_config is empty");
+            }
+            const std::string node_fqn = get_fully_qualified_name();
+            std::unique_ptr<rcl_params_t, decltype(&rcl_yaml_node_struct_fini)> yaml_params(
+                rcl_yaml_node_struct_init(rcutils_get_default_allocator()),
+                rcl_yaml_node_struct_fini);
+            if (!yaml_params) {
+                throw std::runtime_error(take_rcutils_error(
+                    "failed to allocate the YAML parameter structure"));
+            }
+            if (!rcl_parse_yaml_file(manual_velocity_config_.c_str(), yaml_params.get())) {
+                throw std::runtime_error(take_rcutils_error(
+                    "failed to parse the manual velocity config"));
+            }
+            const auto parameter_map = rclcpp::parameter_map_from(
+                yaml_params.get(), node_fqn.c_str());
+            const auto node_parameters = parameter_map.find(node_fqn);
+            if (node_parameters == parameter_map.end()) {
+                throw std::invalid_argument(
+                    "manual velocity config has no section matching " + node_fqn);
+            }
+
+            double linear_speed = kDefaultManualLinearSpeedMmS;
+            double angular_speed = kDefaultManualAngularSpeedRadS;
+            for (const auto &parameter : node_parameters->second) {
+                if (parameter.get_name() == "manual_linear_speed_mm_s") {
+                    linear_speed = parameter.as_double();
+                } else if (parameter.get_name() == "manual_angular_speed_rad_s") {
+                    angular_speed = parameter.as_double();
+                } else if (parameter.get_name().rfind("manual_", 0) == 0 &&
+                    parameter.get_name() != "manual_velocity_config") {
+                    throw std::invalid_argument(
+                        "unknown manual velocity parameter: " + parameter.get_name());
+                }
+            }
+            if (!valid_manual_rate(linear_speed)) {
+                throw std::invalid_argument(
+                    "manual_linear_speed_mm_s must be finite and nonnegative");
+            }
+            if (!valid_manual_rate(angular_speed)) {
+                throw std::invalid_argument(
+                    "manual_angular_speed_rad_s must be finite and nonnegative");
+            }
+
+            const bool changed = linear_speed != manual_linear_speed_mm_s_ ||
+                angular_speed != manual_angular_speed_rad_s_;
+            const bool recovered = !manual_velocity_config_valid_;
+            manual_linear_speed_mm_s_ = linear_speed;
+            manual_angular_speed_rad_s_ = angular_speed;
+            manual_velocity_config_valid_ = true;
+            last_manual_velocity_error_.clear();
+            if (changed || recovered) {
+                RCLCPP_INFO(get_logger(),
+                    "Loaded manual velocity config: linear=%.6g mm/s, angular=%.6g rad/s",
+                    linear_speed, angular_speed);
+            }
+            return true;
+        } catch (const std::exception &error) {
+            manual_velocity_config_valid_ = false;
+            if (last_manual_velocity_error_ != error.what()) {
+                RCLCPP_ERROR(get_logger(), "Manual velocity config is invalid: %s", error.what());
+                last_manual_velocity_error_ = error.what();
+            }
+            return false;
+        }
+    }
+
+    void manual_velocity_reload_timer_callback() {
+        if (!rotation_active_ && manual_input_neutral_ && !manual_input_active_ &&
+            !manual_input_blocked_until_neutral_) {
+            reload_manual_velocity_config();
+        }
+    }
 
     static bool wrist_in_range(double angle) {
         return std::isfinite(angle) && angle >= -2.0 * M_PI - 1e-5 && angle <= 1e-5;
@@ -228,6 +358,8 @@ private:
             hold_joints_active_ = true;
             std::copy(std::begin(actual_pose), std::end(actual_pose), current_pose_);
             clear_velocity();
+            manual_input_active_ = false;
+            manual_input_neutral_ = true;
             response->success = true;
             response->message = "Rotation group started; holding bounded start joints";
             return;
@@ -370,7 +502,13 @@ private:
     }
 
     void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg) {
-        if (msg->axes.size() < 6 || msg->buttons.size() < 6) return;
+        if (msg->axes.size() < 6 || msg->buttons.size() < 6) {
+            clear_velocity();
+            manual_input_active_ = false;
+            manual_input_neutral_ = false;
+            manual_input_blocked_until_neutral_ = true;
+            return;
+        }
         
         // --- 速度として入力値を保持 ---
         if (!rotation_active_) {
@@ -378,17 +516,61 @@ private:
             // 十字キーの軸がないコントローラーではスティックのみ使用する。
             const float dpad_x = msg->axes.size() > 6 ? msg->axes[6] : 0.0f;
             const float dpad_y = msg->axes.size() > 7 ? msg->axes[7] : 0.0f;
-            vel_x_ = std::clamp(msg->axes[0] + dpad_x, -1.0f, 1.0f);
-            vel_y_ = std::clamp(msg->axes[1] + dpad_y, -1.0f, 1.0f);
-            vel_z_ = msg->axes[4];
-            vel_phi_ = msg->axes[3];
-            if (std::isfinite(vel_x_) && std::isfinite(vel_y_) &&
-                std::isfinite(vel_z_) && std::isfinite(vel_phi_) &&
-                (vel_x_ != 0.0f || vel_y_ != 0.0f || vel_z_ != 0.0f || vel_phi_ != 0.0f)) {
+            const float next_vel_x = std::clamp(msg->axes[0] + dpad_x, -1.0f, 1.0f);
+            const float next_vel_y = std::clamp(msg->axes[1] + dpad_y, -1.0f, 1.0f);
+            const float next_vel_z = msg->axes[4];
+            const float next_vel_phi = msg->axes[3];
+            const bool button_input = std::any_of(
+                msg->buttons.begin(), msg->buttons.end(),
+                [](int32_t value) { return value != 0; });
+            const bool finite_input = std::isfinite(next_vel_x) &&
+                std::isfinite(next_vel_y) && std::isfinite(next_vel_z) &&
+                std::isfinite(next_vel_phi);
+            const bool neutral_input = finite_input && next_vel_x == 0.0f &&
+                next_vel_y == 0.0f && next_vel_z == 0.0f && next_vel_phi == 0.0f &&
+                !button_input;
+            const bool motion_input = finite_input && (next_vel_x != 0.0f ||
+                next_vel_y != 0.0f || next_vel_z != 0.0f || next_vel_phi != 0.0f);
+            manual_input_neutral_ = neutral_input;
+
+            if (neutral_input) {
+                manual_input_active_ = false;
+                manual_input_blocked_until_neutral_ = false;
+                clear_velocity();
+            } else if (!finite_input) {
+                manual_input_active_ = false;
+                manual_input_blocked_until_neutral_ = true;
+                clear_velocity();
+            } else if (manual_input_blocked_until_neutral_) {
+                clear_velocity();
+            } else {
+                if (!manual_input_active_ && debug_ && !reload_manual_velocity_config()) {
+                    manual_input_blocked_until_neutral_ = true;
+                    clear_velocity();
+                } else {
+                    vel_x_ = next_vel_x;
+                    vel_y_ = next_vel_y;
+                    vel_z_ = next_vel_z;
+                    vel_phi_ = next_vel_phi;
+                    manual_input_active_ = true;
+                }
+            }
+            if (manual_input_active_ && motion_input) {
                 hold_joints_active_ = false;
             } else if (hold_joints_active_) {
                 clear_velocity();
             }
+        } else {
+            manual_input_active_ = false;
+            manual_input_neutral_ = true;
+            clear_velocity();
+        }
+
+        if (!rotation_active_ && manual_input_blocked_until_neutral_) {
+            prev_x_button_ = msg->buttons[0] != 0;
+            prev_o_button_ = msg->buttons[1] != 0;
+            prev_endeffector_button_ = msg->buttons[2] != 0;
+            return;
         }
 
         // Request a shared initialization toggle on each X button press.
@@ -492,8 +674,10 @@ private:
         }
 
         // 1. Joy入力による手動介入 (位置の微調整)
-        const float pos_gain = 1.0f;  
-        const float rot_gain = 0.01f; 
+        const float pos_gain = static_cast<float>(manual_linear_speed_mm_s_) *
+            kPublishPeriodSeconds;
+        const float rot_gain = static_cast<float>(manual_angular_speed_rad_s_) *
+            kPublishPeriodSeconds;
 
         current_pose_[0] -= vel_x_ * pos_gain;
         current_pose_[1] += vel_y_ * pos_gain;
@@ -588,6 +772,7 @@ private:
     rclcpp::Service<WristControl>::SharedPtr wrist_service_;
     
     rclcpp::TimerBase::SharedPtr publish_timer_; 
+    rclcpp::TimerBase::SharedPtr manual_velocity_reload_timer_;
     
     robot_kinematics kin_; // 運動学クラスのインスタンス
 
@@ -597,6 +782,15 @@ private:
     bool current_joints_valid_ = false;
     double rotation_joint_timeout_sec_ = 1.0;
     double wrist_feedback_tolerance_rad_ = 6.0 * M_PI / 180.0;
+    double manual_linear_speed_mm_s_ = kDefaultManualLinearSpeedMmS;
+    double manual_angular_speed_rad_s_ = kDefaultManualAngularSpeedRadS;
+    bool debug_ = false;
+    std::string manual_velocity_config_;
+    bool manual_velocity_config_valid_ = true;
+    bool manual_input_neutral_ = true;
+    bool manual_input_active_ = false;
+    bool manual_input_blocked_until_neutral_ = false;
+    std::string last_manual_velocity_error_;
     bool rotation_active_ = false;
     uint64_t rotation_group_id_ = 0;
     uint64_t highest_group_id_ = 0;

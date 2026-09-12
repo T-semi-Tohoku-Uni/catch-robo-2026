@@ -45,6 +45,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'joint_feedback_config', default_value=str(
                 workspace / 'src/nav_director/config/joint_feedback.yaml')),
+        DeclareLaunchArgument(
+            'manual_velocity_config', default_value=str(
+                workspace / 'src/catchrobo2026_hand_operated/config/manual_velocity.yaml')),
         DeclareLaunchArgument('debug', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('listen', default_value='0.0.0.0:8080'),
         DeclareLaunchArgument('ipc_socket', default_value='/tmp/catchrobo2026-control.sock'),
@@ -57,6 +60,7 @@ def generate_launch_description():
         launch_arguments={name: LaunchConfiguration(name) for name in (
             'team', 'sequence_file', 'queue_config', 'pump_config', 'joint_feedback_config',
             'debug', 'listen', 'ipc_socket', 'manual_config', 'joy_source',
+            'manual_velocity_config',
         )}.items(),
     )
     bridge = IncludeLaunchDescription(

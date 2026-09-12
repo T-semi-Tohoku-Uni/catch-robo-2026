@@ -41,7 +41,7 @@ ROSの選択順は `ROBOT_ROS_DISTRO`、現在の `ROS_DISTRO`、`/opt/ros` に�
 
 本番launchは既存の `raspi_can.launch.py` でCANブリッジを起動し、activeへの遷移を確認してから自動操縦launch（UI・シーケンサ・経路生成／追従・Joy・機構ノード）を1回起動します。CANブリッジが終了すると全体も終了します。CANの設定は既存どおり `can0`、1 Mbps／CAN FD 2 Mbpsです。設定変更が必要な場合は既存launchの `sudo -n ip ...` が実行できる権限が必要です。
 
-既定のシーケンス・キュー・ポンプ・関節フィードバック・手動操作設定は、このチェックアウトの `src/` 内のYAMLです。`sequence_file:=...`、`queue_config:=...`、`pump_config:=...`、`joint_feedback_config:=...`、`manual_config:=...`、`joy_source:=web|local`、`listen:=...`、`ipc_socket:=...`、`non_blocking:=...` を変更できます。`./run_production.sh --show-args` は引数を表示するだけで実機ノードを起動しません。起動後は `/current_joints` の実測値が届くことを確認してからUIで操作します。CANのactiveは関節角の受信確認ではありません。
+既定のシーケンス・キュー・ポンプ・関節フィードバック・手動操作設定は、このチェックアウトの `src/` 内のYAMLです。`sequence_file:=...`、`queue_config:=...`、`pump_config:=...`、`joint_feedback_config:=...`、`manual_config:=...`、`manual_velocity_config:=...`、`joy_source:=web|local`、`listen:=...`、`ipc_socket:=...`、`non_blocking:=...` を変更できます。`./run_production.sh --show-args` は引数を表示するだけで実機ノードを起動しません。起動後は `/current_joints` の実測値が届くことを確認してからUIで操作します。CANのactiveは関節角の受信確認ではありません。
 
 Joy入力は既定で `joy_source:=web` です。USBコントローラーをPCへ接続してWeb UIで機器・割当を選び、送信を有効にします。Raspberry Piの従来のJoy入力を使う場合は `joy_source:=local` とします。完全手動モード・シーケンス内の手動待ち・ジョグ操作の詳細は [UIの手動操作説明](src/catchrobo2026_ui/README.md#pcのusbコントローラーと手動操作) を参照してください。ジョグ距離は [manual.yaml](src/catchrobo2026_ui/config/manual.yaml) の `manual_step_cm` で設定します。
 
@@ -74,11 +74,27 @@ ros2 launch catchrobo2026_sequence automatic.launch.py \
 
 ## 手動操縦とダミー動作確認
 
-手動操縦は次のコマンドで起動します。実機の `current_joints` を供給するCANブリッジ等は別途起動します。`pump_config:=/path/to/pump.yaml` でポンプ設定を差し替えられます。
+手動操縦は次のコマンドで起動します。実機の `current_joints` を供給するCANブリッジ等は別途起動します。`pump_config:=/path/to/pump.yaml` でポンプ設定を差し替えられます。各並進軸の最大速度は [manual_velocity.yaml](src/catchrobo2026_hand_operated/config/manual_velocity.yaml) の `manual_linear_speed_mm_s`、最大先端回転速度は `manual_angular_speed_rad_s` で設定します。どちらもスティック最大入力時の1秒あたりの速度で、UIとローカルJoyに共通です。同じYAMLの `/**/control_node.ros__parameters` ではWebの軸・ボタン・固定移動距離・差分プリセットを指定します。
 
 ```bash
 ros2 launch catchrobo2026_hand_operated handoperated.launch.py
 ```
+
+`debug:=true` と編集するファイルのパスを指定すると、以後のYAML編集は再ビルド・再起動なしで反映されます。たとえばワークスペースのルートで次のように起動します。
+
+```bash
+ros2 launch catchrobo2026_hand_operated handoperated.launch.py \
+  manual_velocity_config:="$PWD/src/catchrobo2026_hand_operated/config/manual_velocity.yaml" \
+  debug:=true
+```
+
+Web UIを使う `automatic.launch.py` にも同じ2引数を指定できます。本番の `./run_production.sh team:=red debug:=true` はこのソースYAMLを既定で読みます。通常のlaunchはインストール済みYAMLが既定なので、ソースを調整するときは上記パス指定を使ってください。
+
+Webの設定はJoy OFF・ジョグ停止中、速度はJoy入力が中立の間に読み直します。操作中はその操作の設定を維持するため、編集後はいったんJoyをOFFにし、スティック・ボタンを離してから再度有効にしてください。プリセットは選択中のIDを引き継ぎ、そのIDが削除された場合は新しい既定値へ戻ります。各ノードは担当する設定を別々の停止・中立境界で適用します。
+
+再読込は毎回コードの既定値から構築し、削除した項目に直前の値を残しません。速度を省略した場合のコード既定値は並進50 mm/s・回転0.5 rad/sです。同梱YAMLの10 mm/s・0.1 rad/sを維持する場合は、その指定を残してください。ROSのread-onlyパラメータ表示は起動時の値で、再読込後のWeb設定はUI、速度はJoyノードの読込ログが有効値を示します。
+
+不正な設定は適用せず、該当ノードの新たなJoy操作を拒否します。Web設定のエラーは「設定・入力確認」、速度設定のエラーはJoyノードのログで確認できます。起動時からWebのゲームパッド割当に誤りがある場合もUIと生入力表示は利用でき、Joy操作を禁止した状態で原因を表示します。ファイルを修正すると再読込で復帰します。`debug:=false` は起動時の設定を固定し、編集の反映には再起動が必要です。この再読込機能を含むコードの初回導入時はビルドと再起動が必要です。
 
 ダミーロボットは既定で無効です。実機の `current_joints` 供給元を起動せずに動作確認する場合は、明示的に有効にします。
 
