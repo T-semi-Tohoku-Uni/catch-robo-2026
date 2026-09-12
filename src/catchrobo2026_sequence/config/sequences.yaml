@@ -312,6 +312,7 @@ sequences:
       - call: place_pre_red_waypoint1
       - phi_travel: {start: true, limit: 0.5235987755982988}
       - move: {absolute: place_red_1_1_above}
+      - phi_travel: end
       - sequence_group: end
       - call: place_common
       - call: place_pre_red_waypoint1

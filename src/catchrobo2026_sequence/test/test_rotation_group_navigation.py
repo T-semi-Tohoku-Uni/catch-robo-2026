@@ -527,6 +527,90 @@ def test_sequence_group_looks_ahead_across_ending_moves(
     assert abs(rig.joints[-1].data[3] - (-6.220766497)) < 0.05
 
 
+def test_place_red_1_1_waypoint_phi_interval_through_real_navigation(
+        rotation_rig, tmp_path):
+    from action_msgs.msg import GoalStatus, GoalStatusArray
+    from catchrobo2026_msgs.srv import EndeffectorControl, PumpControl
+
+    rig = rotation_rig
+    start_xyz = (375, 238, 196.95)
+    start = PoseStamped(pose=waypoint_pose(start_xyz, -math.pi))
+    for _ in range(3):
+        rig.pose_pub.publish(start)
+        rig.observe(0.1)
+    rig.until(lambda: math.dist(xyz(rig.poses[-1]), start_xyz) < 0.1)
+    rig.observe(0.1)
+
+    def mechanism_done(request, response):
+        response.success = True
+        return response
+
+    services = [
+        rig.node.create_service(PumpControl, 'set_pump_state', mechanism_done),
+        rig.node.create_service(EndeffectorControl, 'set_endeffector_state', mechanism_done),
+    ]
+    follow_status = []
+    status_subscription = rig.node.create_subscription(
+        GoalStatusArray, 'follow_route/_action/status', follow_status.append, 10)
+    config = yaml.load(
+        (Path(__file__).parents[1] / 'config/sequences.yaml').read_text(),
+        Loader=yaml.BaseLoader)
+    config['sequences']['place_common']['steps'] = [
+        step for step in config['sequences']['place_common']['steps']
+        if 'manual' not in step]
+    config['route_timeout_sec'] = 20.0
+    config_file = tmp_path / 'place_red_1_1_phi_interval.yaml'
+    config_file.write_text(yaml.safe_dump(config))
+    rig.launch('catchrobo2026_sequence', 'sequence_node', {
+        'team': 'red', 'sequence_file': config_file,
+    })
+    assert rig.sequence.wait_for_server(timeout_sec=15)
+
+    before_commands = len(rig.commands)
+    handle = rig.resolve(rig.sequence.send_goal_async(ExecuteSequence.Goal(
+        control_epoch=1, step_id=1, kind=ExecuteSequence.Goal.PLACE,
+        box=1, box_column=1, collector_mask=7)))
+    assert handle.accepted
+    result = rig.resolve(handle.get_result_async())
+    assert result.result.success, result.result.message
+    rig.observe(0.3)
+
+    commands = rig.commands[before_commands:]
+    assert len(commands) > 20
+    waypoint = (150, 0, 360)
+    destination = (150.87, -436, 390)
+    waypoint_base = math.atan2(waypoint[0] - 675, waypoint[1] + 190)
+    destination_base = math.atan2(destination[0] - 675, destination[1] + 190)
+
+    def boundary_error(command, base):
+        q0, q4 = float(command.data[0]), float(command.data[3])
+        return abs(q0 - base) + abs(q0 + q4 + 2 * math.pi)
+
+    waypoint_index = min(
+        range(len(commands)), key=lambda i: boundary_error(commands[i], waypoint_base))
+    destination_index = min(
+        range(waypoint_index, len(commands)),
+        key=lambda i: boundary_error(commands[i], destination_base))
+    assert destination_index > waypoint_index
+    assert commanded_phi_travel(commands[:waypoint_index + 1]) > 0.5
+    assert commanded_phi_travel(commands[waypoint_index:destination_index + 1]) <= \
+        math.pi / 6 + 1e-4
+    assert min(math.dist(xyz(pose), waypoint) for pose in rig.poses) < 90.0
+    assert math.dist(xyz(rig.poses[-1]), destination) < 20.1
+
+    # One grouped route plus the two normal PLACE moves must finish.
+    succeeded = {
+        bytes(status.goal_info.goal_id.uuid)
+        for message in follow_status for status in message.status_list
+        if status.status == GoalStatus.STATUS_SUCCEEDED
+    }
+    assert len(succeeded) == 3
+    assert result.status == GoalStatus.STATUS_SUCCEEDED
+    rig.node.destroy_subscription(status_subscription)
+    for service in services:
+        rig.node.destroy_service(service)
+
+
 def test_unrestricted_wrist_interpolation_limits_reversal_speed(rotation_rig):
     rig = rotation_rig
     set_start(rig, -2.0)

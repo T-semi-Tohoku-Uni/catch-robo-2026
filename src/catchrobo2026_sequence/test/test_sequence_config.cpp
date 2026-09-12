@@ -222,6 +222,31 @@ sequences:
   EXPECT_DOUBLE_EQ(intervals[1].max_phi_travel, 0.0);
 }
 
+TEST(SequenceConfig, PhiIntervalMayStartAfterWaypointWithoutSplittingItsRoute)
+{
+  const auto config = SequenceConfig::from_yaml(document("{}", R"(
+  s:
+    steps:
+      - sequence_group: start
+      - waypoint: {absolute: [150, 0, 360, 0]}
+      - phi_travel: {start: true, limit: 0.5235987755982988}
+      - move: {absolute: [150.87, -436, 390, 0]}
+      - phi_travel: end
+      - sequence_group: end
+)", "{}", "{'1,1': s}"));
+  const auto steps = config.compile("red", "place", 1, 1);
+  ASSERT_EQ(steps.size(), 6u);
+  EXPECT_TRUE(steps[1].waypoint);
+  EXPECT_EQ(steps[1].pose, (Pose{150, 0, 360, 0}));
+  EXPECT_EQ(steps[2].type, StepType::PHI_TRAVEL_START);
+  EXPECT_EQ(steps[3].pose, (Pose{150.87, -436, 390, 0}));
+  const auto intervals = collect_phi_travel_intervals(steps, 0, 5);
+  ASSERT_EQ(intervals.size(), 1u);
+  EXPECT_EQ(intervals[0].start_target, 1u);
+  EXPECT_EQ(intervals[0].end_target, 2u);
+  EXPECT_DOUBLE_EQ(intervals[0].max_phi_travel, 0.5235987755982988);
+}
+
 TEST(SequenceConfig, InvalidPhiIntervalsAreRejected)
 {
   const std::string prefix = "version: 1\nposes: {}\nbindings: "
@@ -234,7 +259,7 @@ TEST(SequenceConfig, InvalidPhiIntervalsAreRejected)
       "{phi_travel: {start: true, limit: 1}}, "
       "{phi_travel: {start: true, limit: 1}}, " + move + ", {phi_travel: end}",
       "{waypoint: {absolute: [675, 200, 300, 0]}}, "
-      "{phi_travel: {start: true, limit: 1}}, " + move + ", {phi_travel: end}"})
+      "{phi_travel: {start: true, limit: 1}}, {phi_travel: end}, " + move})
   {
     EXPECT_THROW(SequenceConfig::from_yaml(prefix + "sequences: {s: {steps: ["
         "{sequence_group: start}, " + body + ", {sequence_group: end}]}}")

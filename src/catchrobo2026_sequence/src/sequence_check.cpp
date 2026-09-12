@@ -59,6 +59,12 @@ Route collect_route(const std::vector<Step> & steps, std::size_t first)
 {
   Route route{first, first, {}};
   for (;;) {
+    while (route.last < steps.size() &&
+      (steps[route.last].type == StepType::PHI_TRAVEL_START ||
+      steps[route.last].type == StepType::PHI_TRAVEL_END))
+    {
+      ++route.last;
+    }
     if (route.last == steps.size() || steps[route.last].type != StepType::MOVE) {
       throw std::runtime_error("Waypoints require a following MOVE in the same group");
     }

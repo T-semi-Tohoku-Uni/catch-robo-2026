@@ -187,6 +187,41 @@ void check()
     "The approach must remain outside the local budget");
   require(std::abs(scoped.routes[0].wrist_angles.back() + turn) < 1e-5,
     "The local bound must influence winding selection before its start");
+
+  request.targets = {target({150.0, 0.0, 360.0, 0.0}),
+    target({150.87, -436.0, 390.0, 0.0})};
+  request.route_ends = {2};
+  request.phi_travel_intervals[0].start_target = 1;
+  request.phi_travel_intervals[0].end_target = 2;
+  const auto waypoint_scoped = planner.planGroup(pick_state, request);
+  require(waypoint_scoped.success, waypoint_scoped.message);
+  require(waypoint_scoped.routes.size() == 1, "Waypoint route was split by its phi interval");
+  require(waypoint_scoped.interval_phi_travel.size() == 1 &&
+    waypoint_scoped.interval_phi_travel[0] <= turn / 12.0 + 1e-5,
+    "Waypoint-to-place phi travel exceeded 30 degrees");
+  const auto & waypoint_route = waypoint_scoped.routes.front();
+  require(waypoint_route.target_sample_indices.size() == 2,
+    "Waypoint route lost target sample metadata");
+  require(waypoint_route.target_sample_indices[0] > 0 &&
+    waypoint_route.target_sample_indices[0] < waypoint_route.target_sample_indices[1] &&
+    waypoint_route.target_sample_indices[1] + 1 == waypoint_route.path.poses.size(),
+    "Waypoint and terminal target samples are not exact ordered boundaries");
+  for (size_t i = 0; i < waypoint_route.target_sample_indices.size(); ++i) {
+    const auto & sample = waypoint_route.path.poses[waypoint_route.target_sample_indices[i]].pose;
+    const auto & expected = request.targets[i];
+    require(std::abs(sample.position.x - expected.position.x) < 1e-12 &&
+      std::abs(sample.position.y - expected.position.y) < 1e-12 &&
+      std::abs(sample.position.z - expected.position.z) < 1e-12,
+      "Target sample metadata points at an interpolated pose");
+  }
+  for (const double wrist : waypoint_route.wrist_angles) {
+    require(wrist >= -turn - 1e-8 && wrist <= 1e-8,
+      "Waypoint route selected a wrapped wrist command outside its limits");
+  }
+
+  request.targets = {target(a), target(b)};
+  request.route_ends = {1, 2};
+  request.phi_travel_intervals[0] = interval;
   auto from_a = request;
   from_a.targets = {target(b)};
   from_a.route_ends = {1};
@@ -212,21 +247,38 @@ void check()
       {1199.13, -736.0, 304.35, -turn / 2.0}}) {
     std::array<float, 4> rear_joints{};
     require(planner.solveIK(rear, rear_joints), "Blue rear fixture must be reachable");
-    request.phi_travel_intervals = {interval};
-    const auto fallback = planner.planGroup(planner.stateFromJoints(rear_joints), request);
-    require(fallback.success, fallback.message);
-    require(fallback.routes.size() == 2 && fallback.routes[0].phi_angles.empty(),
-      "Rear approach must use the bounded wrist interpolation fallback");
-    require(fallback.interval_phi_travel.size() == 1 &&
-      fallback.interval_phi_travel[0] < turn / 12.0,
-      "Fallback must include the interior phi reversal in the A-to-B budget");
-    require(fallback.interval_phi_travel[0] > 0.04, "Fallback interior travel was lost");
+    for (const auto & ends : std::vector<std::vector<uint32_t>>{{1, 2}, {2}}) {
+      auto fallback_request = request;
+      fallback_request.route_ends = ends;
+      fallback_request.phi_travel_intervals = {interval};
+      const auto fallback = planner.planGroup(
+        planner.stateFromJoints(rear_joints), fallback_request);
+      require(fallback.success, fallback.message);
+      require(fallback.routes.size() == ends.size() && fallback.routes[0].phi_angles.empty(),
+        "Rear approach must use the bounded wrist interpolation fallback");
+      if (ends.size() == 1) {
+        require(fallback.routes[0].target_sample_indices.size() == 2 &&
+          fallback.routes[0].target_sample_indices[0] > 0 &&
+          fallback.routes[0].target_sample_indices[0] <
+          fallback.routes[0].target_sample_indices[1],
+          "Fallback lost its internal target boundary");
+        for (size_t i = 0; i < fallback_request.targets.size(); ++i) {
+          const auto & sample = fallback.routes[0].path.poses[
+            fallback.routes[0].target_sample_indices[i]].pose;
+          require(std::abs(sample.position.x - fallback_request.targets[i].position.x) < 1e-12 &&
+            std::abs(sample.position.y - fallback_request.targets[i].position.y) < 1e-12 &&
+            std::abs(sample.position.z - fallback_request.targets[i].position.z) < 1e-12,
+            "Fallback target sample metadata is not exact");
+        }
+      }
+      require(fallback.interval_phi_travel.size() == 1 &&
+        fallback.interval_phi_travel[0] < turn / 12.0,
+        "Fallback must include the interior phi reversal in the A-to-B budget");
+      require(fallback.interval_phi_travel[0] > 0.04, "Fallback interior travel was lost");
+    }
   }
   request.phi_travel_intervals = {interval, interval};
   require(!planner.planGroup(pick_state, request).success, "Overlapping intervals were accepted");
-  request.phi_travel_intervals = {interval};
-  request.route_ends = {2};
-  require(!planner.planGroup(pick_state, request).success, "An interval split a waypoint route");
 
   std::array<float, 4> joints{};
   require(!planner.solveIK({10000, 10000, 10000, 0}, joints),

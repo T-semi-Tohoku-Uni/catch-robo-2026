@@ -28,7 +28,7 @@ def rig(base_rig):  # noqa: F811
 
     def plan(request, response):
         rig.group_plans.append(copy.deepcopy(request))
-        response.success = rig.group_mode == 'success'
+        response.success = rig.group_mode != 'reject'
         response.message = 'no monotonic solution' if not response.success else 'planned'
         response.direction = 0 if request.allow_wrist_reversal else -1
         response.phi_travel = rig.planned_phi_travel
@@ -47,15 +47,20 @@ def rig(base_rig):  # noqa: F811
                 route.path.header.frame_id = 'map'
                 route.path.poses = [copy.deepcopy(previous)]
                 route.wrist_angles = [wrist]
+                target_sample = 0
                 for pose in request.targets[offset:end]:
                     previous = PoseStamped(pose=copy.deepcopy(pose))
                     route.path.poses.append(previous)
                     wrist -= 0.1
                     route.wrist_angles.append(wrist)
+                    target_sample += 1
+                    route.target_sample_indices.append(target_sample)
                 if request.allow_wrist_reversal:
                     route.phi_angles = list(route.wrist_angles)
                 response.routes.append(route)
                 offset = end
+            if rig.group_mode == 'invalid_samples':
+                response.routes[0].target_sample_indices = []
         return response
 
     async def wrist(request, response):
@@ -157,6 +162,17 @@ def test_impossible_group_fails_before_pump_or_begin(rig):
     assert not reply.result.success and 'no monotonic solution' in reply.result.message
     assert not rig.pumps and not rig.follows and not rig.wrist_requests
     recover(rig)
+
+
+def test_invalid_target_sample_metadata_fails_before_group_begin(rig):
+    rig.group_mode = 'invalid_samples'
+    rig.launch(grouped(
+        waypoint_step([625, 200, 300, 0]), move([600, 200, 300, 0])))
+    _, result = rig.start()
+    reply = rig.resolve(result)
+    assert not reply.result.success
+    assert 'invalid route' in reply.result.message
+    assert not rig.follows and not rig.wrist_requests
 
 
 @pytest.mark.parametrize('cancel', [False, True])
@@ -296,12 +312,10 @@ def test_phi_interval_flags_follow_arrival_and_preserve_group(rig):
     interval = request.phi_travel_intervals[0]
     assert (interval.start_target, interval.end_target) == (2, 3)
     assert operations(rig) == [WristControl.Request.BEGIN]
-    assert not rig.wrist_requests[0].limit_phi_travel
     rig.complete_follow(0)
     rig.until(lambda: len(rig.follows) == 2)
     assert operations(rig) == [WristControl.Request.BEGIN, WristControl.Request.PHI_BEGIN]
     assert rig.wrist_requests[1].max_phi_travel == interval.max_phi_travel
-    assert rig.wrist_requests[1].limit_phi_travel
     rig.complete_follow(1)
     rig.until(lambda: len(rig.follows) == 3)
     assert operations(rig)[-1] == WristControl.Request.PHI_END
@@ -309,6 +323,39 @@ def test_phi_interval_flags_follow_arrival_and_preserve_group(rig):
     rig.assert_succeeded(result)
     assert operations(rig) == [WristControl.Request.BEGIN, WristControl.Request.PHI_BEGIN,
                                WristControl.Request.PHI_END, WristControl.Request.END]
+
+
+def test_waypoint_phi_interval_is_delegated_to_one_follow_route(rig):
+    rig.launch([
+        {'sequence_group': 'start'},
+        waypoint_step([625, 210, 310, 0]),
+        {'phi_travel': {'start': True, 'limit': 0.5235987755982988}},
+        move([650, 200, 300, 0]), {'phi_travel': 'end'},
+        move([675, 200, 300, 0]), {'sequence_group': 'end'},
+    ])
+    _, result = rig.start()
+    rig.until(lambda: len(rig.follows) == 1)
+    request = rig.group_plans[0]
+    assert list(request.route_ends) == [2, 3]
+    assert len(request.phi_travel_intervals) == 1
+    interval = request.phi_travel_intervals[0]
+    assert (interval.start_target, interval.end_target) == (1, 2)
+    assert operations(rig) == [WristControl.Request.BEGIN]
+    assert not rig.wrist_requests[0].limit_phi_travel
+    first = rig.follows[0]['request']
+    assert len(first.path.poses) == 3
+    assert [(event.sample_index, event.operation, event.limit_phi_travel,
+             event.max_phi_travel) for event in first.phi_travel_events] == [
+        (1, 1, True, pytest.approx(0.5235987755982988)),
+    ]
+    rig.complete_follow(0)
+    rig.until(lambda: len(rig.follows) == 2)
+    assert not rig.follows[1]['request'].phi_travel_events
+    assert operations(rig) == [WristControl.Request.BEGIN, WristControl.Request.PHI_END]
+    rig.complete_follow(1)
+    rig.assert_succeeded(result)
+    assert operations(rig) == [WristControl.Request.BEGIN, WristControl.Request.PHI_END,
+                               WristControl.Request.END]
     assert len({request.group_id for request in rig.wrist_requests}) == 1
 
 

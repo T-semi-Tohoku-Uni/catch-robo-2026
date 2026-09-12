@@ -9,6 +9,8 @@ int8 wrist_direction
 float64[] wrist_angles
 # Optional unwrapped field-yaw interpolation, matching path length.
 float64[] phi_angles
+# Ordered phi interval changes applied at path target samples.
+catchrobo2026_msgs/PhiTravelEvent[] phi_travel_events
 ---
 # Result
 bool success

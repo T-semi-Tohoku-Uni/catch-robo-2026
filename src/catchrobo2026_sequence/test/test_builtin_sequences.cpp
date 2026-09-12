@@ -181,6 +181,30 @@ TEST(BuiltinSequences, PlacementBindingsSelectDifferentTeamApproaches)
   }
 }
 
+TEST(BuiltinSequences, RedPlaceOneOneKeepsWaypointMovingAndScopesThirtyDegreeLimit)
+{
+  const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
+  const auto steps = config.compile("red", "place", 1, 1);
+  ASSERT_EQ(steps.size(), 13u);
+  EXPECT_EQ(steps[0].type, StepType::SEQUENCE_START);
+  EXPECT_EQ(steps[1].type, StepType::MOVE);
+  EXPECT_TRUE(steps[1].waypoint);
+  EXPECT_EQ(steps[1].pose, (Pose{150, 0, 360, 0}));
+  EXPECT_EQ(steps[2].type, StepType::PHI_TRAVEL_START);
+  ASSERT_TRUE(steps[2].max_phi_travel);
+  EXPECT_DOUBLE_EQ(*steps[2].max_phi_travel, 0.5235987755982988);
+  EXPECT_EQ(steps[3].type, StepType::MOVE);
+  EXPECT_FALSE(steps[3].waypoint);
+  EXPECT_EQ(steps[3].pose, (Pose{150.87, -436, 390, 0}));
+  EXPECT_EQ(steps[4].type, StepType::PHI_TRAVEL_END);
+  EXPECT_EQ(steps[5].type, StepType::SEQUENCE_END);
+  const auto intervals = collect_phi_travel_intervals(steps, 0, 5);
+  ASSERT_EQ(intervals.size(), 1u);
+  EXPECT_EQ(intervals[0].start_target, 1u);
+  EXPECT_EQ(intervals[0].end_target, 2u);
+  EXPECT_DOUBLE_EQ(intervals[0].max_phi_travel, 0.5235987755982988);
+}
+
 TEST(BuiltinSequences, AllBindingsUseTheConfiguredPumpAndWaypointOrder)
 {
   const auto yaml = YAML::LoadFile(SEQUENCE_CONFIG_PATH);

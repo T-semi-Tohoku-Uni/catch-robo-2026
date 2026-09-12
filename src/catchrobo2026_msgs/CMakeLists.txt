@@ -20,6 +20,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetSequenceManual.srv"
   "msg/RotationGroupRoute.msg"
   "msg/PhiTravelInterval.msg"
+  "msg/PhiTravelEvent.msg"
   "srv/PlanRotationGroup.srv"
   "srv/WristControl.srv"
   "srv/InverseKinematics.srv"

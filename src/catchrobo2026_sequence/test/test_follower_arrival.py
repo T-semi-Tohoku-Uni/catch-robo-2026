@@ -8,12 +8,15 @@ import time
 
 from action_msgs.msg import GoalStatus
 from catchrobo2026_msgs.action import FollowRoute
+from catchrobo2026_msgs.msg import PhiTravelEvent
 from catchrobo2026_msgs.srv import WristControl
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path as RosPath
 import pytest
 import rclpy
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import SingleThreadedExecutor
+from rclpy.task import Future
 from std_msgs.msg import Float32MultiArray
 
 from test_route_handoff import Harness, waypoint_pose
@@ -109,6 +112,24 @@ def start_route(rig, path, **kwargs):
     return handle.get_result_async()
 
 
+def constrained_route(rig, positions, events):
+    wrist = START_JOINTS[3]
+    return start_route(
+        rig, route(positions), rotation_group_id=42, wrist_direction=0,
+        wrist_angles=[wrist] * len(positions), phi_angles=[-math.pi] * len(positions),
+        phi_travel_events=events)
+
+
+def constrained_goal(rig, positions, events):
+    wrist = START_JOINTS[3]
+    handle = rig.resolve(rig.follow.send_goal_async(FollowRoute.Goal(
+        start=True, path=route(positions), rotation_group_id=42, wrist_direction=0,
+        wrist_angles=[wrist] * len(positions), phi_angles=[-math.pi] * len(positions),
+        phi_travel_events=events)))
+    assert handle.accepted
+    return handle, handle.get_result_async()
+
+
 def assert_succeeded(rig, result):
     wrapped = rig.resolve(result)
     assert wrapped.status == GoalStatus.STATUS_SUCCEEDED
@@ -184,6 +205,170 @@ def test_group_wrist_match_does_not_hide_unreached_arm_joints(arrival_rig):
         assert not result.done()
         streams.current_values = list(FINAL_JOINTS[25.0])
         assert_succeeded(rig, result)
+    finally:
+        streams.close()
+        rig.node.destroy_service(service)
+
+
+def test_phi_boundary_target_is_sent_before_event_without_waiting_for_arrival(arrival_rig):
+    rig = arrival_rig
+    streams = JointStreams(rig, START_JOINTS, publish_commands=False)
+    requests = []
+
+    def wrist(request, response):
+        requests.append(request)
+        response.success = True
+        return response
+
+    service = rig.node.create_service(
+        WristControl, 'wrist_control', wrist, callback_group=ReentrantCallbackGroup())
+    boundary = (*START_POSITION[:2], START_POSITION[2] - 10.0)
+    destination = (*START_POSITION[:2], START_POSITION[2] - 25.0)
+    event = PhiTravelEvent(
+        sample_index=1, operation=PhiTravelEvent.BEGIN,
+        limit_phi_travel=True, max_phi_travel=math.pi / 6.0)
+    try:
+        launch_follower(rig, streams)
+        result = constrained_route(rig, [START_POSITION, boundary, destination], [event])
+        rig.until(lambda: any(request.operation == WristControl.Request.PHI_BEGIN
+                              for request in requests))
+        begin_index = next(index for index, request in enumerate(requests)
+                           if request.operation == WristControl.Request.PHI_BEGIN)
+        assert begin_index > 0
+        boundary_target = requests[begin_index - 1]
+        assert boundary_target.operation == WristControl.Request.TARGET
+        assert boundary_target.target.pose.position.z * 1000.0 == pytest.approx(boundary[2])
+
+        # Feedback stays at the route start, but the follower must continue past the waypoint.
+        rig.until(lambda: any(
+            request.operation == WristControl.Request.TARGET and
+            request.target.pose.position.z * 1000.0 < boundary[2] - 0.1
+            for request in requests[begin_index + 1:]))
+        assert not result.done()
+    finally:
+        streams.close()
+        rig.node.destroy_service(service)
+
+
+def test_rejected_phi_event_aborts_before_any_post_boundary_target(arrival_rig):
+    rig = arrival_rig
+    streams = JointStreams(rig, START_JOINTS, publish_commands=False)
+    requests = []
+
+    def wrist(request, response):
+        requests.append(request)
+        response.success = request.operation != WristControl.Request.PHI_BEGIN
+        response.message = 'rejected by test'
+        return response
+
+    service = rig.node.create_service(
+        WristControl, 'wrist_control', wrist, callback_group=ReentrantCallbackGroup())
+    boundary = (*START_POSITION[:2], START_POSITION[2] - 10.0)
+    destination = (*START_POSITION[:2], START_POSITION[2] - 25.0)
+    event = PhiTravelEvent(
+        sample_index=1, operation=PhiTravelEvent.BEGIN,
+        limit_phi_travel=True, max_phi_travel=math.pi / 6.0)
+    try:
+        launch_follower(rig, streams)
+        wrapped = rig.resolve(constrained_route(
+            rig, [START_POSITION, boundary, destination], [event]))
+        assert wrapped.status == GoalStatus.STATUS_ABORTED
+        assert not wrapped.result.success
+        begin_index = next(index for index, request in enumerate(requests)
+                           if request.operation == WristControl.Request.PHI_BEGIN)
+        assert requests[begin_index - 1].operation == WristControl.Request.TARGET
+        assert requests[begin_index - 1].target.pose.position.z * 1000.0 == pytest.approx(
+            boundary[2])
+        assert not any(request.operation == WristControl.Request.TARGET
+                       for request in requests[begin_index + 1:])
+    finally:
+        streams.close()
+        rig.node.destroy_service(service)
+
+
+@pytest.mark.parametrize('cancel', [False, True], ids=['timeout', 'cancel'])
+def test_pending_phi_event_never_allows_a_post_boundary_target(arrival_rig, cancel):
+    rig = arrival_rig
+    streams = JointStreams(rig, START_JOINTS, publish_commands=False)
+    requests = []
+    gate = Future(executor=rig.executor)
+
+    async def wrist(request, response):
+        requests.append(request)
+        if request.operation == WristControl.Request.PHI_BEGIN:
+            await gate
+        response.success = True
+        return response
+
+    service = rig.node.create_service(
+        WristControl, 'wrist_control', wrist, callback_group=ReentrantCallbackGroup())
+    boundary = (*START_POSITION[:2], START_POSITION[2] - 10.0)
+    destination = (*START_POSITION[:2], START_POSITION[2] - 25.0)
+    event = PhiTravelEvent(
+        sample_index=1, operation=PhiTravelEvent.BEGIN,
+        limit_phi_travel=True, max_phi_travel=math.pi / 6.0)
+    try:
+        launch_follower(rig, streams)
+        handle, result = constrained_goal(
+            rig, [START_POSITION, boundary, destination], [event])
+        rig.until(lambda: any(request.operation == WristControl.Request.PHI_BEGIN
+                              for request in requests))
+        begin_index = next(index for index, request in enumerate(requests)
+                           if request.operation == WristControl.Request.PHI_BEGIN)
+        if cancel:
+            rig.resolve(handle.cancel_goal_async())
+        wrapped = rig.resolve(result)
+        assert wrapped.status == (
+            GoalStatus.STATUS_CANCELED if cancel else GoalStatus.STATUS_ABORTED)
+        assert not any(request.operation == WristControl.Request.TARGET
+                       for request in requests[begin_index + 1:])
+    finally:
+        if not gate.done():
+            gate.set_result(True)
+        rig.observe(0.1)
+        streams.close()
+        rig.node.destroy_service(service)
+
+
+def test_same_sample_events_and_final_sample_are_applied_in_order(arrival_rig):
+    rig = arrival_rig
+    streams = JointStreams(rig, START_JOINTS, publish_commands=False)
+    requests = []
+
+    def wrist(request, response):
+        requests.append(request)
+        response.success = True
+        return response
+
+    service = rig.node.create_service(WristControl, 'wrist_control', wrist)
+    boundary = (*START_POSITION[:2], START_POSITION[2] - 10.0)
+    destination = (*START_POSITION[:2], START_POSITION[2] - 25.0)
+    events = [
+        PhiTravelEvent(sample_index=1, operation=PhiTravelEvent.END),
+        PhiTravelEvent(sample_index=1, operation=PhiTravelEvent.BEGIN,
+                       limit_phi_travel=True, max_phi_travel=math.pi / 6.0),
+        PhiTravelEvent(sample_index=2, operation=PhiTravelEvent.END),
+    ]
+    try:
+        launch_follower(rig, streams)
+        result = constrained_route(rig, [START_POSITION, boundary, destination], events)
+        rig.until(lambda: sum(request.operation == WristControl.Request.PHI_END
+                              for request in requests) == 2)
+        operations = [request.operation for request in requests]
+        first_end = operations.index(WristControl.Request.PHI_END)
+        assert operations[first_end - 1:first_end + 2] == [
+            WristControl.Request.TARGET,
+            WristControl.Request.PHI_END,
+            WristControl.Request.PHI_BEGIN,
+        ]
+        final_end = len(operations) - 1 - operations[::-1].index(WristControl.Request.PHI_END)
+        assert operations[final_end - 1:final_end + 1] == [
+            WristControl.Request.TARGET,
+            WristControl.Request.PHI_END,
+        ]
+        assert requests[final_end - 1].target.pose.position.z * 1000.0 == pytest.approx(
+            destination[2])
+        assert not result.done()
     finally:
         streams.close()
         rig.node.destroy_service(service)

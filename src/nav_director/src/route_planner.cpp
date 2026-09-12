@@ -130,11 +130,8 @@ void RoutePlanner::planRotationGroup(const PlanRotationGroup::Request &req,
     }
     previous_end = 0;
     for (const auto & interval : req.phi_travel_intervals) {
-        const auto boundary = [&req](uint32_t index) {
-            return index == 0 || std::binary_search(req.route_ends.begin(), req.route_ends.end(), index);
-        };
         if (interval.start_target < previous_end || interval.start_target >= interval.end_target ||
-            !boundary(interval.start_target) || !boundary(interval.end_target) ||
+            interval.end_target > req.targets.size() ||
             !std::isfinite(interval.max_phi_travel) || interval.max_phi_travel < 0.0) {
             res.message = "Phi intervals must be ordered, nonoverlapping MOVE ranges with finite limits";
             return;
@@ -213,20 +210,19 @@ void RoutePlanner::planRotationGroup(const PlanRotationGroup::Request &req,
         if ((direction > 0 && !can_increase) || (direction < 0 && !can_decrease)) continue;
         const auto &selected = direction > 0 ? increasing : decreasing;
         std::vector<catchrobo2026_msgs::msg::RotationGroupRoute> routes;
-        std::vector<double> route_travel, interval_travel;
+        std::vector<double> target_travel, interval_travel;
         double travel = 0.0;
         const bool limited = req.limit_phi_travel || !req.phi_travel_intervals.empty();
         if (!buildWristRoutes(targets, req.route_ends, selected, limited,
-                routes, travel, error, route_travel)) {
+                routes, travel, error, target_travel)) {
             if (!limited) break;
             continue;
         }
         bool intervals_valid = true;
         for (const auto & interval : req.phi_travel_intervals) {
             double amount = 0.0;
-            for (size_t i = 0; i < req.route_ends.size(); ++i) {
-                if (req.route_ends[i] > interval.start_target &&
-                    req.route_ends[i] <= interval.end_target) amount += route_travel[i];
+            for (size_t i = interval.start_target; i < interval.end_target; ++i) {
+                amount += target_travel[i];
             }
             interval_travel.push_back(amount);
             intervals_valid &= amount <= interval.max_phi_travel + rotation_constraints::kTolerance;
@@ -264,14 +260,14 @@ bool RoutePlanner::buildWristRoutes(const std::vector<Point3D> &targets,
                       const std::vector<uint32_t> &route_ends,
                       const std::vector<double> &selected, bool strict_base,
                       std::vector<catchrobo2026_msgs::msg::RotationGroupRoute> &routes,
-                      double &travel, std::string &error, std::vector<double> &route_travel) {
+                      double &travel, std::string &error, std::vector<double> &target_travel) {
     // Finish every route before exposing any plan or touching shared waypoints.
     Point3D start_pose = cur_pose_;
     double route_start_wrist = rotation_constraints::clamp(current_wrist_);
     travel = 0.0;
     size_t begin = 0;
     for (const auto end : route_ends) {
-        const double travel_before = travel;
+        const size_t route_target_count = end - begin;
         std::vector<Point3D> points{start_pose};
         std::vector<double> wrists{route_start_wrist};
         for (size_t i = begin; i < end; ++i) {
@@ -290,12 +286,24 @@ bool RoutePlanner::buildWristRoutes(const std::vector<Point3D> &targets,
             points = densifyPoints(points);
             wrists = std::move(dense_wrists);
         }
-        auto samples = generate3DSpline(points);
+        std::vector<double> parameters;
+        auto samples = generate3DSpline(points, &parameters);
         catchrobo2026_msgs::msg::RotationGroupRoute route;
         route.path.header.frame_id = "map";
+        for (size_t target = 1; target <= route_target_count; ++target) {
+            const double parameter = static_cast<double>(target) / route_target_count;
+            const auto found = std::find_if(parameters.begin(), parameters.end(), [parameter](double value) {
+                return std::abs(value - parameter) < 1e-12;
+            });
+            if (found == parameters.end()) {
+                error = "Rotation group route omitted a target sample";
+                return false;
+            }
+            route.target_sample_indices.push_back(static_cast<uint32_t>(found - parameters.begin()));
+        }
+        std::vector<double> local_target_travel(route_target_count, 0.0);
         for (size_t i = 0; i < samples.size(); ++i) {
-            const double scaled = static_cast<double>(i) * (points.size() - 1) /
-                static_cast<double>(samples.size() - 1);
+            const double scaled = parameters[i] * (points.size() - 1);
             const size_t index = std::min(static_cast<size_t>(scaled), wrists.size() - 2);
             const double wrist = wrists[index] +
                 (wrists[index + 1] - wrists[index]) * (scaled - index);
@@ -325,6 +333,15 @@ bool RoutePlanner::buildWristRoutes(const std::vector<Point3D> &targets,
                 }
                 travel += std::isfinite(amount) ? amount :
                     std::abs(samples[i].phi - samples[i-1].phi);
+                const size_t target = static_cast<size_t>(std::lower_bound(
+                    route.target_sample_indices.begin(), route.target_sample_indices.end(), i) -
+                    route.target_sample_indices.begin());
+                if (target >= local_target_travel.size()) {
+                    error = "Rotation group sample lies beyond its final target";
+                    return false;
+                }
+                local_target_travel[target] += std::isfinite(amount) ? amount :
+                    std::abs(samples[i].phi - samples[i-1].phi);
             }
             geometry_msgs::msg::PoseStamped pose;
             pose.header = route.path.header;
@@ -338,7 +355,8 @@ bool RoutePlanner::buildWristRoutes(const std::vector<Point3D> &targets,
             route.wrist_angles.push_back(wrist);
         }
         routes.push_back(std::move(route));
-        route_travel.push_back(travel - travel_before);
+        target_travel.insert(target_travel.end(),
+            local_target_travel.begin(), local_target_travel.end());
         start_pose = targets[end - 1];
         route_start_wrist = selected[end - 1];
         begin = end;
@@ -452,17 +470,16 @@ void RoutePlanner::planMinimumPhi(const std::vector<Point3D> &targets,
         return;
     }
     if (wrist_interpolation) {
-        std::vector<double> route_travel;
+        std::vector<double> target_travel;
         if (!buildWristRoutes(targets, request.route_ends, wrists, true,
-                response.routes, travel, response.message, route_travel)) {
+                response.routes, travel, response.message, target_travel)) {
             response.routes.clear();
             return;
         }
         for (const auto & interval : intervals) {
             double amount = 0.0;
-            for (size_t i = 0; i < request.route_ends.size(); ++i) {
-                if (request.route_ends[i] > interval.start_target &&
-                    request.route_ends[i] <= interval.end_target) amount += route_travel[i];
+            for (size_t i = interval.start_target; i < interval.end_target; ++i) {
+                amount += target_travel[i];
             }
             if (amount > interval.max_phi_travel + rotation_constraints::kTolerance) {
                 response.routes.clear();
@@ -496,6 +513,18 @@ void RoutePlanner::planMinimumPhi(const std::vector<Point3D> &targets,
     for (const auto &shape : geometry) {
         catchrobo2026_msgs::msg::RotationGroupRoute route;
         route.path.header.frame_id = "map";
+        for (size_t target = shape.begin; target < shape.end; ++target) {
+            const double parameter = static_cast<double>(target - shape.begin + 1) /
+                (shape.end - shape.begin);
+            const auto found = std::find_if(shape.parameters.begin(), shape.parameters.end(),
+                [parameter](double value) {return std::abs(value - parameter) < 1e-12;});
+            if (found == shape.parameters.end()) {
+                response.message = "Rotation group route omitted a target sample";
+                return;
+            }
+            route.target_sample_indices.push_back(
+                static_cast<uint32_t>(found - shape.parameters.begin()));
+        }
         for (size_t j = 0; j < shape.samples.size(); ++j) {
             const double scaled = shape.parameters[j] * (shape.end - shape.begin);
             const size_t index = std::min(static_cast<size_t>(scaled),

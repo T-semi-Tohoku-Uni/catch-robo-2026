@@ -132,6 +132,21 @@ private:
                  goal->phi_angles.size() != goal->path.poses.size())) {
                 return rclcpp_action::GoalResponse::REJECT;
             }
+            uint32_t previous_event_sample = 0;
+            bool first_event = true;
+            for (const auto &event : goal->phi_travel_events) {
+                if (event.sample_index == 0 || event.sample_index >= goal->path.poses.size() ||
+                    (!first_event && event.sample_index < previous_event_sample) ||
+                    (event.operation != catchrobo2026_msgs::msg::PhiTravelEvent::BEGIN &&
+                     event.operation != catchrobo2026_msgs::msg::PhiTravelEvent::END) ||
+                    !std::isfinite(event.max_phi_travel) || event.max_phi_travel < 0.0 ||
+                    (event.operation == catchrobo2026_msgs::msg::PhiTravelEvent::BEGIN &&
+                     !event.limit_phi_travel)) {
+                    return rclcpp_action::GoalResponse::REJECT;
+                }
+                previous_event_sample = event.sample_index;
+                first_event = false;
+            }
             if (!std::all_of(goal->phi_angles.begin(), goal->phi_angles.end(),
                     [](double value) { return std::isfinite(value); })) {
                 return rclcpp_action::GoalResponse::REJECT;
@@ -156,6 +171,7 @@ private:
                 return rclcpp_action::GoalResponse::REJECT;
             }
         } else if (!goal->wrist_angles.empty() || !goal->phi_angles.empty() ||
+                   !goal->phi_travel_events.empty() ||
                    goal->wrist_direction != 0) {
             return rclcpp_action::GoalResponse::REJECT;
         }
@@ -364,6 +380,34 @@ private:
         return false;
     }
 
+    bool sendPhiTravelEvent(const std::shared_ptr<GoalHandleFollowRoute> &goal_handle,
+                            const catchrobo2026_msgs::msg::PhiTravelEvent &event) {
+        if (goal_handle->is_canceling() || stopping_ || !wrist_client_->service_is_ready()) {
+            return false;
+        }
+        auto request = std::make_shared<WristControl::Request>();
+        request->operation = event.operation == catchrobo2026_msgs::msg::PhiTravelEvent::BEGIN ?
+            WristControl::Request::PHI_BEGIN : WristControl::Request::PHI_END;
+        request->group_id = goal_handle->get_goal()->rotation_group_id;
+        request->limit_phi_travel = event.limit_phi_travel;
+        request->max_phi_travel = event.max_phi_travel;
+        auto pending = wrist_client_->async_send_request(request);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+        while (rclcpp::ok() && !stopping_ && !goal_handle->is_canceling()) {
+            if (pending.wait_for(std::chrono::milliseconds(10)) == std::future_status::ready) {
+                const auto response = pending.get();
+                if (!response->success) {
+                    RCLCPP_ERROR(get_logger(), "Phi travel event rejected: %s",
+                        response->message.c_str());
+                }
+                return response->success;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) break;
+        }
+        wrist_client_->remove_pending_request(pending);
+        return false;
+    }
+
     rclcpp_action::CancelResponse handleCancel(const std::shared_ptr<GoalHandleFollowRoute> goal_handle) {
         (void)goal_handle;
         return rclcpp_action::CancelResponse::ACCEPT;
@@ -433,6 +477,7 @@ private:
         const bool constrained = goal->rotation_group_id != 0;
         const auto &wrist_angles = goal->wrist_angles;
         double commanded_progress = 0.0;
+        size_t phi_event_index = 0;
 
         bool final_target_sent = false;
         std::array<float, 4> final_target_joints{};
@@ -571,6 +616,10 @@ private:
                 const double max_step = rotation_speed_rad_sec_ * rotation_dt;
                 target_progress = limitedProgress(*goal, local_path,
                     commanded_progress, target_progress, max_step);
+                if (phi_event_index < goal->phi_travel_events.size()) {
+                    target_progress = std::min(target_progress,
+                        static_cast<double>(goal->phi_travel_events[phi_event_index].sample_index));
+                }
                 target_wrist = goal->phi_angles.empty() ? wristAt(wrist_angles, target_progress) :
                     angleAt(goal->phi_angles, target_progress) - baseAt(local_path, target_progress);
                 target_pose = poseAt(local_path, target_progress);
@@ -669,6 +718,21 @@ private:
                     throw std::runtime_error("Wrist target was rejected or timed out");
                 }
                 commanded_progress = target_progress;
+                while (phi_event_index < goal->phi_travel_events.size() &&
+                       commanded_progress >=
+                           goal->phi_travel_events[phi_event_index].sample_index - 1e-9) {
+                    if (!sendPhiTravelEvent(goal_handle,
+                            goal->phi_travel_events[phi_event_index])) {
+                        if (goal_handle->is_canceling()) {
+                            result->success = false;
+                            busy_ = false;
+                            goal_handle->canceled(result);
+                            return;
+                        }
+                        throw std::runtime_error("Phi travel event was rejected or timed out");
+                    }
+                    ++phi_event_index;
+                }
             } else {
                 pub_target_pose_->publish(target_pose_msg);
             }

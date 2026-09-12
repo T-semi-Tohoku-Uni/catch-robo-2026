@@ -817,20 +817,32 @@ private:
                 continue;
             }
             const size_t first = cursor;
+            std::vector<std::pair<size_t, Step>> internal_phi_events;
+            size_t route_target = 0;
             while (true) {
                 const auto &move = steps_.at(cursor);
                 for (const auto &point : move.waypoints) {
                     group_request_->targets.push_back(route_pose(point));
+                    ++route_target;
                 }
                 group_request_->targets.push_back(route_pose(move.pose));
+                ++route_target;
                 if (!move.waypoint) {
                     break;
                 }
                 ++cursor;
+                while (cursor < steps_.size() &&
+                       (steps_[cursor].type == StepType::PHI_TRAVEL_START ||
+                        steps_[cursor].type == StepType::PHI_TRAVEL_END)) {
+                    internal_phi_events.emplace_back(route_target, steps_[cursor]);
+                    ++cursor;
+                }
             }
             group_request_->route_ends.push_back(
                 static_cast<uint32_t>(group_request_->targets.size()));
             group_routes_[first].end_index = cursor;
+            group_routes_[first].target_count = route_target;
+            group_routes_[first].phi_events = std::move(internal_phi_events);
         }
         if (cursor == steps_.size() || group_routes_.empty()) {
             throw std::runtime_error("invalid sequence group boundaries");
@@ -877,7 +889,14 @@ private:
             (void)first;
             const auto &route = reply.routes[offset++];
             if (route.path.poses.empty() || route.wrist_angles.size() != route.path.poses.size() ||
-                (!route.phi_angles.empty() && route.phi_angles.size() != route.path.poses.size())) {
+                (!route.phi_angles.empty() && route.phi_angles.size() != route.path.poses.size()) ||
+                route.target_sample_indices.size() != cached.target_count ||
+                route.target_sample_indices.empty() ||
+                route.target_sample_indices.front() == 0 ||
+                route.target_sample_indices.back() != route.path.poses.size() - 1 ||
+                std::adjacent_find(route.target_sample_indices.begin(),
+                    route.target_sample_indices.end(), std::greater_equal<uint32_t>()) !=
+                    route.target_sample_indices.end()) {
                 begin_stop("sequence group planner returned an invalid route");
                 return;
             }
@@ -971,6 +990,17 @@ private:
             goal.wrist_direction = group_direction_;
             goal.wrist_angles = planned_wrist_angles_;
             goal.phi_angles = planned_phi_angles_;
+            const auto &cached = group_routes_.at(index_);
+            for (const auto &[target, step] : cached.phi_events) {
+                catchrobo2026_msgs::msg::PhiTravelEvent event;
+                event.sample_index = cached.route.target_sample_indices.at(target - 1);
+                event.operation = step.type == StepType::PHI_TRAVEL_START ?
+                    catchrobo2026_msgs::msg::PhiTravelEvent::BEGIN :
+                    catchrobo2026_msgs::msg::PhiTravelEvent::END;
+                event.limit_phi_travel = step.max_phi_travel.has_value();
+                event.max_phi_travel = step.max_phi_travel.value_or(0.0);
+                goal.phi_travel_events.push_back(event);
+            }
         }
         route_pending_ = true;
         cancel_sent_ = false;
@@ -1046,6 +1076,8 @@ private:
     uint64_t pending_epoch_{0}, pending_step_id_{0};
     struct GroupRoute {
         size_t end_index{0};
+        size_t target_count{0};
+        std::vector<std::pair<size_t, Step>> phi_events;
         catchrobo2026_msgs::msg::RotationGroupRoute route;
     };
     std::map<size_t, GroupRoute> group_routes_;

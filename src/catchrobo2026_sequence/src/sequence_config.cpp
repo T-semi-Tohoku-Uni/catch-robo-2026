@@ -967,11 +967,18 @@ std::vector<Step> SequenceConfig::compile_sequence(
     }
     const bool deferred_tail = i + 1 == result.size() &&
       allow_deferred_waypoints && !in_sequence_group;
-    if (result[i].waypoint && !deferred_tail &&
-      (i + 1 == result.size() || result[i + 1].type != StepType::MOVE))
-    {
-      fail(at,
-        "waypoint movement must be followed immediately by another movement");
+    if (result[i].waypoint && !deferred_tail) {
+      std::size_t next = i + 1;
+      while (next < result.size() &&
+        (result[next].type == StepType::PHI_TRAVEL_START ||
+        result[next].type == StepType::PHI_TRAVEL_END))
+      {
+        ++next;
+      }
+      if (next >= result.size() || result[next].type != StepType::MOVE) {
+        fail(at,
+          "waypoint movement must be followed by another movement (phi flags may intervene)");
+      }
     }
     if (result[i].type == StepType::SEQUENCE_START) {
       if (in_sequence_group) {
@@ -1035,21 +1042,19 @@ std::vector<PhiTravelInterval> collect_phi_travel_intervals(
   std::vector<PhiTravelInterval> result;
   std::optional<PhiTravelInterval> active;
   std::size_t target_count = 0;
-  bool pending_waypoint = false;
   for (std::size_t i = group_start + 1; i < group_end; ++i) {
     const auto & step = steps.at(i);
     if (step.type == StepType::MOVE) {
       target_count += step.waypoints.size() + 1;
-      pending_waypoint = step.waypoint;
     } else if (step.type == StepType::PHI_TRAVEL_START) {
-      if (active || pending_waypoint || !step.max_phi_travel ||
+      if (active || !step.max_phi_travel ||
         !std::isfinite(*step.max_phi_travel) || *step.max_phi_travel < 0.0)
       {
-        fail("phi_travel", "invalid limit, nested interval or split waypoint route");
+        fail("phi_travel", "invalid limit or nested interval");
       }
       active = PhiTravelInterval{target_count, target_count, *step.max_phi_travel};
     } else if (step.type == StepType::PHI_TRAVEL_END) {
-      if (!active || pending_waypoint || target_count == active->start_target) {
+      if (!active || target_count == active->start_target) {
         fail("phi_travel", "end needs a start and a complete MOVE in the same interval");
       }
       active->end_target = target_count;
