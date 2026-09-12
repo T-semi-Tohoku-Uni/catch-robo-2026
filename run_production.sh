@@ -12,14 +12,29 @@ fail() {
     exit 1
 }
 
-if [[ "${1:-}" == '--help' || "${1:-}" == '-h' ]]; then
+robot_help=false
+robot_read_only=false
+for robot_arg in "$@"; do
+    case "$robot_arg" in
+        -h|--help)
+            robot_help=true
+            ;;
+        -s|--show-args|--show-arguments|-p|--print|--print-description)
+            robot_read_only=true
+            ;;
+    esac
+done
+
+if [[ "$robot_help" == true ]]; then
     cat <<'USAGE'
 Usage: ./run_production.sh team:=red [debug:=true] [launch arguments...]
        ROBOT_ROS_DISTRO=humble ./run_production.sh team:=blue
 
 ROS環境とこのワークスペースのinstallを読み直し、CAN付き本番launchを起動します。
 ROS選択順: ROBOT_ROS_DISTRO → ROS_DISTRO → /opt/ros内の唯一の環境。
---show-args でlaunch引数を表示できます。ビルドは自動実行しません。
+-s / --show-args / --show-arguments でlaunch引数を表示できます。
+-p / --print / --print-description でlaunch記述を表示できます。
+どちらもCANを操作せず、ビルドも自動実行しません。
 手首実測角の許容設定は joint_feedback_config:=/path/to/joint_feedback.yaml で変更できます。
 USAGE
     exit 0
@@ -72,10 +87,12 @@ for robot_package in catchrobo2026_sequence catchrobo2026_ui nav_director nhk202
     fi
 done
 
-# マイコンのリセット処理
-sudo ip link set can0 down
-sudo ip link set can0 up type can bitrate 1000000 dbitrate 2000000 fd on
-cansend can0 001#00000001
+if [[ "$robot_read_only" != true ]]; then
+    # Reset the microcontroller before a production launch.
+    sudo ip link set can0 down
+    sudo ip link set can0 up type can bitrate 1000000 dbitrate 2000000 fd on
+    cansend can0 001#00000001
+fi
 
 cd -- "$robot_workspace"
 printf 'ROS=%s workspace=%s\n' "$ROS_DISTRO" "$robot_workspace"
