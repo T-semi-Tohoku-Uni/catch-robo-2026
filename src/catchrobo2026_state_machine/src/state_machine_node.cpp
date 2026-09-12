@@ -17,6 +17,8 @@ public:
   {
     // パブリッシャーの設定 (トピック名: 'init_state')
     publisher_ = this->create_publisher<std_msgs::msg::Int32MultiArray>("init_state", 10);
+    endprocessing_publisher_ =
+      this->create_publisher<std_msgs::msg::Int32MultiArray>("end_state", 10);
     
     // StateControl サービスを使用するようにサーバーを設定
     service_ = this->create_service<catchrobo2026_msgs::srv::StateControl>(
@@ -38,6 +40,16 @@ public:
     // タイマーの設定 (100ms = 10Hz)
     timer_ = this->create_wall_timer(
       100ms, std::bind(&RepeaterNode::timer_callback, this));
+    endprocessing_timer_ = this->create_wall_timer(
+      1ms, [this]() {
+        if (endprocessing_remaining_ == 0) {
+          return;
+        }
+        std_msgs::msg::Int32MultiArray msg;
+        msg.data = {1};
+        endprocessing_publisher_->publish(msg);
+        --endprocessing_remaining_;
+      });
       
     RCLCPP_INFO(this->get_logger(), "C++ Repeater Node が初期化されました");
   }
@@ -47,6 +59,14 @@ private:
     const std::shared_ptr<catchrobo2026_msgs::srv::StateControl::Request> request,
     std::shared_ptr<catchrobo2026_msgs::srv::StateControl::Response> response)
   {
+    if (request->command == 2) {
+      // 再要求時は、その時点から20回の送信を開始する。
+      endprocessing_remaining_ = 20;
+      response->success = true;
+      RCLCPP_INFO(this->get_logger(), "endprocessing に [1] を20回送信します");
+      return;
+    }
+
     // リクエストの command を受け取る[cite: 4]
     current_value_ = request->command;
     RCLCPP_INFO(this->get_logger(), "新しい値を受け取りました: %d", current_value_);
@@ -63,10 +83,13 @@ private:
   }
 
   int current_value_;
+  int endprocessing_remaining_ = 0;
   rclcpp::Publisher<std_msgs::msg::Int32MultiArray>::SharedPtr publisher_;
+  rclcpp::Publisher<std_msgs::msg::Int32MultiArray>::SharedPtr endprocessing_publisher_;
   rclcpp::Service<catchrobo2026_msgs::srv::StateControl>::SharedPtr service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr initialization_service_;
   rclcpp::TimerBase::SharedPtr timer_;
+  rclcpp::TimerBase::SharedPtr endprocessing_timer_;
 };
 
 int main(int argc, char * argv[])
