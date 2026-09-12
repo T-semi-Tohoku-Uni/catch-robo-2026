@@ -199,12 +199,14 @@ sequences:
       - pump: suction
 #      - move: {relative: [0, 0, '$pick_approach_dz', 0]}
 #      - move: {relative: [0, -10, '$pick_approach_dz', 0]}
-      - manual: {mode: blacklist, disable: [x]}
+#      - manual: {mode: blacklist, disable: [x]}
+      - manual: true
       - move: {relative: [0, 0, '$pick_retreat_dz', 0]}
   place_common:
     steps:
       - move: {relative: [0, 0, '$place_approach_dz', 0]}
-      - manual: {mode: whitelist, enable: [x, y, z]}
+#      - manual: {mode: whitelist, enable: [x, y, z]}
+      - manual: true
       - pump: release
       - move: {relative: [0, 0, '$place_retreat_dz', 0]}
       - pump: off
