@@ -72,6 +72,9 @@ for robot_package in catchrobo2026_sequence catchrobo2026_ui nav_director nhk202
     fi
 done
 
+# マイコンのリセット処理
+cansend can0 001#00000001
+
 cd -- "$robot_workspace"
 printf 'ROS=%s workspace=%s\n' "$ROS_DISTRO" "$robot_workspace"
 exec ros2 launch "$robot_workspace/launch/production.launch.py" "$@"
