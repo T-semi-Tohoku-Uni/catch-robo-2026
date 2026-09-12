@@ -116,7 +116,7 @@ values:
   common_work_above_z: 266.95
   place_above_z: 374.35
   # Each offset is relative to the last absolute pose, not the preceding move.
-  pick_approach_dz: -20
+  pick_approach_dz: -50
   pick_retreat_dz: 70
   # Experimental retry settings; confirm pressure_comparison/indices in pump.yaml first.
   pick_max_attempts: 3
@@ -197,7 +197,7 @@ sequences:
     # Shared motion preserves the current approach, Y correction, suction and retreat order.
     steps:
       - pump: suction
-#      - move: {relative: [0, 0, '$pick_approach_dz', 0]}
+      - move: {relative: [0, 0, '$pick_approach_dz', 0]}
 #      - move: {relative: [0, -10, '$pick_approach_dz', 0]}
 #      - manual: {mode: blacklist, disable: [x]}
       - manual: true
