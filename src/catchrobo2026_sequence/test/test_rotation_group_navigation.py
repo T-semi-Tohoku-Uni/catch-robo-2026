@@ -579,12 +579,12 @@ def test_place_red_1_1_waypoint_phi_interval_through_real_navigation(
     assert len(commands) > 20
     waypoint = (150, 0, 360)
     destination = (150.87, -436, 390)
-    waypoint_base = math.atan2(waypoint[0] - 675, waypoint[1] + 190)
-    destination_base = math.atan2(destination[0] - 675, destination[1] + 190)
+    waypoint_base = math.atan2(-(waypoint[0] - 675), waypoint[1] + 130)
+    destination_base = math.atan2(-(destination[0] - 675), destination[1] + 130)
 
     def boundary_error(command, base):
         q0, q4 = float(command.data[0]), float(command.data[3])
-        return abs(q0 - base) + abs(q0 + q4 + 2 * math.pi)
+        return abs(q0 - base) + abs(q0 + q4)
 
     waypoint_index = min(
         range(len(commands)), key=lambda i: boundary_error(commands[i], waypoint_base))
@@ -592,6 +592,8 @@ def test_place_red_1_1_waypoint_phi_interval_through_real_navigation(
         range(waypoint_index, len(commands)),
         key=lambda i: boundary_error(commands[i], destination_base))
     assert destination_index > waypoint_index
+    assert boundary_error(commands[waypoint_index], waypoint_base) < 1e-4
+    assert boundary_error(commands[destination_index], destination_base) < 1e-4
     assert commanded_phi_travel(commands[:waypoint_index + 1]) > 0.5
     assert commanded_phi_travel(commands[waypoint_index:destination_index + 1]) <= \
         math.pi / 6 + 1e-4

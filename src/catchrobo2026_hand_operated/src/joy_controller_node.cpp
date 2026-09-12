@@ -679,14 +679,20 @@ private:
         const float rot_gain = static_cast<float>(manual_angular_speed_rad_s_) *
             kPublishPeriodSeconds;
 
-        current_pose_[0] -= vel_x_ * pos_gain;
-        current_pose_[1] += vel_y_ * pos_gain;
-        current_pose_[2] += vel_z_ * pos_gain;
-        current_pose_[3] += vel_phi_ * rot_gain;
+        float candidate_pose[6];
+        std::copy(std::begin(current_pose_), std::end(current_pose_), candidate_pose);
+        candidate_pose[0] -= vel_x_ * pos_gain;
+        candidate_pose[1] += vel_y_ * pos_gain;
+        candidate_pose[2] += vel_z_ * pos_gain;
+        candidate_pose[3] += vel_phi_ * rot_gain;
 
         // 2. ローカルで逆運動学(IK)を計算
         float target_joints[4] = {0.0f};
-        kin_.inverse_kinematics(current_pose_, target_joints);
+        kin_.inverse_kinematics(candidate_pose, target_joints);
+        if (!std::all_of(std::begin(target_joints), std::end(target_joints),
+                [](float value) { return std::isfinite(value); })) {
+            return;
+        }
 
         // 同じ向きを保ったまま第4関節を [-2π, 0] [rad] に収める。
         // 例: +π は 0 に切り詰めず -π とする。範囲内の値は端点も保持する。
@@ -705,6 +711,7 @@ private:
             msg_out.data[i] = target_joints[i];
         }
         joint_pub_->publish(msg_out);
+        std::copy(std::begin(candidate_pose), std::end(candidate_pose), current_pose_);
 
         // 4. アームの姿勢マーカー (矢印) をパブリッシュ
         publish_arm_markers(target_joints);
@@ -725,7 +732,6 @@ private:
             marker.ns = "arm_links";
             marker.id = i;
             marker.type = visualization_msgs::msg::Marker::ARROW;
-            marker.action = visualization_msgs::msg::Marker::ADD;
 
             geometry_msgs::msg::Point p_start, p_end;
             // robot_kinematicsは[mm]単位なので、RViz用に[m]に変換する[cite: 1]
@@ -736,6 +742,17 @@ private:
             p_end.x = positions[i+1][0] / 1000.0;
             p_end.y = positions[i+1][1] / 1000.0;
             p_end.z = positions[i+1][2] / 1000.0;
+
+            const double length = std::sqrt(
+                std::pow(p_end.x - p_start.x, 2) +
+                std::pow(p_end.y - p_start.y, 2) +
+                std::pow(p_end.z - p_start.z, 2));
+            if (length < 1e-9) {
+                marker.action = visualization_msgs::msg::Marker::DELETE;
+                marker_array.markers.push_back(marker);
+                continue;
+            }
+            marker.action = visualization_msgs::msg::Marker::ADD;
 
             marker.points.push_back(p_start);
             marker.points.push_back(p_end);

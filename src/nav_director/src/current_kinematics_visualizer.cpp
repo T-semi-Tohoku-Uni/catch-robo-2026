@@ -1,3 +1,5 @@
+#include <cmath>
+
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
@@ -72,7 +74,6 @@ private:
             marker.ns = "current_links";
             marker.id = i;
             marker.type = visualization_msgs::msg::Marker::ARROW;
-            marker.action = visualization_msgs::msg::Marker::ADD;
 
             // mmからmへの単位変換
             geometry_msgs::msg::Point p_start, p_end;
@@ -83,6 +84,17 @@ private:
             p_end.x = positions[i+1][0] / 1000.0;
             p_end.y = positions[i+1][1] / 1000.0;
             p_end.z = positions[i+1][2] / 1000.0;
+
+            const double length = std::sqrt(
+                std::pow(p_end.x - p_start.x, 2) +
+                std::pow(p_end.y - p_start.y, 2) +
+                std::pow(p_end.z - p_start.z, 2));
+            if (length < 1e-9) {
+                marker.action = visualization_msgs::msg::Marker::DELETE;
+                marker_array.markers.push_back(marker);
+                continue;
+            }
+            marker.action = visualization_msgs::msg::Marker::ADD;
 
             marker.points.push_back(p_start);
             marker.points.push_back(p_end);

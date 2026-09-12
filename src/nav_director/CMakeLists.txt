@@ -127,6 +127,7 @@ if(BUILD_TESTING)
   target_link_libraries(test_route_planner route_planner)
   add_test(NAME route_planner COMMAND test_route_planner)
   add_executable(test_rotation_constraints test/test_rotation_constraints.cpp)
+  ament_target_dependencies(test_rotation_constraints inverse_kinematics_package)
   add_test(NAME rotation_constraints COMMAND test_rotation_constraints)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights

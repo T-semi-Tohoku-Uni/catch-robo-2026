@@ -7,6 +7,8 @@
 #include <limits>
 #include <vector>
 
+#include "ros2_inverse_kinematics/homogeneous_transform.h"
+
 namespace rotation_constraints
 {
 
@@ -91,7 +93,8 @@ inline bool continuous_base_segment(double x0, double y0, double x1, double y1)
   const double ny = y0 + nearest * dy;
   // The base axis and the principal-atan2 branch need separate joint planning.
   if (nx * nx + ny * ny < 1e-6 ||
-    std::abs(std::atan2(x1, y1) - std::atan2(x0, y0)) > kTurn / 2.0)
+    std::abs(catchrobo_kinematics::base_angle(x1, y1) -
+    catchrobo_kinematics::base_angle(x0, y0)) > kTurn / 2.0)
   {
     return false;
   }
@@ -112,23 +115,25 @@ inline bool legal_phi_segment(
   const double b = 2.0 * (x0 * dx + y0 * dy);
   const double c = x0 * x0 + y0 * y0;
   const double delta = phi1 - phi0;
+  const double cross = x0 * dy - y0 * dx;
   if (direction != 0) {
     // The derivative extrema occur at the extrema of the squared base radius.
     const double nearest = a > 0.0 ? std::clamp(-b / (2.0 * a), 0.0, 1.0) : 0.0;
     for (double t : {0.0, nearest, 1.0}) {
       const double x = x0 + t * dx;
       const double y = y0 + t * dy;
-      const double wrist_derivative = delta - (y0 * dx - x0 * dy) / (x*x + y*y);
+      const double wrist_derivative = delta - cross / (x*x + y*y);
       if (direction * wrist_derivative < -kTolerance) {return false;}
     }
   }
   const auto check = [&](double t) {
-      return legal(phi0 + t * delta - std::atan2(x0 + t * dx, y0 + t * dy));
+      return legal(phi0 + t * delta - catchrobo_kinematics::base_angle(
+        x0 + t * dx, y0 + t * dy));
     };
   if (!check(0.0) || !check(1.0)) {return false;}
   if (a == 0.0 || delta == 0.0) {return true;}
-  // d(phi-q0)/dt = delta - (y0*dx-x0*dy)/r(t)^2.
-  const double stationary_c = c - (y0 * dx - x0 * dy) / delta;
+  // d(phi-q0)/dt = delta - cross/r(t)^2.
+  const double stationary_c = c - cross / delta;
   const double discriminant = b * b - 4.0 * a * stationary_c;
   if (discriminant < 0.0) {return true;}
   const double root = std::sqrt(discriminant);
@@ -150,9 +155,10 @@ inline double wrist_segment_phi_travel(
   const double delta = wrist1 - wrist0;
   const double a = dx * dx + dy * dy;
   const double b = 2.0 * (x0 * dx + y0 * dy);
+  const double cross = x0 * dy - y0 * dx;
   std::vector<double> times{0.0, 1.0};
   if (a > 0.0 && delta != 0.0) {
-    const double c = x0*x0 + y0*y0 + (y0*dx - x0*dy) / delta;
+    const double c = x0*x0 + y0*y0 + cross / delta;
     const double discriminant = b*b - 4.0*a*c;
     if (discriminant >= 0.0) {
       const double root = std::sqrt(discriminant);
@@ -162,11 +168,12 @@ inline double wrist_segment_phi_travel(
     }
   }
   std::sort(times.begin(), times.end());
-  double previous = std::atan2(x0, y0) + wrist0;
+  double previous = catchrobo_kinematics::base_angle(x0, y0) + wrist0;
   double travel = 0.0;
   for (size_t i = 1; i < times.size(); ++i) {
     const double t = times[i];
-    const double phi = std::atan2(x0 + t*dx, y0 + t*dy) + wrist0 + t*delta;
+    const double phi = catchrobo_kinematics::base_angle(
+      x0 + t*dx, y0 + t*dy) + wrist0 + t*delta;
     travel += std::abs(phi - previous);
     previous = phi;
   }

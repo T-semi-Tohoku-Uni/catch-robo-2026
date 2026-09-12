@@ -139,17 +139,17 @@ void check()
   request.allow_wrist_reversal = true;
   request.limit_phi_travel = true;
   request.max_phi_travel = 0.17453292519943295;
-  const auto rejected = planner.planGroup(zero, request);
-  require(!rejected.success, "Unwound A to B must exceed the small phi budget");
+  const auto rejected = planner.planGroup(wound, request);
+  require(!rejected.success, "Lower-wound A to B must exceed the small phi budget");
   require(rejected.message.find("exceeds") != std::string::npos,
     "The phi budget failure was not explained");
-  const auto accepted = planner.planGroup(wound, request);
+  const auto accepted = planner.planGroup(zero, request);
   require(accepted.success, accepted.message);
-  require(accepted.phi_travel < 1e-5, "Wound A to B should preserve phi");
+  require(accepted.phi_travel < 1e-5, "Upper-branch A to B should preserve phi");
   require(accepted.routes.size() == 1, "Route count changed");
   require(accepted.routes[0].path.header.stamp.sec == 0 &&
     accepted.routes[0].path.header.stamp.nanosec == 0, "Offline planner used a clock");
-  require(std::abs(accepted.routes[0].wrist_angles.back() + 6.220766497) < 1e-5,
+  require(std::abs(accepted.routes[0].wrist_angles.back() + 0.244978663) < 1e-5,
     "Ending wrist angle changed");
 
   const nav_director::Point3D pick{375.0, 238.0, 196.95, -turn / 2.0};
@@ -170,7 +170,7 @@ void check()
   const auto lookahead = planner.planGroup(pick_state, request);
   require(lookahead.success, lookahead.message);
   require(lookahead.routes.size() == 2, "Lookahead route count changed");
-  require(std::abs(lookahead.routes[0].wrist_angles.back() + turn) < 1e-5,
+  require(std::abs(lookahead.routes[0].wrist_angles.back()) < 1e-5,
     "Lookahead did not select the useful winding at A");
 
   request.limit_phi_travel = false;
@@ -185,7 +185,7 @@ void check()
     "Only A to B should be counted against the 30-degree budget");
   require(scoped.phi_travel > 3.0 && scoped.phi_travel < 3.2,
     "The approach must remain outside the local budget");
-  require(std::abs(scoped.routes[0].wrist_angles.back() + turn) < 1e-5,
+  require(std::abs(scoped.routes[0].wrist_angles.back()) < 1e-5,
     "The local bound must influence winding selection before its start");
 
   request.targets = {target({150.0, 0.0, 360.0, 0.0}),
@@ -227,8 +227,8 @@ void check()
   from_a.route_ends = {1};
   from_a.phi_travel_intervals[0].start_target = 0;
   from_a.phi_travel_intervals[0].end_target = 1;
-  require(!planner.planGroup(zero, from_a).success,
-    "Unwound A to B must be rejected when the interval is active from the start");
+  require(!planner.planGroup(wound, from_a).success,
+    "Lower-wound A to B must be rejected when the interval is active from the start");
   request.limit_phi_travel = true;
   request.max_phi_travel = 0.6;
   require(!planner.planGroup(pick_state, request).success, "Local bound must not replace global bound");

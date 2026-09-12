@@ -18,6 +18,7 @@ void expect(bool condition, const char *message)
 int main()
 {
   using namespace rotation_constraints;
+  using catchrobo_kinematics::base_angle;
   std::vector<double> angles;
   expect(candidates(0.0).size() == 2, "Zero must allow both wrist endpoints");
   expect(candidates(kTurn).size() == 2, "Full turn must allow both wrist endpoints");
@@ -66,43 +67,44 @@ int main()
   expect(!solve(-3.0, {-2.0}, 0, angles), "Invalid direction must fail");
   expect(solve(-1.0, {-1.0 - kTolerance / 2}, 1, angles) && angles.back() == -1.0,
         "Float noise must not reverse the planned wrist");
-  expect(legal_phi_segment(0.0, 390.0, -5.0, 80.0, -kTurn, -kTurn),
-        "Ending A to B must permit constant unwrapped phi at the lower wrist branch");
-  expect(legal_phi_segment(0.0, 390.0, -5.0, 80.0, -kTurn, -kTurn, 1),
-        "A zero-phi-travel ending must also satisfy increasing wrist direction");
-  expect(!legal_phi_segment(0.0, 390.0, -5.0, 80.0, -kTurn, -kTurn, -1),
+  expect(legal_phi_segment(0.0, 330.0, -5.0, 20.0, 0.0, 0.0),
+        "Ending A to B must permit constant phi at the upper wrist branch");
+  expect(legal_phi_segment(0.0, 330.0, -5.0, 20.0, 0.0, 0.0, -1),
+        "A zero-phi-travel ending must also satisfy decreasing wrist direction");
+  expect(!legal_phi_segment(0.0, 330.0, -5.0, 20.0, 0.0, 0.0, 1),
         "A zero-phi-travel ending must reject the opposite wrist direction");
-  expect(!legal_phi_segment(0.0, 390.0, -5.0, 80.0, 0.0, 0.0),
-        "Ending A at wrist zero cannot retain phi zero on the way to B");
-  expect(!legal_phi_segment(-1.0, 1.0, -10.0, 1.0,
-          std::atan2(-1.0, 1.0), std::atan2(-10.0, 1.0)),
-        "Interior wrist extrema must reject an upper-limit excursion");
+  expect(!legal_phi_segment(0.0, 330.0, -5.0, 20.0, -kTurn, -kTurn),
+        "Ending A at the lower wrist branch cannot retain phi zero on the way to B");
   expect(!legal_phi_segment(1.0, 1.0, 10.0, 1.0,
-          std::atan2(1.0, 1.0) - kTurn, std::atan2(10.0, 1.0) - kTurn),
+          base_angle(1.0, 1.0), base_angle(10.0, 1.0)),
+        "Interior wrist extrema must reject an upper-limit excursion");
+  expect(!legal_phi_segment(-1.0, 1.0, -10.0, 1.0,
+          base_angle(-1.0, 1.0) - kTurn, base_angle(-10.0, 1.0) - kTurn),
         "Interior wrist extrema must reject a lower-limit excursion");
   expect(!continuous_base_segment(-1.0, -10.0, 1.0, -10.0),
         "The raw base atan2 discontinuity must not be hidden by unwrapping");
   expect(!continuous_base_segment(-1.0, 0.0, 1.0, 0.0),
         "A base-axis crossing between samples must be rejected");
-  expect(legal_phi_segment(-1.0, 1.0, 1.0, 1.0, -4.0, -2.3) &&
-          !legal_phi_segment(-1.0, 1.0, 1.0, 1.0, -4.0, -2.3, 1),
+  expect(legal_phi_segment(1.0, 1.0, -1.0, 1.0, -4.0, -2.3) &&
+          !legal_phi_segment(1.0, 1.0, -1.0, 1.0, -4.0, -2.3, 1) &&
+          !legal_phi_segment(1.0, 1.0, -1.0, 1.0, -4.0, -2.3, -1),
         "Direction checks must include the closest radius between samples");
-  const double ending_base = std::atan2(-5.0, 80.0);
+  const double ending_base = base_angle(-5.0, 20.0);
   const double ending_amount = wrist_segment_phi_travel(
-      0.0, 390.0, -5.0, 80.0, -kTurn, -kTurn - ending_base);
-  expect(std::abs(ending_amount - 0.04696155549) < 1e-9,
+      0.0, 330.0, -5.0, 20.0, 0.0, -ending_base);
+  expect(std::abs(ending_amount - 0.29448217432569412) < 1e-9,
         "Wrist-linear ending travel must include its interior phi reversal");
   expect(std::abs(wrist_segment_phi_travel(0.0, 1.0, 0.0, 1.0, 0.0, -kTurn) -
           kTurn) < 1e-12,
         "A full turn must not disappear because start and end orientations match");
   double travel = 0.0;
-  for (int direction : {0, 1}) {
+  for (int direction : {0, -1}) {
     const auto ending_direction = [direction](size_t, double phi0, double phi1) {
-        return legal_phi_segment(0.0, 390.0, -5.0, 80.0, phi0, phi1, direction);
+        return legal_phi_segment(0.0, 330.0, -5.0, 20.0, phi0, phi1, direction);
       };
-    expect(solve_minimum_phi(-kTurn, {ending_base}, {-ending_base},
+    expect(solve_minimum_phi(0.0, {ending_base}, {-ending_base},
             ending_direction, angles, travel) && travel == 0.0,
-          "AB must meet a zero phi budget with or without increasing wrist direction");
+          "AB must meet a zero phi budget with or without decreasing wrist direction");
   }
   const auto any_edge = [](size_t, double, double) {return true;};
   expect(!solve_minimum_phi_cost(0.0, {0.0}, {0.0},
@@ -121,33 +123,33 @@ int main()
   expect(std::abs(travel - 0.8) < 1e-10, "Adjacent budgets must not erase global travel");
   expect(solve_minimum_phi(-kTurn / 2.0, {0.0, ending_base},
           {0.0, -ending_base}, any_edge, angles, travel) &&
-          angles[0] == -kTurn && std::abs(travel - kTurn / 2.0) < 1e-12,
-        "Endpoint selection must look ahead through A to B instead of choosing nearest A");
+          angles[0] == 0.0 && std::abs(travel - kTurn / 2.0) < 1e-12,
+        "Endpoint selection must retain the shortest continuous phi branch through A to B");
   const auto ending_edges = [](size_t index, double phi0, double phi1) {
-      return index == 0 ? legal_phi_segment(-300.0, 428.0, 0.0, 390.0, phi0, phi1) :
-             legal_phi_segment(0.0, 390.0, -5.0, 80.0, phi0, phi1);
+      return index == 0 ? legal_phi_segment(-300.0, 368.0, 0.0, 330.0, phi0, phi1) :
+             legal_phi_segment(0.0, 330.0, -5.0, 20.0, phi0, phi1);
     };
   expect(solve_minimum_phi(-kTurn / 2.0, {0.0, ending_base},
           {0.0, -ending_base}, ending_edges, angles, travel) &&
-          angles[0] == -kTurn && std::abs(travel - kTurn / 2.0) < 1e-12,
+          angles[0] == 0.0 && std::abs(travel - kTurn / 2.0) < 1e-12,
         "Configured PICK retreat through ending must choose the legal constant-phi AB branch");
   expect(solve_minimum_phi(0.0, {0.0, 0.0}, {0.0, 0.0},
           any_edge, angles, travel) && travel == 0.0 && angles[0] == 0.0,
         "A feasible zero-phi-travel plan must remain exactly zero");
   const auto reject_short = [](size_t index, double, double phi) {
-      return index != 0 || phi == 0.0;
+      return index != 0 || phi == -kTurn;
     };
   expect(solve_minimum_phi(-kTurn / 2.0, {0.0, ending_base},
           {0.0, -ending_base}, reject_short, angles, travel) &&
-          angles[0] == 0.0 && std::abs(travel - 1.5 * kTurn) < 1e-12,
+          angles[0] == -kTurn && std::abs(travel - 1.5 * kTurn) < 1e-12,
         "A geometrically infeasible short branch must not hide a longer legal branch");
   const auto reject_all = [](size_t, double, double) {return false;};
   expect(!solve_minimum_phi(-1.0, {0.0}, {-2.0}, reject_all, angles, travel),
         "An infeasible phi graph must return no partial plan");
   expect(!solve_minimum_phi(-1.0, {}, {-2.0}, any_edge, angles, travel),
         "Mismatched phi targets must be rejected");
-  const double fallback_base0 = std::atan2(-100.0, 100.0);
-  const double fallback_base1 = std::atan2(-400.0, 100.0);
+  const double fallback_base0 = base_angle(-100.0, 100.0);
+  const double fallback_base1 = base_angle(-400.0, 100.0);
   for (int direction : {1, -1}) {
     const auto phi_direction = [direction](size_t, double phi0, double phi1) {
         return legal_phi_segment(-100.0, 100.0, -400.0, 100.0, phi0, phi1, direction);
