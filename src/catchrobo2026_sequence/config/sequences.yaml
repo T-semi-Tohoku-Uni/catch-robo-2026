@@ -150,9 +150,9 @@ poses:
   place_red_0_0_above: [117.13, -172, 410, -3.14159265358979]
   place_red_0_1_above: [150.87, -286, 400, 0]
   place_red_1_0_above: [150.87, -322, 400, -3.14159265358979]
-  place_red_1_1_above: [150.87, -470, 390, 0]
+  place_red_1_1_above: [150.87, -436, 390, 0]
   place_red_2_0_above: [150.87, -472, 370, -3.14159265358979]
-  place_red_2_1_above: [150.87, -620, 370, -3.14159265358979]
+  place_red_2_1_above: [150.87, -586, 370, -3.14159265358979]
   place_red_3_0_above: [117.13, -622, 360, -3.14159265358979]
   place_red_3_1_above: [150.87, -736, 360, -3.14159265358979]
   # PLACE blue: GroupIdx=box+1, RowIdx=box_column+1, ColIdx=2.
@@ -219,10 +219,10 @@ sequences:
       - waypoint: {absolute: [1200, 0, 360, -3.14159265358979]}
   place_pre_red_waypoint1:
     steps:
-      - waypoint: {absolute: [150, 0, 360, 0]}
+      - waypoint: {absolute: [150, 0, 360, -1.57]}
   place_pre_blue_waypoint1:
     steps:
-      - waypoint: {absolute: [1200, 0, 360, 0]}
+      - waypoint: {absolute: [1200, 0, 360, -1.57]}
 
   pick_0_1:
     steps:
