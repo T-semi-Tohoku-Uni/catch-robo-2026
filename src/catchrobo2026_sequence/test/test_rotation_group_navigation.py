@@ -579,12 +579,12 @@ def test_place_red_1_1_waypoint_phi_interval_through_real_navigation(
     assert len(commands) > 20
     waypoint = (150, 0, 360)
     destination = (150.87, -436, 390)
-    waypoint_base = math.atan2(-(waypoint[0] - 675), waypoint[1] + 130)
-    destination_base = math.atan2(-(destination[0] - 675), destination[1] + 130)
+    waypoint_base = math.atan2(waypoint[0] - 675, waypoint[1] + 190)
+    destination_base = math.atan2(destination[0] - 675, destination[1] + 190)
 
     def boundary_error(command, base):
         q0, q4 = float(command.data[0]), float(command.data[3])
-        return abs(q0 - base) + abs(q0 + q4)
+        return abs(q0 - base) + abs(q0 + q4 + 2 * math.pi)
 
     waypoint_index = min(
         range(len(commands)), key=lambda i: boundary_error(commands[i], waypoint_base))

@@ -115,7 +115,7 @@ inline bool legal_phi_segment(
   const double b = 2.0 * (x0 * dx + y0 * dy);
   const double c = x0 * x0 + y0 * y0;
   const double delta = phi1 - phi0;
-  const double cross = x0 * dy - y0 * dx;
+  const double cross = y0 * dx - x0 * dy;
   if (direction != 0) {
     // The derivative extrema occur at the extrema of the squared base radius.
     const double nearest = a > 0.0 ? std::clamp(-b / (2.0 * a), 0.0, 1.0) : 0.0;
@@ -155,7 +155,7 @@ inline double wrist_segment_phi_travel(
   const double delta = wrist1 - wrist0;
   const double a = dx * dx + dy * dy;
   const double b = 2.0 * (x0 * dx + y0 * dy);
-  const double cross = x0 * dy - y0 * dx;
+  const double cross = y0 * dx - x0 * dy;
   std::vector<double> times{0.0, 1.0};
   if (a > 0.0 && delta != 0.0) {
     const double c = x0*x0 + y0*y0 + cross / delta;
