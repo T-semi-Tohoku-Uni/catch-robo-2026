@@ -287,129 +287,129 @@ sequences:
       - sequence_group: {start: true, rotation_group: true}
       - call: place_pre_red_waypoint
       - move: {absolute: place_red_0_0_above}
+      - sequence_group: end
       - call: place_common
       - call: place_pre_red_waypoint
-      - sequence_group: end
   place_red_0_1:
     steps:
       - sequence_group: {start: true, rotation_group: true}
       - call: place_pre_red_waypoint
       - move: {absolute: place_red_0_1_above}
+      - sequence_group: end
       - call: place_common
       - call: place_pre_red_waypoint
-      - sequence_group: end
   place_red_1_0:
     steps:
       - sequence_group: {start: true, rotation_group: true}
       - call: place_pre_red_waypoint
       - move: {absolute: place_red_1_0_above}
+      - sequence_group: end
       - call: place_common
       - call: place_pre_red_waypoint
-      - sequence_group: end
   place_red_1_1:
     steps:
       - sequence_group: {start: true, rotation_group: true}
       - call: place_pre_red_waypoint
       - move: {absolute: place_red_1_1_above}
+      - sequence_group: end
       - call: place_common
       - call: place_pre_red_waypoint
-      - sequence_group: end
   place_red_2_0:
     steps:
       - sequence_group: {start: true, rotation_group: true}
       - call: place_pre_red_waypoint
       - move: {absolute: place_red_2_0_above}
+      - sequence_group: end
       - call: place_common
       - call: place_pre_red_waypoint
-      - sequence_group: end
   place_red_2_1:
     steps:
       - sequence_group: {start: true, rotation_group: true}
       - call: place_pre_red_waypoint
       - move: {absolute: place_red_2_1_above}
+      - sequence_group: end
       - call: place_common
       - call: place_pre_red_waypoint
-      - sequence_group: end
   place_red_3_0:
     steps:
       - sequence_group: {start: true, rotation_group: true}
       - call: place_pre_red_waypoint
       - move: {absolute: place_red_3_0_above}
+      - sequence_group: end
       - call: place_common
       - call: place_pre_red_waypoint
-      - sequence_group: end
   place_red_3_1:
     steps:
       - sequence_group: {start: true, rotation_group: true}
       - call: place_pre_red_waypoint
       - move: {absolute: place_red_3_1_above}
+      - sequence_group: end
       - call: place_common
       - call: place_pre_red_waypoint
-      - sequence_group: end
   place_blue_0_0:
     steps:
       - sequence_group: {start: true, rotation_group: true}
       - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_0_0_above}
+      - sequence_group: end
       - call: place_common
       - call: place_pre_blue_waypoint
-      - sequence_group: end
   place_blue_0_1:
     steps:
       - sequence_group: {start: true, rotation_group: true}
       - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_0_1_above}
+      - sequence_group: end
       - call: place_common
       - call: place_pre_blue_waypoint
-      - sequence_group: end
   place_blue_1_0:
     steps:
       - sequence_group: {start: true, rotation_group: true}
       - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_1_0_above}
+      - sequence_group: end
       - call: place_common
       - call: place_pre_blue_waypoint
-      - sequence_group: end
   place_blue_1_1:
     steps:
       - sequence_group: {start: true, rotation_group: true}
       - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_1_1_above}
+      - sequence_group: end
       - call: place_common
       - call: place_pre_blue_waypoint
-      - sequence_group: end
   place_blue_2_0:
     steps:
       - sequence_group: {start: true, rotation_group: true}
       - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_2_0_above}
+      - sequence_group: end
       - call: place_common
       - call: place_pre_blue_waypoint
-      - sequence_group: end
   place_blue_2_1:
     steps:
       - sequence_group: {start: true, rotation_group: true}
       - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_2_1_above}
+      - sequence_group: end
       - call: place_common
       - call: place_pre_blue_waypoint
-      - sequence_group: end
   place_blue_3_0:
     steps:
       - sequence_group: {start: true, rotation_group: true}
       - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_3_0_above}
+      - sequence_group: end
       - call: place_common
       - call: place_pre_blue_waypoint
-      - sequence_group: end
   place_blue_3_1:
     steps:
       - sequence_group: {start: true, rotation_group: true}
       - call: place_pre_blue_waypoint
       - move: {absolute: place_blue_3_1_above}
+      - sequence_group: end
       - call: place_common
       - call: place_pre_blue_waypoint
-      - sequence_group: end
 
 bindings:
   red:
