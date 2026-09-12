@@ -219,10 +219,10 @@ sequences:
       - waypoint: {absolute: [1200, 0, 360, -3.14159265358979]}
   place_pre_red_waypoint1:
     steps:
-      - waypoint: {absolute: [150, 0, 360, -1.57]}
+      - waypoint: {absolute: [150, 0, 360, 0]}
   place_pre_blue_waypoint1:
     steps:
-      - waypoint: {absolute: [1200, 0, 360, -1.57]}
+      - waypoint: {absolute: [1200, 0, 360, 0]}
 
   pick_0_1:
     steps:
