@@ -5,6 +5,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def package_path(package, *parts):
@@ -56,6 +57,7 @@ def generate_launch_description():
                 'manual_config': LaunchConfiguration('manual_config'),
                 'manual_velocity_config': LaunchConfiguration('manual_velocity_config'),
                 'joy_source': LaunchConfiguration('joy_source'),
+                'debug': LaunchConfiguration('debug'),
             }.items()),
             
         # Existing Nodes
@@ -87,7 +89,12 @@ def generate_launch_description():
             executable='joy_controller_node', 
             name='joy_controller_node', 
             parameters=[LaunchConfiguration('joint_feedback_config'),
-                        LaunchConfiguration('manual_velocity_config')],
+                        LaunchConfiguration('manual_velocity_config'), {
+                            'debug': ParameterValue(
+                                LaunchConfiguration('debug'), value_type=bool),
+                            'manual_velocity_config': ParameterValue(
+                                LaunchConfiguration('manual_velocity_config'), value_type=str),
+                        }],
             output='screen'
         ),
         Node(

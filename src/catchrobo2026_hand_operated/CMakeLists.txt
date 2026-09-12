@@ -9,6 +9,8 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rcl_interfaces REQUIRED)
+find_package(rcl_yaml_param_parser REQUIRED)
+find_package(rcutils REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
@@ -32,6 +34,8 @@ target_compile_features(joy_controller_node PRIVATE cxx_std_17)
 ament_target_dependencies(joy_controller_node
   rclcpp
   rcl_interfaces
+  rcl_yaml_param_parser
+  rcutils
   sensor_msgs
   std_msgs
   std_srvs
@@ -58,6 +62,8 @@ install(DIRECTORY
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_wrist_control test/test_wrist_control.py TIMEOUT 120)
+  ament_add_pytest_test(
+    test_manual_velocity_reload test/test_manual_velocity_reload.py TIMEOUT 120)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
   # comment the line when a copyright and license is added to all source files

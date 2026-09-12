@@ -5,6 +5,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -29,6 +30,7 @@ def generate_launch_description():
             'manual_velocity_config', default_value=manual_velocity_config,
             description='Manual Cartesian and angular velocity parameter file'
         ),
+        DeclareLaunchArgument('debug', default_value='false'),
         # ==================================
         # 自動制御 (アクション通信) 系
         # ==================================
@@ -68,7 +70,12 @@ def generate_launch_description():
             executable='joy_controller_node',
             name='joy_controller_node',
             parameters=[LaunchConfiguration('joint_feedback_config'),
-                        LaunchConfiguration('manual_velocity_config')],
+                        LaunchConfiguration('manual_velocity_config'), {
+                            'debug': ParameterValue(
+                                LaunchConfiguration('debug'), value_type=bool),
+                            'manual_velocity_config': ParameterValue(
+                                LaunchConfiguration('manual_velocity_config'), value_type=str),
+                        }],
             output='screen'
         ),
         Node(

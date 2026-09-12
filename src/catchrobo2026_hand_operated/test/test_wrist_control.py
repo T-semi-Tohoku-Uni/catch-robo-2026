@@ -107,14 +107,20 @@ class WristControlTest(unittest.TestCase):
 
     def test_manual_linear_velocity_and_neutral_hold(self):
         future = self.parameter_client.get_parameters([
-            'manual_linear_speed_mm_s', 'manual_angular_speed_rad_s'])
+            'manual_linear_speed_mm_s', 'manual_angular_speed_rad_s',
+            'debug', 'manual_velocity_config'])
         rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
         self.assertTrue(future.done())
-        self.assertEqual([value.double_value for value in future.result().values], [25.0, 0.25])
+        values = future.result().values
+        self.assertEqual([value.double_value for value in values[:2]], [25.0, 0.25])
+        self.assertFalse(values[2].bool_value)
+        self.assertEqual(values[3].string_value, '')
         future = self.parameter_client.set_parameters([
-            Parameter('manual_linear_speed_mm_s', value=10.0)])
+            Parameter('manual_linear_speed_mm_s', value=10.0),
+            Parameter('debug', value=True),
+            Parameter('manual_velocity_config', value='/tmp/other.yaml')])
         rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
-        self.assertFalse(future.result().results[0].successful)
+        self.assertTrue(all(not result.successful for result in future.result().results))
 
         self.marker_samples.clear()
         self.joy_pub.publish(self.joy(x=1.0))
