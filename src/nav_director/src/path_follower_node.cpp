@@ -121,16 +121,33 @@ private:
 
     rclcpp_action::GoalResponse handleGoal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const FollowRoute::Goal> goal) {
         (void)uuid;
-        if (!goal->start || busy_ || stopping_) {
+        const auto reject = [this, &goal](const std::string &reason) {
+            RCLCPP_WARN(get_logger(),
+                "FollowRoute goal rejected: %s (start=%s, busy=%s, stopping=%s, "
+                "poses=%zu, group_id=%llu, wrist_direction=%d, wrist_angles=%zu, "
+                "phi_angles=%zu, phi_events=%zu)",
+                reason.c_str(), goal->start ? "true" : "false", busy_ ? "true" : "false",
+                stopping_ ? "true" : "false", goal->path.poses.size(),
+                static_cast<unsigned long long>(goal->rotation_group_id),
+                static_cast<int>(goal->wrist_direction), goal->wrist_angles.size(),
+                goal->phi_angles.size(), goal->phi_travel_events.size());
             return rclcpp_action::GoalResponse::REJECT;
-        }
+        };
+        if (!goal->start) return reject("start is false");
+        if (busy_) return reject("another route is active");
+        if (stopping_) return reject("follower is stopping");
         const bool constrained = goal->rotation_group_id != 0;
         if (constrained) {
-            if (goal->path.poses.empty() || goal->wrist_angles.size() != goal->path.poses.size() ||
-                goal->wrist_direction < -1 || goal->wrist_direction > 1 ||
-                (!goal->phi_angles.empty() &&
-                 goal->phi_angles.size() != goal->path.poses.size())) {
-                return rclcpp_action::GoalResponse::REJECT;
+            if (goal->path.poses.empty()) return reject("constrained route has no poses");
+            if (goal->wrist_angles.size() != goal->path.poses.size()) {
+                return reject("wrist angle count does not match pose count");
+            }
+            if (goal->wrist_direction < -1 || goal->wrist_direction > 1) {
+                return reject("wrist direction is outside [-1, 1]");
+            }
+            if (!goal->phi_angles.empty() &&
+                goal->phi_angles.size() != goal->path.poses.size()) {
+                return reject("phi angle count does not match pose count");
             }
             uint32_t previous_event_sample = 0;
             bool first_event = true;
@@ -142,38 +159,49 @@ private:
                     !std::isfinite(event.max_phi_travel) || event.max_phi_travel < 0.0 ||
                     (event.operation == catchrobo2026_msgs::msg::PhiTravelEvent::BEGIN &&
                      !event.limit_phi_travel)) {
-                    return rclcpp_action::GoalResponse::REJECT;
+                    return reject("phi travel event is invalid or out of order");
                 }
                 previous_event_sample = event.sample_index;
                 first_event = false;
             }
             if (!std::all_of(goal->phi_angles.begin(), goal->phi_angles.end(),
                     [](double value) { return std::isfinite(value); })) {
-                return rclcpp_action::GoalResponse::REJECT;
+                return reject("phi angle is nonfinite");
             }
             for (size_t i = 0; i < goal->wrist_angles.size(); ++i) {
-                if (!rotation_constraints::legal(goal->wrist_angles[i]) ||
-                    (i > 0 && goal->wrist_direction *
-                        (goal->wrist_angles[i] - goal->wrist_angles[i - 1]) <
-                            -rotation_constraints::kTolerance)) {
-                    return rclcpp_action::GoalResponse::REJECT;
+                if (!rotation_constraints::legal(goal->wrist_angles[i])) {
+                    return reject("wrist angle is nonfinite or outside [-2pi, 0]");
+                }
+                if (i > 0 && goal->wrist_direction *
+                    (goal->wrist_angles[i] - goal->wrist_angles[i - 1]) <
+                        -rotation_constraints::kTolerance) {
+                    return reject("wrist angles reverse the requested direction");
                 }
             }
             std::lock_guard<std::mutex> lock(joint_mutex_);
             if (!freshJoints()) {
                 RCLCPP_WARN(get_logger(), "current_joints rejected at sequence group start: %s",
                     jointFeedbackDiagnostic().c_str());
-                return rclcpp_action::GoalResponse::REJECT;
+                return reject("current_joints are invalid or stale at sequence group start");
             }
             // Compare the bounded planning start after validating the raw measurement.
             if (std::abs(rotation_constraints::clamp(current_joint_angles_[3]) -
                     goal->wrist_angles.front()) > 0.05) {
-                return rclcpp_action::GoalResponse::REJECT;
+                const double bounded_current =
+                    rotation_constraints::clamp(current_joint_angles_[3]);
+                std::ostringstream detail;
+                detail << std::setprecision(9)
+                       << "first wrist angle does not match current_joints: current="
+                       << current_joint_angles_[3] << ", bounded_current="
+                       << bounded_current << ", expected=" << goal->wrist_angles.front()
+                       << ", delta=" << std::abs(bounded_current - goal->wrist_angles.front())
+                       << ", threshold=0.05";
+                return reject(detail.str());
             }
         } else if (!goal->wrist_angles.empty() || !goal->phi_angles.empty() ||
                    !goal->phi_travel_events.empty() ||
                    goal->wrist_direction != 0) {
-            return rclcpp_action::GoalResponse::REJECT;
+            return reject("unconstrained route includes rotation constraints");
         }
         // Empty goals retain the manual API, using a snapshot at acceptance.
         auto path = goal->path;
@@ -182,15 +210,16 @@ private:
             path = current_path_;
         }
         if (path.poses.empty()) {
-            return rclcpp_action::GoalResponse::REJECT;
+            return reject("route path is empty");
         }
-        for (const auto &pose : path.poses) {
+        for (size_t i = 0; i < path.poses.size(); ++i) {
+            const auto &pose = path.poses[i];
             const auto &p = pose.pose.position;
             const auto &q = pose.pose.orientation;
             const double norm = q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w;
             if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
                 !std::isfinite(norm) || norm < 1e-12) {
-                return rclcpp_action::GoalResponse::REJECT;
+                return reject("path pose " + std::to_string(i) + " is nonfinite or has zero orientation");
             }
         }
         if (!goal->phi_angles.empty()) {
@@ -202,11 +231,20 @@ private:
                     orientation.normalize();
                     const auto y_axis = tf2::Matrix3x3(orientation).getColumn(1);
                     const double pose_phi = std::atan2(-y_axis.x(), y_axis.y());
+                    const double phi_wrist_error =
+                        goal->phi_angles[i] - base - goal->wrist_angles[i];
                     if (std::hypot(y_axis.x(), y_axis.y()) < 1e-6 ||
                         std::abs(std::remainder(goal->phi_angles[i] - pose_phi, 2.0 * M_PI)) >
                             1e-4 ||
-                        std::abs(goal->phi_angles[i] - base - goal->wrist_angles[i]) > 1e-4) {
-                        return rclcpp_action::GoalResponse::REJECT;
+                        std::abs(phi_wrist_error) > 1e-4) {
+                        std::ostringstream detail;
+                        detail << std::setprecision(12)
+                               << "phi, base, wrist, and pose yaw disagree at sample " << i
+                               << ": phi=" << goal->phi_angles[i] << ", base=" << base
+                               << ", wrist=" << goal->wrist_angles[i]
+                               << ", pose_phi=" << pose_phi
+                               << ", phi-base-wrist=" << phi_wrist_error;
+                        return reject(detail.str());
                     }
                     const auto &a = path.poses[i == 0 ? i : i - 1].pose.position;
                     const auto &b = path.poses[i].pose.position;
@@ -215,11 +253,18 @@ private:
                             b.x * 1000.0 - robot_pos[0], b.y * 1000.0 - robot_pos[1],
                             goal->phi_angles[i == 0 ? i : i - 1], goal->phi_angles[i],
                             goal->wrist_direction)) {
-                        return rclcpp_action::GoalResponse::REJECT;
+                        std::ostringstream detail;
+                        detail << std::setprecision(12)
+                               << "phi interpolation is infeasible at sample " << i
+                               << ": a_xy=[" << a.x * 1000.0 << ',' << a.y * 1000.0
+                               << "], b_xy=[" << b.x * 1000.0 << ',' << b.y * 1000.0
+                               << "], phi=[" << goal->phi_angles[i == 0 ? i : i - 1]
+                               << ',' << goal->phi_angles[i] << ']';
+                        return reject(detail.str());
                     }
                 }
-            } catch (const std::exception &) {
-                return rclcpp_action::GoalResponse::REJECT;
+            } catch (const std::exception &error) {
+                return reject(std::string("rotation constraint validation failed: ") + error.what());
             }
         }
         accepted_path_ = std::move(path);
