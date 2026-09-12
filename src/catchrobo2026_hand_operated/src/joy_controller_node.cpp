@@ -119,9 +119,9 @@ public:
             kPublishPeriod, std::bind(&JoyControllerNode::publish_timer_callback, this));
 
         // 目標座標の初期値設定 [mm] および [rad]
-        current_pose_[0] = 600.0f;  // X
-        current_pose_[1] = 200.0f;  // Y
-        current_pose_[2] = 200.0f;  // Z
+        current_pose_[0] = 670.0f;  // X
+        current_pose_[1] = -110.0f;  // Y
+        current_pose_[2] = 220.0f;  // Z
         current_pose_[3] = 0.0f;    // Phi (Yaw相当)
         current_pose_[4] = -M_PI / 2.0f; // Theta (Pitch相当、デフォルト姿勢)
         current_pose_[5] = 0.0f;    // Psi (Roll相当)
