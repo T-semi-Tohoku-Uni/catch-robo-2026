@@ -220,6 +220,10 @@ sequences:
   place_pre_red_waypoint1:
     steps:
       - waypoint: {absolute: [150, 0, 360, -1.57]}
+  place_pre_red_1_1_waypoint:
+    steps:
+      # Approach box 1 via -270 degrees to avoid crossing the wrist's zero limit.
+      - waypoint: {absolute: [150, 0, 360, -4.71238898038469]}
   place_pre_blue_waypoint1:
     steps:
       - waypoint: {absolute: [1200, 0, 360, -1.57]}
@@ -308,7 +312,7 @@ sequences:
       - call: place_pre_red_waypoint0
   place_red_1_1:
     steps:
-      - call: place_pre_red_waypoint1
+      - call: place_pre_red_1_1_waypoint
       - move: {absolute: place_red_1_1_above}
       - call: place_common
       - call: place_pre_red_waypoint1
