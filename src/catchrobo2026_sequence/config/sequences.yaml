@@ -158,9 +158,9 @@ poses:
   # PLACE blue: GroupIdx=box+1, RowIdx=box_column+1, ColIdx=2.
   place_blue_0_0_above: [1232.87, -172, 410, -3.14159265358979]
   place_blue_0_1_above: [1199.13, -286, 400, 0]
-  place_blue_1_0_above: [1232.87, -322, 400, -3.14159265358979]
+  place_blue_1_0_above: [1199.13, -322, 400, -3.14159265358979]
   place_blue_1_1_above: [1199.13, -436, 390, 0]
-  place_blue_2_0_above: [1232.87, -472, 360, -3.14159265358979]
+  place_blue_2_0_above: [1199.13, -472, 360, -3.14159265358979]
   place_blue_2_1_above: [1199.13, -586, 370, -3.14159265358979]
   place_blue_3_0_above: [1232.87, -622, 360, -3.14159265358979]
   place_blue_3_1_above: [1199.13, -736, 350, -3.14159265358979]
@@ -230,16 +230,23 @@ sequences:
       - waypoint: {absolute: [150, 0, 360, -4.71238898038469]}
   place_pre_red_from_left_zero_waypoint:
     steps:
-      # Queue: rows 2/3, column 1 start at zero; turn via +90 toward +180.
+      # Connect rows 2/3, column 1 (zero) and PLACE (-180) via +90, both ways.
       # An intermediate quarter turn avoids ambiguous 180-degree interpolation.
       - waypoint: {absolute: [150, 0, 360, 1.5707963267948966]}
+  place_pre_blue_left_zero_waypoint:
+    steps:
+      # Rows 2/3, column 1 use -360 degrees. Connect to -180 via -270.
+      - waypoint: {absolute: [1200, 0, 360, -4.71238898038469]}
   place_pre_blue_waypoint1:
     steps:
       - waypoint: {absolute: [1200, 0, 360, -1.57]}
 
   pick_0_1:
     steps:
+      # The initial zero-yaw pose may be at -360 degrees; preplan the half turn.
+      - sequence_group: {start: true, max_phi_travel: 3.141592653589793}
       - move: {absolute: pick_0_1_above}
+      - sequence_group: end
       - call: pick_common
   pick_0_2:
     steps:
@@ -301,18 +308,21 @@ sequences:
     steps:
       - move: {absolute: pick_3_4_above}
       - call: pick_common
+  # Approach and departure angles follow catchrobo2026_ui/config/queue.yaml.
+  # The trailing waypoint connects to the NEXT PICK, not the preceding PICK.
+  # Recheck both teams' complete routes when changing the queue order.
   place_red_0_0:
     steps:
       - call: place_pre_red_waypoint0
       - move: {absolute: place_red_0_0_above}
       - call: place_common
-      - call: place_pre_red_waypoint0
+      - call: place_pre_red_from_left_zero_waypoint
   place_red_0_1:
     steps:
       - call: place_pre_red_0_1_waypoint
       - move: {absolute: place_red_0_1_above}
       - call: place_common
-      - call: place_pre_red_waypoint1
+      - call: place_pre_red_0_1_waypoint
   place_red_1_0:
     steps:
       - call: place_pre_red_from_left_zero_waypoint
@@ -324,13 +334,13 @@ sequences:
       - call: place_pre_red_1_1_waypoint
       - move: {absolute: place_red_1_1_above}
       - call: place_common
-      - call: place_pre_red_waypoint1
+      - call: place_pre_red_1_1_waypoint
   place_red_2_0:
     steps:
       - call: place_pre_red_waypoint0
       - move: {absolute: place_red_2_0_above}
       - call: place_common
-      - call: place_pre_red_waypoint0
+      - call: place_pre_red_from_left_zero_waypoint
   place_red_2_1:
     steps:
       - call: place_pre_red_waypoint0
@@ -354,7 +364,7 @@ sequences:
       - call: place_pre_blue_waypoint0
       - move: {absolute: place_blue_0_0_above}
       - call: place_common
-      - call: place_pre_blue_waypoint0
+      - call: place_pre_blue_left_zero_waypoint
   place_blue_0_1:
     steps:
       - call: place_pre_blue_waypoint1
@@ -363,7 +373,7 @@ sequences:
       - call: place_pre_blue_waypoint1
   place_blue_1_0:
     steps:
-      - call: place_pre_blue_waypoint0
+      - call: place_pre_blue_left_zero_waypoint
       - move: {absolute: place_blue_1_0_above}
       - call: place_common
       - call: place_pre_blue_waypoint0
@@ -378,7 +388,7 @@ sequences:
       - call: place_pre_blue_waypoint0
       - move: {absolute: place_blue_2_0_above}
       - call: place_common
-      - call: place_pre_blue_waypoint0
+      - call: place_pre_blue_left_zero_waypoint
   place_blue_2_1:
     steps:
       - call: place_pre_blue_waypoint0
@@ -393,7 +403,7 @@ sequences:
       - call: place_pre_blue_waypoint0
   place_blue_3_1:
     steps:
-      - call: place_pre_blue_waypoint0
+      - call: place_pre_blue_left_zero_waypoint
       - move: {absolute: place_blue_3_1_above}
       - call: place_common
       - call: place_pre_blue_waypoint0

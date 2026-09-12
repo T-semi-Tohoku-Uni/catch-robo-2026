@@ -4,9 +4,11 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import subprocess
 
 import pytest
+import yaml
 
 
 @pytest.fixture(scope='module')
@@ -499,3 +501,39 @@ def test_reached_failure_blocks_following_sequence(checker, suction_file):
     assert failed['diagnostics'][0]['message'] == 'Explicit failure'
     assert following['status'] == 'UNKNOWN'
     assert following['diagnostics'][0]['code'] == 'SKIPPED_AFTER_FAILURE'
+
+
+@pytest.mark.parametrize('team', ['red', 'blue'])
+def test_builtin_queue_has_no_extra_turns(checker, tmp_path, team):
+    source = Path(__file__).resolve().parents[2]
+    config = source / 'catchrobo2026_sequence/config/sequences.yaml'
+    code, report = run_check(checker, config, '--syntax-only')
+    assert code == 0, report
+    queue = yaml.safe_load((source / 'catchrobo2026_ui/config/queue.yaml').read_text())
+    picks = [entry for entry in queue['picks'] if 'row' in entry]
+    places = [entry for entry in queue['places'] if 'box' in entry]
+    assert len(picks) == len(places) == 8
+
+    # Nominal motion only: assume the operator resumes without changing pose.
+    # Keep the production manual steps; remove them only in this temporary input.
+    nominal = tmp_path / 'nominal.yaml'
+    nominal.write_text(re.sub(
+        r'^\s*- manual:.*$', '', config.read_text(), flags=re.MULTILINE))
+    actions = []
+    for pick, place in zip(picks, places):
+        actions.extend([
+            f"pick:{pick['row']},{pick['column']}",
+            f"place:{place['box']},{place['box_column']}",
+        ])
+    # END discards the last deferred waypoint, as it does in the UI.
+    actions.append('end')
+    code, report = run_check(
+        checker, nominal, '--team', team, '--initial-pose-name', 'lifecycle_pose',
+        '--warnings-as-errors', '--action', *actions)
+    assert code == 0, report
+    assert report['status'] == 'FEASIBLE'
+    assert len(report['results']) == len(actions)
+    for entry in report['results']:
+        assert entry['phi_travel'] <= math.pi + 1e-4, entry
+        assert entry['max_wrist_step'] < math.pi, entry
+        assert all(d['code'] != 'wrist_wrap_jump' for d in entry['diagnostics']), entry
