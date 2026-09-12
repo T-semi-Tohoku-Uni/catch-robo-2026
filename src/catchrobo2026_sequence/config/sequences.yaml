@@ -121,7 +121,7 @@ values:
   # Experimental retry settings; confirm pressure_comparison/indices in pump.yaml first.
   pick_max_attempts: 3
   pick_suction_timeout_sec: 2.0
-  place_approach_dz: -20
+  place_approach_dz: 0
   place_retreat_dz: 0
 
 poses:
