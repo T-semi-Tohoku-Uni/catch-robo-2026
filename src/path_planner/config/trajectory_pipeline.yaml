@@ -1,0 +1,27 @@
+trajectory_pipeline:
+  ros__parameters:
+    hardware_output_enabled: false
+    candidate_count: 8
+    base_seed: 42
+    planning_time_limit: 1.0
+    distance_weights: [2.0, 1.0, 1.0, 1.0]
+
+    shortcut_iterations: 100
+    max_path_deviation: 0.01
+    collision_check_resolution: 0.01
+
+    cost_weights.path_length: 1.0
+    cost_weights.theta1_motion: 2.0
+    cost_weights.theta1_inertia: 2.0
+    cost_weights.theta1_torque: 4.0
+    cost_weights.clearance: 1.0
+
+    topp_grid_points: 200
+    adaptive_grid_max_points: 2000
+    validation_dt: 0.001
+    start_velocity_zero: true
+    goal_velocity_zero: true
+
+    max_velocity: [0.0, 0.0, 0.0, 0.0]      # 実測値を設定するまで起動不可
+    max_acceleration: [0.0, 0.0, 0.0, 0.0]
+    max_jerk: [0.0, 0.0, 0.0, 0.0]

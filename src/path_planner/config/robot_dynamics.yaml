@@ -1,0 +1,15 @@
+robot_dynamics:
+  source: "UNSET"
+  measured_at: "UNSET"
+  safety_factor: 0.0
+  theta1:
+    continuous_torque: 0.0
+    peak_torque: 0.0
+    gear_ratio: 0.0
+    efficiency: 0.0
+    positive_speed_torque_curve: []
+    negative_speed_torque_curve: []
+  payload:
+    mass: 0.0
+    center_of_mass: [0.0, 0.0, 0.0]
+    inertia: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

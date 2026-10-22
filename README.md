@@ -104,3 +104,55 @@ ros2 launch catchrobo2026_hand_operated handoperated.launch.py \
 ```
 
 `initial_pose` はダミーの初期手先姿勢 `[x_mm, y_mm, z_mm, yaw_rad]` です。ダミーは目標関節角を即座に現在角へ反映するため、実機の追従性能は再現しません。
+
+## 学祭向けの経路生成プレビュー
+
+`gakusai2026` ブランチでは、`supplementary/grafen1202/catchrobo_ros` の
+`main` / `350721d`（2026-10-21）から次の3パッケージを取り込みました。
+既存の実機用経路生成・追従への接続は今後の作業です。
+
+| パッケージ | 内容 |
+| --- | --- |
+| [robot_arm_description](src/arm/README.md)（`src/arm`） | 4軸絶対角に対応するURDF、衝突形状と姿勢表示 |
+| [path_planning](src/path_planning/README.md) | Informed RRT*による幾何経路生成とURDF/FCL自己衝突判定 |
+| [path_planner](src/path_planner/README.md) | RRT-Connect、平滑化、動力学制約付き時間付け、軌道検証と表示再生 |
+
+ROS依存は通常の `rosdep install --from-paths src --ignore-src -r -y` で解決します。
+追加の主要依存はFCL、urdfdom、xacroです。ROSアダプターは依存不足をビルドエラーにし、
+CLIだけへの自動切替は行いません。
+
+```bash
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-up-to path_planner path_planning --cmake-args -G Ninja
+source install/setup.bash
+ros2 launch path_planner visualize_trajectory.launch.py
+# GUIを省略する場合は末尾に rviz:=false を指定
+```
+
+この表示は仮の質量・慣性・トルク上限を使った `simulation_demo` です。
+YAMLの実測値を読み込む実機制御器ではなく、生成軌道のオープンループ再生です。
+ポンプ・CANブリッジ・Joy・既存シーケンサは起動せず、`target_joint_angles` へも送信しません。
+ハンド形状の既定幅492 mmなどは取込元の近似を維持しており、吸引1個の実寸ではありません。
+`path_planner` の `model` 引数は表示用URDFだけを変更し、内部の計画・衝突・動力学モデルは変更しません。
+
+プレビューlaunchは既定で `gakusai_preview` 名前空間へトピックとTF通信を分離します。
+例えば再計画は次のトピックへ送信します。
+
+```bash
+ros2 topic pub --once /gakusai_preview/goal_joint_state sensor_msgs/msg/JointState \
+  '{name: [theta1, theta2, theta3, theta4], position: [-1.3699, 0.3804, 2.0976, -0.2009]}'
+```
+
+Informed RRT*の幾何経路だけを確認する場合は、上の軌道表示を終了してから次を起動します。
+始点・終点・サービス呼出しは [path_planningの説明](src/path_planning/README.md) を参照してください。
+
+```bash
+ros2 launch path_planning preview.launch.py
+```
+
+各プレビューを同時に使う場合は、それぞれ異なる `namespace:=...` を指定してください。
+直接 `ros2 run` する場合も `--ros-args -r __ns:=/gakusai_preview` などを指定します。
+将来のカメラ入力、実測関節角からの計画、既存追従器への変換・取消・停止処理は未接続です。
+妨害機構はMCU側で扱うため、ROS側での削除・追加対応は不要です。
+学祭では吸引1個を使う方針ですが、使用チャンネル・実寸・動作手順の確定と
+専用設定への反映は次段で行います。

@@ -1,0 +1,15 @@
+/**/path_planner:
+  ros__parameters:
+    joint_names: [theta1, theta2, theta3, theta4]
+    # Provisional search bounds in rad, not measured hardware limits.
+    lower_bounds: [-3.141592653589793, -3.141592653589793, -3.141592653589793, -3.141592653589793]
+    upper_bounds: [3.141592653589793, 3.141592653589793, 3.141592653589793, 3.141592653589793]
+    max_iterations: 3000
+    step_size: 0.2
+    neighbor_radius: 0.6
+    collision_resolution: 0.02
+    goal_bias: 0.05
+    seed: 42
+    # Test only the hand against the upper arm.
+    checked_collision_pairs:
+      - flange_link:upper_arm_link

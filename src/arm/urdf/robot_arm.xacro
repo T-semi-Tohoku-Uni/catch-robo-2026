@@ -1,0 +1,73 @@
+<?xml version="1.0"?>
+<robot name="robot_arm" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!-- SI units. Lengths and frames follow homogeneous_transform.h. -->
+  <!-- Wrist and hand thicknesses are provisional. -->
+  <xacro:arg name="forearm_x" default="0.07025"/>
+  <xacro:arg name="forearm_y" default="0.071"/>
+  <xacro:arg name="upper_arm_x" default="0.191"/>
+  <xacro:arg name="upper_arm_y" default="0.071"/>
+  <xacro:arg name="base_radius" default="0.114"/>
+  <xacro:arg name="wrist_width" default="0.050"/>
+  <xacro:arg name="hand_x" default="0.027"/>
+  <xacro:arg name="hand_y" default="0.492"/>
+  <xacro:arg name="hand_z" default="0.124"/>
+  <xacro:property name="upper_length" value="0.480"/>
+  <xacro:property name="forearm_length" value="0.480"/>
+  <material name="arm_blue"><color rgba="0.2 0.5 0.9 1"/></material>
+  <xacro:macro name="box_body" params="size xyz rpy:='0 0 0'">
+    <visual><origin xyz="${xyz}" rpy="${rpy}"/><geometry><box size="${size}"/></geometry><material name="arm_blue"/></visual>
+    <collision><origin xyz="${xyz}" rpy="${rpy}"/><geometry><box size="${size}"/></geometry></collision>
+  </xacro:macro>
+
+  <link name="map"/>
+  <joint name="field_to_base" type="fixed">
+    <parent link="map"/><child link="base_link"/>
+    <origin xyz="0.675 -0.190 0"/>
+  </joint>
+  <link name="base_link"/>
+  <joint name="base_yaw_joint" type="continuous">
+    <parent link="base_link"/><child link="base_yaw_link"/>
+    <origin rpy="0 0 ${pi/2}"/><axis xyz="0 0 -1"/>
+  </joint>
+  <link name="base_yaw_link">
+    <visual>
+      <origin xyz="-0.020 0 0.045"/>
+      <geometry><cylinder radius="$(arg base_radius)" length="0.090"/></geometry>
+      <material name="arm_blue"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.020 0 0.045"/>
+      <geometry><cylinder radius="$(arg base_radius)" length="0.090"/></geometry>
+    </collision>
+  </link>
+  <joint name="shoulder_joint" type="continuous">
+    <parent link="base_yaw_link"/><child link="upper_arm_link"/>
+    <origin xyz="-0.040 0 0.090"/><axis xyz="0 1 0"/>
+  </joint>
+  <link name="upper_arm_link">
+    <xacro:box_body size="$(arg upper_arm_x) $(arg upper_arm_y) ${upper_length}" xyz="0 0 ${upper_length/2}"/>
+  </link>
+  <joint name="elbow_joint" type="continuous">
+    <parent link="upper_arm_link"/><child link="forearm_link"/>
+    <origin xyz="0 0 ${upper_length}"/><axis xyz="0 1 0"/>
+  </joint>
+  <link name="forearm_link">
+    <xacro:box_body size="$(arg forearm_x) $(arg forearm_y) ${forearm_length}" xyz="0 0 ${forearm_length/2}"/>
+  </link>
+  <!-- Dependent leveling joint: q = -theta3 (absolute forearm angle). -->
+  <joint name="wrist_level_joint" type="continuous">
+    <parent link="forearm_link"/><child link="wrist_link"/>
+    <origin xyz="0 0 ${forearm_length}"/><axis xyz="0 1 0"/>
+  </joint>
+  <link name="wrist_link">
+    <xacro:box_body size="0.040 $(arg wrist_width) $(arg wrist_width)" xyz="0.020 0 0"/>
+  </link>
+  <!-- q = 2*theta1 + theta4 - pi/2 gives field yaw theta1 + theta4. -->
+  <joint name="flange_yaw_joint" type="continuous">
+    <parent link="wrist_link"/><child link="flange_link"/>
+    <origin xyz="0.040 0 0"/><axis xyz="0 0 1"/>
+  </joint>
+  <link name="flange_link">
+    <xacro:box_body size="$(arg hand_x) $(arg hand_y) $(arg hand_z)" xyz="0 0 ${-float('$(arg hand_z)')/2}" rpy="0 0 ${pi/2}"/>
+  </link>
+</robot>
