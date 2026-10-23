@@ -9,6 +9,7 @@ find_package(ament_cmake REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_srvs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(catchrobo2026_msgs REQUIRED)
@@ -35,7 +36,7 @@ ament_target_dependencies(check_sequence_config ament_index_cpp)
 add_executable(sequence_node src/sequence_node.cpp)
 target_link_libraries(sequence_node sequence_config)
 ament_target_dependencies(sequence_node
-  ament_index_cpp rclcpp rclcpp_action rcl_interfaces std_srvs catchrobo2026_msgs geometry_msgs)
+  ament_index_cpp rclcpp rclcpp_action rcl_interfaces std_srvs std_msgs catchrobo2026_msgs geometry_msgs)
 
 install(TARGETS sequence_config sequence_check sequence_node check_sequence_config
   ARCHIVE DESTINATION lib
@@ -46,19 +47,15 @@ install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
-  ament_add_pytest_test(test_suction_sequence test/test_suction_sequence.py TIMEOUT 180)
-  ament_add_pytest_test(test_manual_sequence test/test_manual_sequence.py TIMEOUT 120)
+  ament_add_pytest_test(test_festival_sequence test/test_festival_sequence.py TIMEOUT 120)
+  ament_add_pytest_test(test_rotation_group_navigation
+    test/test_rotation_group_navigation.py TIMEOUT 180)
   ament_add_pytest_test(test_route_handoff test/test_route_handoff.py TIMEOUT 120)
   ament_add_pytest_test(test_follower_arrival test/test_follower_arrival.py TIMEOUT 90)
   ament_add_pytest_test(test_follower_feedback test/test_follower_feedback.py TIMEOUT 90)
   ament_add_pytest_test(test_wrist_feedback_tolerance_joy
     test/test_wrist_feedback_tolerance_joy.py TIMEOUT 120)
   ament_add_pytest_test(test_follower_joy_arrival test/test_follower_joy_arrival.py TIMEOUT 90)
-  ament_add_pytest_test(test_waypoint_sequence test/test_waypoint_sequence.py TIMEOUT 120)
-  ament_add_pytest_test(test_deferred_waypoint_sequence test/test_deferred_waypoint_sequence.py
-    TIMEOUT 120)
-  ament_add_pytest_test(test_rotation_group_sequence test/test_rotation_group_sequence.py TIMEOUT 120)
-  ament_add_pytest_test(test_rotation_group_navigation test/test_rotation_group_navigation.py TIMEOUT 180)
   ament_add_pytest_test(test_check_sequence_config test/test_check_sequence_config.py
     TIMEOUT 120
     ENV CHECK_SEQUENCE_CONFIG_EXECUTABLE=$<TARGET_FILE:check_sequence_config>)

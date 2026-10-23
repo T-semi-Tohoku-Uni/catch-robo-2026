@@ -2,8 +2,6 @@
   ros__parameters:
     # Cartesian speed at full stick input.
     manual_linear_speed_mm_s: 10.0
-    # End-effector yaw speed at full stick input.
-    manual_angular_speed_rad_s: 0.2
 
 /**/control_node:
   ros__parameters:
@@ -22,8 +20,6 @@
     gamepad_dpad_down_button: 13
     gamepad_z_up_button: 5
     gamepad_z_down_button: 4
-    gamepad_phi_ccw_button: 7
-    gamepad_phi_cw_button: 6
     gamepad_initialize_button: 2
     gamepad_pump_button: 3
     gamepad_endeffector_button: 1

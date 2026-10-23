@@ -1,530 +1,64 @@
-# シーケンス設定
+# 学祭用シーケンス設定
 
-シーケンスノードは起動時に指定した陣営とUIのPICK／PLACE・位置を `bindings` で手順名へ変換し、移動・ポンプ・エンドエフェクタ・待機を順番に実行する。設定は通常のYAMLファイルであり、ROSパラメータファイルとは別に用意する。
+現在の実行対象は初期化・START・ENDです。PICK／PLACEの座標、bindings、回転ステップは運用設定から削除しています。任意のワーク位置への移動と吸引はUIまたはJoyで手動操作します。
 
-既定の [sequences.yaml](config/sequences.yaml) は、座標とデバッグ用の初期手順を記入した読み込み可能な設定。[sequences.example.yaml](config/sequences.example.yaml) は赤青それぞれ16 PICK位置・8 PLACE位置の入力欄を持ち、全て `null` で無効にした雛形として残している。雛形から作る場合は必要な値・姿勢・手順を定義し、使用する位置の `null` を手順名へ変更する。欄の省略も未設定扱いとなり、選択時に実行を拒否する。
-
-### 座標を転記したデバッグ用設定
-
-[sequences.yaml](config/sequences.yaml) は [運動学パッケージの座標CSV](../CatchRobo2026_kinematics/config/flange_targets/) から初期座標を静的に転記した設定。ノードとlaunchの既定ファイルであり、稼働時に読むのはYAMLだけ。CSVローダや生成スクリプトによる同期は行わない。
-
-| 対象 | 転記時の対応 |
-|---|---|
-| PICK | UIの `row=0..3`、`column=1..4` に対してCSVの `ID = row * 6 + column + 1`。16姿勢を赤青で共用 |
-| PLACE | 陣営別CSVの `GroupIdx = box + 1`、`RowIdx = box_column + 1`、中央の `ColIdx = 2`。赤青それぞれ8姿勢 |
-
-高さは `values.work_above_z=206.95`（自陣PICK）、`common_work_above_z=206.95`（共通エリアPICK）、`place_above_z=294.35`（PLACE）を姿勢から参照する。単位はmm。CSVを初期参考として調整した設定であり、`above` という名前が実機での上空高さや余裕量の確認済みを意味するものではない。
-
-位置別PICKは絶対姿勢へ移動した後に `pick_common` を呼び、共通手順は「相対Z接近→接近高さでY−10 mm→吸引→相対退避→PLACE用の幅に切替」の順。PLACEは赤 `[150, 0, 360, π]`／青 `[1200, 0, 360, π]` の経由点から位置別の絶対姿勢へ1経路で移動し、`place_common`の「開放→相対接近→相対退避→オフ→PICK用の幅に切替」を実行し、末尾に同じ陣営別経由点を保留して、次のPICK／PLACEへ向かう経路へつなぐ。初回はUIの「開始」で開始シーケンスを実行し、PLACE用の幅を指令する。このPLACE操作順は実機確認済みの手順ではない。
-
-幅切替の指令値は `values.pick_endeffector_command: 0` と `values.place_endeffector_command: 1` に仮置きし、PLACEの機構操作で前者、PICK末尾で後者を参照する。0/1の広い／狭い対応は手動で確認し、必要なら値を入れ替える。ユーザー指定により幅切替後の `wait` は追加しておらず、ROSサービスの受理応答でそのPICK／PLACEを完了する。機構動作の完了通知は待たない。
-
-現在のPICK相対移動量は`pick_approach_dz=-30 mm`、`pick_retreat_dz=0 mm`。直近の絶対姿勢を固定基準にするため、PICKのZ指令は`206.95 → 176.95 → 176.95 → 206.95 mm`となる。2回目の接近は同じ高さで基準Y−10 mmを目標にし、退避は元のYと直上高さへ戻る。PLACEは`place_approach_dz=-10 mm`、`place_retreat_dz=+10 mm`で、Z指令は`294.35 → 284.35 → 304.35 mm`。末尾の陣営別経由点のZ=360 mmはそのPLACE中には実行せず、次のPICK／PLACEへの移動用に保留する。
-
-実機デバッグではワークスペースのルートからソースYAMLの絶対パスを指定して起動する。以下はJazzyの例。`debug:=true` では初期化・開始・終了シーケンス・各PICK／PLACEの実行前に再読込し、その動作の実行中は開始時の展開結果を使う。
-
-```bash
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-ros2 launch catchrobo2026_sequence automatic.launch.py \
-  team:=red \
-  sequence_file:="$PWD/src/catchrobo2026_sequence/config/sequences.yaml" \
-  debug:=true
-```
-
-## ファイルの構成
+[sequences.yaml](config/sequences.yaml)と[sequences.example.yaml](config/sequences.example.yaml)は同じ雛形です。位置の単位はmm、phi欄の単位はradです。
 
 ```yaml
 version: 1
-before_initialization_sequence: null
-after_initialization_sequence: null
-start_sequence: null
-end_sequence: null
-values: {}
-poses: {}
-sequences: {}
-bindings:
-  red: {pick: {}, place: {}}
-  blue: {pick: {}, place: {}}
-```
-
-`version`、`poses`、`sequences`、`bindings` は必須。`values`、`route_timeout_sec` と `before_initialization_sequence`／`after_initialization_sequence`／`start_sequence`／`end_sequence` は省略可能。`bindings` には赤青両方と各 `pick`／`place` のマップを用意する。マップは空でもよい。未知キー・重複キー・複数YAMLドキュメントは拒否する。
-
-## 経路追従のタイムアウト
-
-トップレベルの `route_timeout_sec` で、`following route timeout` までの秒数を設定する。同梱設定は `30.0`。例えば60秒にする場合は次のように編集する。
-
-```yaml
-route_timeout_sec: 60.0
-```
-
-経由点を含む1経路全体に適用する。値は0秒超〜86,400秒の有限数で、`'$名前'` による `values` 参照も使用できる。指定時は同名のROSパラメータより優先し、省略時はROSパラメータ（既定30秒）を使う。
-
-`debug:=true` は次のINITIALIZE／START／END／PICK／PLACE開始時に再読込し、実行中の動作では開始時の値を使い続ける。通常モードでは編集後にノードを再起動する。インストール済みYAMLを読む構成ではソースの編集後に再ビルドが必要。シーケンス全体の上限は別のROSパラメータ `sequence_timeout_sec`（既定120秒）のままで、経路のタイムアウトを延ばしても自動では変更しない。
-
-## 開始シーケンス
-
-トップレベルの `start_sequence` に、UIの「開始」で実行する `sequences` 内の手順名を指定する。同梱設定は以下のとおり。初期化シーケンスとは独立しており、開始シーケンスに初期化操作は含めない。
-
-```yaml
-start_sequence: startup
-values:
-  place_endeffector_command: 1
-sequences:
-  startup:
-    steps:
-      - endeffector: '$place_endeffector_command'
-```
-
-この例は設定の該当部分のみ。開始時の値もPICK末尾の幅切替と同じ `place_endeffector_command` を参照するため、0/1の確認後は共通値を変更すればよい。待ち時間は追加していない。
-
-開始手順は全自動・半自動とも「開始」で1回実行し、完了後に全自動はキューへ進み、半自動は「次へ」を待つ。開始中はキューを取り出さず、開始手順の取消・失敗では終了状態にする。ワーク・保持・箱・通常動作の履歴は更新しない。
-
-`start_sequence` の省略または `null` は何もしない開始手順として扱う。不明な参照や不正な手順は読込時に拒否する。指定した手順では通常と同じ `call`・`extends`・数値参照、移動・ポンプ・幅指令・待機を使える。相対移動にはその開始手順内で先行する絶対移動が必要。開始手順のポンプは全3機構を対象にする。`debug:=true` では開始シーケンスの実行前にも設定を読み直す。
-
-## 初期化前後・終了シーケンス
-
-`before_initialization_sequence`／`after_initialization_sequence` に名前を指定すると、UIの「初期化」で「前手順 → `request_initialization` への初期化命令1回 → 後手順」を実行する。`end_sequence` はUIの「終了」で実行する。いずれもノードの起動・プロセス終了時に自動実行する手順ではない。
-
-```yaml
+route_timeout_sec: 180.0
 before_initialization_sequence: before_initialization
 after_initialization_sequence: after_initialization
+start_sequence: startup
 end_sequence: ending
+values:
+  startup_width_command: 1
 poses:
-  lifecycle_pose: [670, -110, 220, 0]
+  lifecycle_pose: [675, -110, 220, 0]
 sequences:
   before_initialization:
     steps: []
   after_initialization:
     steps: []
+  startup:
+    steps:
+      - endeffector: '$startup_width_command'
   ending:
     steps:
-      - move: {absolute: [675, 200, 300, 0]}
+      - move: {absolute: [675, 400, 300, 0]}
       - move: {absolute: lifecycle_pose}
-```
-
-同梱設定では初期化の前後手順は空で、終了手順は `[675, 200, 300, 0]` に到達してから `lifecycle_pose`（x=670 mm、y=-110 mm、z=220 mm、phi=0 rad）へ移動する。2件とも通常の `move` で、それぞれの到達を待つ。必要な移動・ポンプ・幅指令・待機を各 `steps` に追記する。各キーの省略または `null` は追加動作なしを意味し、初期化命令自体は実行する。`call`・`extends`・数値参照は開始手順と同様に利用できる。これらのポンプ手順は全3機構が対象。
-
-初期化命令の成功応答は指令の受理であり、実機の原点復帰完了通知ではない。必要な待機は後手順の先頭へ `wait` を記述する。初期化前後では姿勢が変わるため、前手順の絶対座標を後手順の相対移動へ引き継がない。各手順内で絶対移動を先行させる必要がある。通常の `steps` に `initialize` を直接記述する構文は用意していない。
-
-前手順の失敗、またはシーケンサが前手順中に取消を受信した場合は初期化命令を送らず、初期化命令の拒否・失敗では後手順を実行しない。UIからの取消は非同期で伝わるため、取消操作直後でもシーケンサが受信する前に次の命令が送られる場合がある。既に送信した初期化命令の効果は取消できない。終了は現在動作の取消完了を待ってから実行し、cancel／reset・動作失敗・Ctrl+Cで終了手順を自動実行しない。`debug:=true` では初期化・終了の実行前にもファイル全体を再検証する。
-
-## 手動操縦への遷移
-
-`manual` を置いた位置で自動実行を止め、UIで手動操縦した後に「手動完了・シーケンス再開」を押して続きを再開する。完全自動・半自動・完全手動の全モードに共通で、完了操作まで次の手順には進まない。Web Joyは手動待機に入ると自動で有効化を開始し、中立位置を確認して入力を受け付ける。機器未接続や割当未確認の場合は、画面に理由を表示して待機を続ける。
-
-```yaml
-sequences:
-  assisted_pick:
-    steps:
-      - move: {absolute: [600, 200, 300, 0]}
-      - manual: {label: '吸引位置を調整'}
-      - pump: suction
-      - manual: {mode: blacklist, disable: [x]}
-      - manual: {mode: whitelist, enable: [y, z], label: '高さを調整'}
-      - move: {relative: [0, 0, 30, 0]}
-```
-
-`manual: true` はラベルなし、`manual: {label: '説明'}` はUIの進行表示へ説明を付け、どちらも全操作を許可する。操作を制限する場合は次のいずれかを指定する。
-
-- `mode: blacklist` と `disable: [...]`: 列挙した操作だけを禁止する。空配列なら全操作を許可する。
-- `mode: whitelist` と `enable: [...]`: 列挙した操作だけを許可する。空配列なら全操作を禁止する。
-
-操作名は `x`、`y`、`z`、`phi`、`initialize`、`pump`、`endeffector` の7種。`label`はどちらのモードにも追加できる。対象は手動待機中のWeb Joyとジョグ入力であり、自動MOVEや初期化の軌道をX一定へ拘束する設定ではない。例えばX移動と初期化操作を両方禁止する場合は `disable: [x, initialize]` と書く。停止・取消・「手動完了・シーケンス再開」はこのポリシーに関係なく操作できる。
-
-`call`・`extends`・IF/FOR内でも使える。モードと対応リストの欠落、`disable`と`enable`の矛盾、文字列だけのリスト、未知の操作名・キー、`false`や数値は設定読込時に拒否する。同梱の `pick_attempt` ではY方向の補正後、退避前に `blacklist` でX操作だけを禁止している。ほかの動作にも、操縦を挟みたい位置へ追加できる。
-
-設定変更時は起動時に指定した `sequence_file` を確認する。`sequence.launch.py`／`automatic.launch.py` の既定はinstall内のYAMLなので、sourceの編集後にビルドして配布設定へ反映する。`debug:=false` ではノード再起動が必要で、`debug:=true` では指定ファイルを次の動作開始時に再読込する。手動完了後はJoyのON状態を保持したまま、自動シーケンス中の入力を中立にする。
-
-手動待機時間は `sequence_timeout_sec` の対象外。再開後のMOVEはその時点の現在関節角を使って新しく計画する。一方、上例の相対目標は固定基準 `[600, 200, 300, 0]` ＋ `[0, 0, 30, 0]` であり、手動で変更した現在位置を基準にはしない。オフライン検査は手動操縦後の姿勢を予測できないため、`manual_state_unknown` を示し、それ以後の経路をUNKNOWNとする。
-
-連続waypointと通常MOVEの間、`sequence_group`／`rotation_group` の内部、`suction_check.start` と対応する `suction_check: wait` の間には配置できない。手動操作で事前計画や実行中の判定を変えないよう、グループの `end` または判定の `wait` の後へ置く。
-
-UIから任意の時点で移行要求を送った場合も、実行中のMOVE到達、グループの全手順とEND応答、送信済みサービス応答、吸引判定の待ち完了を確認してから手動待機へ入る。グループ・吸引判定の外の `wait` はその場で中断して残り時間を保存する。`manual requested` は移行待ち、`manual waiting` は手動操縦可能を表す。待機ごとに異なる `manual_token` を発行し、古い再開要求で後の待機を解放しない。ROSサービスと再開・取消の詳細は [README](README.md#シーケンス途中の手動操縦) を参照。
-
-## 数値のエイリアスと継承
-
-`values` に共通の有限数を定義し、数値を書く場所で `'$名前'` を参照できる。値の別名を定義して複数段の継承もできる。宣言順に制限はない。
-
-```yaml
-values:
-  work_above_z: 300
-  front_above_z: '$work_above_z'
-  grip_depth: -20
-  grip_wait: 0.2
-  rotate_command: 1
-poses:
-  front: [100, 200, '$front_above_z', 0]
-  back: {extends: front, x: 150, z: '$work_above_z'}
-```
-
-上の数値と後述の数値は構文説明用であり、実機の座標・高さ・待機時間を示すものではない。
-
-参照は絶対・相対座標の4成分、姿勢継承の軸別上書き、`wait`、`endeffector` で使用できる。例えば `wait: '$grip_wait'` や `endeffector: '$rotate_command'` と書く。ポンプは `suction`／`off`／`release` の文字列を指定する。
-
-値は単一数値または `'$別名'`。演算式やオブジェクトは扱わない。`values` 自体の継承専用構文はなく、各値のエイリアスと `poses` の `extends` を組み合わせて再利用する。YAML標準のスカラーアンカー `&height` とエイリアス `*height` も使用可能。YAMLの `<<` マージキーは扱わない。未使用の値についても未知参照・循環参照・NaN・無限大を読み込み時に拒否する。
-
-## 絶対姿勢
-
-姿勢は `[x, y, z, phi]` の4成分。位置は **mm**、角度は **rad** で、既存経路生成ノードと同じ座標系を使用する。陣営に応じた鏡映やUI座標からの自動変換は行わず、陣営ごとの `bindings` に使用する手順を明示する。同じ姿勢・手順を赤青両方の割り当てから参照して共用することもできる。
-
-```yaml
-poses:
-  work_above: [100, 200, '$work_above_z', 0]
-  work_alias: work_above
-  next_work_above: {extends: work_above, y: 250}
-  recovery_above: [200, 100, '$work_above_z', 0]
-```
-
-文字列は別の姿勢のエイリアス。`extends` は1姿勢を継承し、`x`／`y`／`z`／`phi` の指定された成分だけを絶対値で上書きする。配列の各成分と上書き値のどちらでも数値エイリアスを使える。
-
-`phi` は経路の手先姿勢角である。後述の `endeffector` は回収機構の幅を切り替える既存サービスに送る0／1であり、物理角度への換算ではない。0／1と実機の幅との対応は実機側で確認する。
-
-## 手順・別名・継承
-
-```yaml
-sequences:
-  approach:
-    steps:
-      - move: {absolute: work_above}
-  collect_standard:
-    steps:
-      - move: {relative: [0, 0, '$grip_depth', 0]}
-      - pump: suction
-      - wait: '$grip_wait'
-      - move: {relative: [0, 0, 0, 0]}
-  collect_front: collect_standard
-  collect_rotated:
-    steps:
-      - endeffector: '$rotate_command'
-      - call: collect_standard
-  front_pick:
-    extends: approach
-    steps:
-      - call: collect_front
-  other_pick:
-    steps:
-      - move: {absolute: next_work_above}
-      - call: collect_rotated
-  recovery:
-    steps:
-      - move: {absolute: recovery_above}
-      - pump: release
-      - wait: '$grip_wait'
-      - pump: off
-```
-
-シーケンスの文字列は別のシーケンス全体のエイリアス。`call` は指定位置へ別のシーケンスを展開する。`extends: approach` は親の全ステップの後ろへ自分の `steps` を追加する。複数親は `extends: [approach, collect_front]` のように指定し、列挙順に連結した後で自分の `steps` を追加する。親のステップ番号を上書きする機能は持たない。
-
-`extends` のみの定義や `steps` のみの定義も可能だが、明示的な `steps: []` は初期化前後・開始・終了手順の編集用として使用できる。空手順の別名や継承・`call` も使用できるが、PICK／PLACEの割当が展開後に空なら拒否する。共通部分ごとに手順名を設け、位置別のシーケンスが使用する名前を切り替えることで、回収パターンを変更できる。
-
-| ステップ | 内容 |
-|---|---|
-| `move: {absolute: 名前}` | 名前付き絶対姿勢へ移動 |
-| `move: {absolute: [x, y, z, phi]}` | 直接指定した絶対姿勢へ移動 |
-| `move: {relative: [dx, dy, dz, dphi]}` | 直近の絶対姿勢を基準にした姿勢へ移動 |
-| `waypoint: {absolute: 名前または4成分配列}` | 次の通常MOVEへ向かう経由点 |
-| `waypoint: {relative: [dx, dy, dz, dphi]}` | 直近の絶対姿勢を基準にした経由点 |
-| `move: {absolute: 名前, waypoints: [経由点, ...]}` | 経由点列を通って目標へ移動（relative目標にも指定可） |
-| `move: {absolute: 名前, waypoint: true}` | 従来形式の経由点。単独の `waypoint` と同じ（relativeにも指定可） |
-| `call: 名前` | 指定シーケンスをその位置に展開 |
-| `pump: suction` | UIが指定した回収機構を吸引（1） |
-| `pump: off` | UIが指定した回収機構をオフ（0） |
-| `pump: release` | UIが指定した回収機構を開放（-1） |
-| `endeffector: 0` または `1` | エンドエフェクタサービスへの指令 |
-| `wait: 秒数` | 0〜86,400の有限秒数だけ待機 |
-| `suction_check: {start: {timeout: 秒数}}` | UI選択機構の空気圧監視を要求し、次手順へ進む |
-| `suction_check: wait` | 監視の成功または期限切れを待ち、結果を保存 |
-| `if: {condition: suction_success, then: [...], else: [...]}` | 保存済み結果で分岐。`suction_failure` も使用可能、`else` は省略可 |
-| `for: {max_iterations: 回数, steps: [...]}` | 初回を含む最大回数まで繰り返す |
-| `break: true` | 最内側の `for` を抜ける |
-| `fail: メッセージ` | アクションを失敗として終了する |
-| `sequence_group: start` | 共通の計画・制約を適用する区間を開始 |
-| `sequence_group: {start: true, rotation_group: true}` | 第4関節の回転方向を固定する区間を開始 |
-| `sequence_group: {start: true, max_phi_travel: ラジアン}` | 手先角`phi`の総移動量を制限する区間を開始 |
-| `sequence_group: end` | シーケンスグループを終了 |
-| `phi_travel: {start: true, limit: ラジアン}` | グループ内でphi総移動量の計測区間を開始 |
-| `phi_travel: end` | phi総移動量の計測区間を終了 |
-| `rotation_group: start`／`end` | 従来形式。第4関節の一方向制約を指定する互換表記 |
-
-1ステップに操作を2つ書くことはできない。通常の `move` は経路生成と経路追従の成功応答を待ってから次へ進む。絶対姿勢のワーク直上への移動に続けて、共通回収動作を記述する。経路APIは [README.md](README.md#実行とrosインターフェース) を参照。ポンプとエンドエフェクタはサービス応答の成功を待つが、吸着成立や機構の回転完了を観測するものではない。必要な待機を `wait` で指定する。
-
-### 経由点（waypoint）
-
-`waypoint` ステップは、その座標を次の通常 `move` へ向かう経路の経由点にする。連続する複数の経由点と最後の通常移動を、1回の経路生成・追従で実行する。中間点ごとの位置・角度の到達待ちと経路切替がなくなり、最後の移動先で通常の到達判定を行う。絶対座標は `poses` の名前または4成分配列、相対座標は4成分配列で指定する。以下は終了手順を経由点方式に変更する例で、現在の同梱設定は通常の `move` 2件になっている。
-
-```yaml
-ending:
-  steps:
-    - waypoint: {absolute: [675, 200, 300, 0]}
-    - move: {absolute: lifecycle_pose}
-```
-
-経由点1件だけの共通シーケンスも定義できる。次の例では `call` した青側経由点と、その後の `move` を一つの経路として実行する。同梱YAMLの赤青全16 PLACEもこの形式で指定している。
-
-```yaml
-sequences:
-  place_pre_blue_waypoint:
-    steps:
-      - waypoint: {absolute: [1200, 0, 360, 3.14159265358979]}
-  place_blue_0_0:
-    steps:
-      - call: place_pre_blue_waypoint
-      - move: {absolute: place_blue_0_0_above}
-      - call: place_common
-```
-
-`extends: place_pre_blue_waypoint` の後に `steps` で通常 `move` を追加してもよい。同じ実行手順内では、`call`／`extends`の展開後、経由点の次は別の経由点または`move`とする。途中にポンプ・幅切替・待機を挟む場合は読み込み時に拒否する。PICK／PLACEの末尾に残る経由点は、次節の規則で次のUI動作へ持ち越せる。経由点だけの共通定義やPICK／PLACEへの割り当ても可能だが、移動先の通常MOVEが決まるまで経路生成・移動は行わない。開始・初期化前後・終了のライフサイクル手順では末尾経由点を許可せず、その手順内の通常MOVEへ接続する。
-
-既存の `move: {absolute: ..., waypoint: true}` も同じ意味で使用できる。`relative` にも指定でき、`waypoint: false` または省略時は通常の移動になる。このオプションの値は `true`／`false` のみで、距離の許容値ではない。
-
-### PICK／PLACE末尾の経由点を次の動作へ持ち越す
-
-PICK／PLACEの最後に連続して並ぶ`waypoint`は、その場では移動せず保留する。それより前の移動・機構操作が成功すると、そのUI動作は完了し、保留した経由点を次のPICK／PLACEの最初の移動経路へ追加する。次の動作が始まらなければ、経由点へ勝手に移動することはない。通常の`move`を末尾に書いた場合は、その目標への到達を待ってから現在の動作を完了する。
-
-```yaml
-sequences:
-  place_blue_0_0:
-    steps:
-      - call: place_pre_blue_waypoint
-      - move: {absolute: place_blue_0_0_above}
-      - call: place_common
-      - call: place_pre_blue_waypoint
-  pick_0_1:
-    steps:
-      - move: {absolute: pick_0_1_above}
-      - call: pick_common
-```
-
-この例ではPLACEの配置・退避・機構操作が完了した後、末尾の青側経由点を保留してPLACE完了を返す。次のUI動作が`pick_0_1`なら、そのPICKの開始時に「現在位置→保留した青側経由点→PICK直上」を1本の経路として生成する。次の動作自身にも先頭経由点や`move.waypoints`があれば、「持越し経由点→次動作の先頭経由点→そのMOVEのinline経由点→最終目標」の順に連結する。持越し経由点を単独の停止目標へ変換することはない。
-
-保留するのは、元の動作の`call`／`extends`・姿勢参照・相対座標を展開した後の絶対Poseである。相対経由点は元の動作内のabsoluteを基準に解決し、次の動作の相対移動の基準は変更しない。次の動作内で相対移動を使う場合は、従来どおりその動作内に先行するabsoluteが必要となる。`move.waypoint: true`も同じ扱いで、その`waypoints`列を含めて順序を保って持ち越す。
-
-持越しは同じ`control_epoch`で`step_id`が増加する後続PICK／PLACEに限る。保留中に開始・初期化・終了を受け付けた場合は保留点を破棄し、各ライフサイクル手順を独立に実行する。resetによるepoch変更、動作の取消・失敗、設定再読込の失敗、ノード再起動でも引き継がない。これにより、最後のPLACEの保留経由点が終了手順へ追加されることはない。保留点はシーケンサ内だけで管理し、手動操作用の共有`waypoint`サービスへは蓄積しない。
-
-`sequence_group`内部の経由点は、そのgroup内の通常MOVEへ接続しなければならず、group終了をまたいで保留できない。groupを終了した後に置く末尾経由点は持ち越せる。次のPICK／PLACEの最初の移動がgroup内なら、持越し経由点もそのgroupの事前計画へ含め、次groupの回転方向・`phi`総移動量制限を適用する。前のgroupの制約や総移動量を引き継ぐものではない。
-
-`debug:=true`で次の動作前にYAMLを再読込しても、既に保留した座標は元の動作で展開した値を維持する。次の動作の手順・目標には新しい設定を使う。保留分と次の動作を合わせた経路の上限も検証する。経路の可否は次の通常MOVEが決まった時点で判定されるため、前のPLACE成功だけで次の移動が実行可能とは限らない。
-
-### moveの経由点列（waypoints）
-
-通常の `move` に `waypoints` オプションを追加し、その移動だけの経由点を順番に指定することもできる。次の例は「青側経由点→直接指定の経由点→PLACE目標」の1経路になる。
-
-```yaml
-poses:
-  place_blue_via: [1200, 0, 360, 3.14159265358979]
-sequences:
-  place_with_waypoints:
-    steps:
-      - move:
-          absolute: place_blue_0_0_above
-          waypoints:
-            - place_blue_via
-            - [1180, -40, 350, 3.14159265358979]
-      - call: place_common
-```
-
-各要素は `poses` の名前、4成分の絶対座標配列、`{absolute: 名前または配列}`、`{relative: [dx, dy, dz, dphi]}` のいずれか。名前は姿勢名であり、`place_pre_blue_waypoint` のようなシーケンス名は指定しない。省略または `waypoints: []` は経由点列なしになる。通常の `move` の最終目標には、従来どおり `absolute`／`relative` のいずれか一つが必要。
-
-`waypoints` 内の相対座標は、**そのmoveより前の直近absolute** が固定基準になる。列内の絶対座標は基準を更新せず、同じmoveの最終absoluteも先取りしない。例えば先行姿勢が `[100, 200, 300, 0]` なら、次の列の相対経由点は `[100, 200, 350, 0]`、相対の最終目標は `[100, 200, 280, 0]` になる。
-
-```yaml
-steps:
-  - move: {absolute: [100, 200, 300, 0]}
-  - move:
-      relative: [0, 0, -20, 0]
-      waypoints:
-        - {absolute: [150, 200, 350, 0]}
-        - {relative: [0, 0, 50, 0]}
-```
-
-先行する単独の `waypoint` と `move.waypoints` を併用した場合は「先行経由点→そのmoveの経由点列→そのmoveの目標」の順に連結する。旧形式の `move.waypoint: true` と `waypoints` も併用でき、そのmoveの目標も経由点として次の通常 `move` へつながる。
-
-単独の `waypoint: {absolute: ...}` は従来の絶対MOVEと同様に相対座標の基準を更新する。`waypoints` オプション内の座標は基準を変更しない。`phi` は経路上で補間されるが、経由点の姿勢一致を個別には待たない。既存のスプラインと先読み追従を使うため、実際の軌跡は経由点の座標からずれる場合や、点間の直線より外側へ膨らむ場合がある。厳密な到達を要する位置には通常の `move` を使う。機構操作はまとめた経路の追従成功後に実行する。
-
-`route_timeout_sec` はまとめた1経路全体に適用する。YAMLの編集反映には通常の再読込規則を使うが、この機能の初回導入ではサービス型が変わるため、ワークスペース全体の再ビルドと関係ノードの再起動が必要。
-
-### シーケンスグループ（sequence_group）
-
-`sequence_group` の開始・終了で対象区間を指定し、開始時のオプションで第4関節の一方向制約と手先角`phi`の総移動量制限を設定する。両者は独立して指定でき、併用もできる。`phi`はフィールド基準の手先角度、第4関節角`q4`は手首軸の角度で、ベース軸の角度`q0`を含む`phi = q0 + q4`の関係にある。
-
-```yaml
-values:
-  phi_budget: 1.5707963267948966  # 90 degrees, in radians.
-sequences:
-  limited_motion:
-    steps:
-      - sequence_group: {start: true, max_phi_travel: '$phi_budget'}
-      - move: {absolute: target_a}
-      - pump: release
-      - wait: 0.5
-      - move: {absolute: target_b}
-      - sequence_group: end
-```
-
-これは書式例で、`target_a`／`target_b`は別途`poses`に定義する。上限値は機構と手順に合わせて指定する。この例ではグループ開始時の姿勢からAまでと、AからBまでの両方を累計する。**A到達後からBまでだけを制限したい場合は、Aへの通常MOVEの後に開始フラグを置く。**
-
-```yaml
-steps:
-  - move: {absolute: target_a}
-  - sequence_group: {start: true, max_phi_travel: 1.5707963267948966}
-  - move: {absolute: target_b}
-  - sequence_group: end
-```
-
-Aの手首角の選択にもBの制約を反映したい場合は、外側の`sequence_group`へAとBの両方を含め、内側の`phi_travel`で計測区間を指定する。現在の同梱endingは次の設定で、A→Bの総移動量を30°に制限する。
-
-```yaml
-ending:
-  steps:
-    - sequence_group: start
-    - move: {absolute: [675, 200, 300, 0]}
-    - phi_travel: {start: true, limit: 0.5235987755982988}
-    - move: {absolute: lifecycle_pose}
-    - phi_travel: end
-    - sequence_group: end
-```
-
-外側の開始時にending全体を事前計画する。Aへ向かう回転は30°の累計に含めないが、A到達後にBへ進める巻き数を選ぶための先読みに含める。A到達後の`phi_travel`開始からB到達後の終了まで、非wrapの`Σ|Δphi|`を検査する。例えば区間内の0°→20°→0°は40°なので拒否する。制約を満たす候補がなければ、Aへの移動を始める前に失敗する。
-
-`phi_travel.limit`は有限の0以上のrad値で、`values`参照も可能。開始は`{start: true, limit: ...}`、終了は`end`。同じ`sequence_group`内で開始・終了を対応させ、少なくとも1件の通常MOVEを含める。複数区間を順番に指定でき、それぞれ独立して累計する。計測区間の入れ子・重複、groupやUIアクションをまたぐ指定、waypoint列の途中での開始・終了は拒否する。区間内の通常MOVEに付けた`waypoints`も累計対象になる。
-
-区間制限を含む計画ではphi補間を優先し、不成立なら既存の手首角補間も検査する。手首角補間では区間途中のphiの折り返しも総量へ加算する。既存XYZ経路と補間候補の検査であり、任意の迂回経路を探索するものではない。
-
-外側の`max_phi_travel`と併用した場合、外側はgroup全体、内側は各区間に適用し、内側の終了で外側の累計をリセットしない。外側に`rotation_group: true`を指定すれば方向制約もgroup全体へ適用する。endingでは一方向制約を指定しない。実行時の区間開始・終了はJoyへ通知し、直前までに受理した関節指令を基準に監視する。group終了・取消で内側の区間も解除する。
-
-| 開始時の設定 | 意味 |
-|---|---|
-| `sequence_group: start` または `{start: true}` | グループ全体を事前計画する。一方向制約・総移動量上限は追加しない |
-| `rotation_group: true` | グループ内の第4関節角`q4`を一方向にだけ変化させる |
-| `rotation_group: false` または省略 | 第4関節角`q4`の方向反転を許可する |
-| `max_phi_travel: 数値` | 手先角`phi`の総移動量をラジアンで制限する。有限の0以上、`values`参照可 |
-| `max_phi_travel`を省略 | 手先角`phi`の総移動量上限を追加しない |
-
-オプションを併用するときは`sequence_group: {start: true, rotation_group: true, max_phi_travel: 1.5707963267948966}`のように書く。オプションのマップには`start: true`が必要で、終了は`sequence_group: end`とする。`rotation_group`の値は`true`／`false`のみ。単位はradであり、90°は約1.5708rad、360°は約6.2832radになる。
-
-総移動量は、2πで丸めない関節指令から計算した`phi = q0 + q4`について、連続する指令間の角度差の絶対値を加算した`Σ|Δphi|`。グループ開始時から数え、通常MOVE・経由点・機構操作・待機をまたいで累計し、グループ終了でその区間を終える。開始角と終了角の差だけではない。たとえば0°→90°→0°は180°、0°→360°は360°として扱う。Quaternionや`atan2`で同じ姿勢に見えても、1回転を0として扱わない。上限0も有効だが、経路上の`phi`指令が一定であることを要求するため、同じ`phi`の終点を指定しただけでは実行可能とは限らない。
-
-総移動量だけを制限する場合は、`rotation_group`を省略する。`q4`の方向反転を許すことで、ベース軸の回転に合わせて`phi`の変化を抑えられる場合がある。`rotation_group: true`の場合は、第4関節の既存ソフト範囲`[-2π, 0]`radに収まる正方向または負方向をグループ全体から自動選択し、停止や同じ角度の保持を許可する。`q4`が一方向でも、フィールド基準の`phi`は同じ方向に進むとは限らない。
-
-方向制約を指定しない場合は、全目標の巻き数候補を先読みし、総量の小さい`phi`補間を選ぶ。方向制約と上限を併用する場合も、両条件を満たす`phi`補間を先に探し、必要に応じて第4関節角の補間を検査する。既存のXYZ経路に対する角度候補の計画であり、経路形状を変えて迂回する探索は行わない。
-
-開始フラグに到達すると、グループ内の全経路を計画してから最初の操作を実行する。設定した制約を同時に満たせない場合や、開始時の関節情報が未受信・古い・不正な場合は、**そのグループの移動・ポンプ等を実行する前に失敗**する。グループより前の手順は既に実行されている場合がある。開始姿勢によって可否が変わるため、YAMLの読み込み成功だけで実行可能とは判定しない。
-
-グループ内は、巻き数を保つ第4関節の指令角を使って経路を追従する。中間の`phi`は通常の最短角度補間から変わる場合がある。通常MOVEの終点では位置・手先角度に加えて、実測第4関節の角度差を2πで丸めずに到達判定する。経由点では個別の到達待ちを行わない。総移動量は事前計画と実行時の指令で検査する**ソフト上の指令制限**であり、実測した物理回転量や機構の停止・干渉回避を保証するものではない。
-
-各開始・終了フラグは独立した1ステップとして記述する。次の規則を`call`／`extends`の展開後に検証する。
-
-- グループを入れ子にせず、開始と終了を必ず対応させる。1グループに少なくとも1件の移動が必要。
-- ポンプ・幅切替・待機をグループ内に置ける。全体を事前計画した後も、操作順と通常MOVEの到達待ちは維持する。
-- 開始だけ、または終了だけの共通手順を定義できる。呼び出し側を含む同じUIアクション内で対応させる。別のPICK／PLACE／開始／終了へは持ち越さない。
-- 初期化命令をまたぐグループは作れない。初期化前と初期化後の手順で、それぞれ開始・終了を対応させる。
-- 同じ動作内の経由点列をグループ境界で分割しない。開始は最初の`waypoint`より前、終了は最後の通常`move`より後に置く。`move.waypoints`も使用できる。前のUI動作から持ち越した経由点を最初のgroupで使う場合は、そのgroupの全経路計画に含める。
-- グループ境界は相対移動の固定基準を変更しない。絶対移動の基準規則は前後で継続する。
-
-グループ中はJoyの手動移動補正と直接の初期化操作を受け付けない。終了フラグ・取消・失敗ではグループを解除し、Joyは最後に有効だった4関節の指令を保持する。解除応答や追従停止の結果が不明なら以後の動作を拒否する。保持は実機の停止確認や非常停止を意味しない。
-
-グループの第4関節指令の速度上限は、追従ノードのROSパラメータ`rotation_speed_rad_sec`（既定`1.0`rad/s、有限の正数）で指定する。これはソフト上の指令速度制限で、実機で保証された速度ではない。`route_timeout_sec`はグループ内の各経路、`sequence_timeout_sec`は待機と計画を含むUIアクション全体に適用される。
-
-### 実験用吸引自動化の切り替え
-
-現在の同梱設定は吸引判定付きPICKを有効にしている。`pick_common.steps` の2行のコメントを入れ替えると通常PICKへ切り替わる。通常へ戻すときは実験側をコメントアウトし、通常側のコメントを外す。常に片方だけを有効にする。
-
-```yaml
-pick_common:
-  steps:
-    # - call: pick_without_suction_check
-    - call: pick_with_suction_check
-```
-
-両方とも共通の `pick_attempt`（下降→Y−10 mm補正→吸引→退避）を使うため、座標・移動順序・ポンプのタイミングは共通。実験側だけがその前後に監視開始／結果待ちを加え、最大3回・各判定2秒で再試行し、成功後に幅を切り替える。回数と期限は `values.pick_max_attempts`／`pick_suction_timeout_sec` で変更する。期限は監視要求から数えるので、移動時間も含む。通常側は圧力受信や判定サービスを必要としない。
-
-実験を有効にする前に [pump.yaml](../catchrobo2026_pump/config/pump.yaml) の `pressure_comparison` と `pressure_indices` を実機に合わせる。`unconfigured` のままなら判定要求は拒否される。同梱ポンプ設定は `pressure_threshold: 300`、`pressure_comparison: ge`（300以上で成功）。ポンプ設定は起動時読込のため、変更後はポンプノードを再起動する。`debug:=true` による次のUI動作前の再読込はシーケンス設定だけに適用され、通常モードではシーケンスノードも再起動する。インストール済みYAMLを使う場合は再ビルドも必要。
-
-### 吸引判定と条件分岐・繰り返し
-
-以下は実験用 `pick_with_suction_check` の編集例。位置別の先行する絶対移動を基準に、同じ接近・退避を繰り返す。
-
-```yaml
-pick_with_suction_check:
-  steps:
-    - for:
-        max_iterations: '$pick_max_attempts'
-        steps:
-          - suction_check: {start: {timeout: '$pick_suction_timeout_sec'}}
-          - call: pick_attempt
-          - suction_check: wait
-          - if:
-              condition: suction_success
-              then:
-                - break: true
-    - if:
-        condition: suction_failure
-        then:
-          - fail: "Suction failed after the maximum number of attempts"
-    - endeffector: '$place_endeffector_command'
-```
-
-`start` はポンプノードの `check_suction` へUIの `collector_mask` と期限を渡す。要求を送ったら次手順へ進むため、監視とポンプ・移動を並行して実行できる。選択機構すべてが同じ新規圧力サンプルで閾値条件を満たすと成功し、期限まで満たさなければ失敗結果になる。早く成功しても途中の移動は省略せず、`wait` まで進んでから分岐する。結果はその監視中の成功を保存したもので、以後の吸着維持や落下の継続監視ではない。閾値・比較方向・圧力配列の対応は [ポンプ設定](../catchrobo2026_pump/README.md) を参照。
-
-`timeout` は0秒超〜86,400秒、`max_iterations` は1〜10,000の整数で、どちらも `'$名前'` を使える。最大回数は初回を含む。`for` 自体は回数を使い切ると次へ進むので、再試行の上限を失敗扱いにするには例のように `if` と `fail` を書く。上限失敗時に部分回収を成功扱いにはせず、ポンプ指令は保持する。
-
-条件は直前の `suction_check: wait` の結果を使う。次の `start` で前結果を消し、同時監視は1件に限定する。すべての到達可能な経路で `start` → `wait` → 条件参照の順序が必要。重複開始・開始のない待ち・待ち前の条件参照・待ち忘れの正常終了は読込時に拒否する。初期化前後など別のライフサイクル手順へ監視を持ち越すことはできない。
-
-`then` と `else`、`for.steps` には通常の手順や `call`、入れ子の `if`／`for` を書ける。`break` は構文上の最内側の `for` のみを抜ける。単独の共通手順に `break` だけを定義して呼び出す形式は使えない。`for` は読込時に有限回数へ展開し、分岐・breakを含む展開後の命令総数に10,000件の上限を適用する。アクション全体には従来どおり `sequence_timeout_sec` が適用される。
-
-正常な吸引タイムアウトは `suction_failure` として分岐できる。サービス未起動・要求拒否・不正応答・通信応答期限切れは動作を停止し、吸引失敗の再試行には入らない。監視応答の通信期限は指定した `timeout` ＋ `service_timeout_sec`、サービスを見つける期限は `service_timeout_sec`。取消時は読み取り専用の監視結果を破棄し、後から届いた結果を次の動作へ使わない。ポンプ側の監視自体は成功か期限まで続く。
-
-条件分岐と経路機能の組合せには次の制約がある。
-
-- `if` と `break` は先読みする `sequence_group` の内部に置けない。完全なグループ全体を `if` の枝や `for` で囲むことはできる。グループ内から外へ抜ける／途中へ入るジャンプは拒否する。
-- 経由点列の途中へジャンプできない。持越し用の末尾経由点は分岐の後へ共通に置き、分岐で飛ばさない。
-- 前の動作の経由点を持ち越す場合、その動作の最初のMOVEは分岐で飛ばせない。先に共通のMOVEを置いてから判定する。同梱PICKは位置別絶対移動が先なのでこの条件を満たす。
-- 実行前検査CLIは実圧力を仮定しない。`if` に達すると `suction_result_unknown` を返し、その後の経路・最終関節角・末尾経由点は確定しない。条件なしの通常PICKや既存groupの検査は従来どおり。
-
-### 従来の回転グループ（rotation_group）
-
-独立ステップの`rotation_group: start`／`rotation_group: end`は互換表記として使用できる。`sequence_group: {start: true, rotation_group: true}`／`sequence_group: end`と同じ意味で、`phi`の総移動量上限は設定しない。現在の同梱`sequences.yaml`のendingは方向制約を外し、`phi_travel`でA→B間の総移動量を30°に制限する。**既存の回転グループ設定だけでは、A・Bの`phi`が同じでも途中の360°回転を制限しない。**
-
-シーケンスグループには`PlanRotationGroup`／`WristControl`サービスと`FollowRoute`の追加フィールドを使用する。今回の型更新に合わせ、ワークスペース全体を再ビルドし、シーケンサ・経路生成・経路追従・Joyを含む関係ノードを再起動する。
-
-### 相対姿勢の基準
-
-相対姿勢の基準は、同じPICK／PLACEの中で**直近の `move.absolute` または単独の `waypoint.absolute`**。`move.waypoints` 内の絶対座標は含めない。直前の相対姿勢からの積算ではなく、軸は固定された経路座標系で、`phi` による局所軸の回転は行わない。`phi` も基準角に `dphi` を加算する。
-
-例えば絶対姿勢 `[100, 200, 300, 0]` の後に、相対姿勢 `[0, 0, -20, 0]`、`[0, 0, 0, 0]` と指定すると、絶対姿勢 `[100, 200, 280, 0]` へ下がり、`[100, 200, 300, 0]` へ戻る。途中のポンプ・待機・エンドエフェクタ指令・シーケンスグループの開始と終了では基準は変わらない。別の絶対移動を挿入すると、以後はその姿勢が基準になる。`call`／`extends` の境界でも同じ規則が続く。
-
-相対移動から始まる共通シーケンスは定義できる。ただし `bindings` に登録する実行シーケンスでは、参照の展開後に全ての相対移動より前に絶対移動が必要となる。開始時のロボット現在姿勢を暗黙の基準にはしない。
-
-分岐や `break` の合流後に相対移動する場合、その位置へ到達する全経路で絶対基準が同じである必要がある。片側だけで異なる絶対移動をした場合は、合流後に `move: {absolute: ...}` を入れて基準を再確定する。実行しなかった枝の絶対姿勢を相対基準には使わない。
-
-## UI位置の割り当て
-
-```yaml
 bindings:
-  red:
-    pick:
-      '0,1': front_pick
-      '0,2': other_pick
-    place:
-      '0,0': recovery
-  blue:
-    pick: {}
-    place: {}
+  red: {pick: {}, place: {}}
+  blue: {pick: {}, place: {}}
 ```
 
-PICKのキーは `'row,column'`。UIの `row=0..3` とアーム中心の `column=1..4` を使う。PLACEのキーは `'box,box_column'`。`box=0..3`、`box_column=0` が奥、`1` が手前。キーには空白を入れない。既存CSVの1始まり添字とは異なる。
+`poses`、`sequences`、`bindings`は必須です。互換文法のため空のred/blue・pick/placeマップを保持しますが、公開actionはSTART=4、INITIALIZE=5、END=6だけを許可します。`control_epoch`と`step_id`は非ゼロ、`collector_mask`は1..7が必要で、実ポンプの選択は共通`selected_pump`が優先されます。
 
-**回収機構の選択は設定ファイルに書かない。** PICKの `collector_mask` とPLACEの保持対象はUIから渡され、シーケンスノードがポンプ指令に適用する。各 `pump` 手順では選択された機構に設定値を送り、非選択機構は全てオフ（0）にする。`pump: off` では全3機構がオフとなる。L／C／Rごとの設定キーや `collector_mask` をYAMLに書くと未知キーとして拒否される。
+MOVEを含む動作は開始時の実測`current_joints`から`phi = q0 + q3`を固定し、すべてのMOVE・waypointのphi欄を置き換えます。4要素すべてが有限で1秒以内の実測が必要です。開始時に条件を満たさなければ手順全体を実行しません。回転グループ、sequenceグループ、phi区間は学祭運用では拒否されます。4軸のIK/FKと内部関節角出力は維持されます。実行時には各経路を連続関節角の内部グループに変換し、phi移動量0を強制します。公開YAMLの回転グループを有効にする変更ではありません。固定phiで到達できない場合は拒否し、2π回転へ切り替えません。
 
-## 再読み込みと検証
+基本手順には次を指定できます。各ステップは操作を1種類だけ持ちます。
 
-実行前の経路検査には`ros2 run catchrobo2026_sequence check_sequence_config --config PATH`を使う。開始関節角または姿勢と、実行するアクション列を指定し、本番と共通の計画処理で制約を検査できる。初期状態の指定がなければ、姿勢を仮定せず`UNKNOWN`とする。`--syntax-only`は従来の読込・参照・展開の検証だけを行う。末尾経由点だけが保留されている場合も、次の通常MOVEまでの経路は未確定として`UNKNOWN`を示す。連続検査では、この保留状態と到達済み関節角を次の対象へ渡して判定を続ける。コマンド例・結果の意味・検査範囲は[実行前のオフライン検査](README.md#実行前のオフライン検査)を参照。
+```yaml
+steps:
+  - move: {absolute: [670, -110, 220, 0]}
+  - move: {relative: [0, 0, 20, 0]}
+  - pump: suction
+  - wait: 0.5
+  - pump: release
+  - pump: off
+  - endeffector: 1
+```
 
-通常時は起動時に1回読み込み、その内容を使い続ける。デバッグ時はUIから受け付けるPICK／PLACEの**動作全体の開始前に1回**再読み込みする。各ウェイポイントでは読み直さないため、実行中の1動作は同じ設定を使い切り、編集内容は次の動作へ反映される。
+相対座標は直近のabsoluteを固定基準にし、前のrelativeから積算しません。`waypoint: {absolute: ...}`は次の通常MOVEまでを1経路にまとめ、通常MOVE終点で到達を待ちます。手順末尾の未接続waypointは初期化・START・ENDで使用できません。`move.waypoints: [[x, y, z, phi], ...]`も使用でき、経由点のphiも開始時実測値へ置き換えます。
 
-読み込み時に全ての数値・姿勢・シーケンス参照と有効な割り当てを検証する。不明な参照、循環、未知キー、重複キー、非有限値、不正なポンプ／エンドエフェクタ指令、範囲外の待機時間、実行シーケンスの基準なし相対移動、回転グループの開始・終了の不整合や入れ子・移動なしのグループは実機指令の前に拒否する。再読み込みに失敗した動作では古い設定にフォールバックして実行しない。
+`pump`の値は`suction`／`release`／`off`です。選択は[festival.yaml](../catchrobo2026_pump/config/festival.yaml)の`selected_pump: 1..3`で統一します。1/2/3は既存PumpControlのleft/center/rightというROSスロットであり、物理配置を意味しません。非選択スロットはOFFです。シーケンス内の`check_suction`も同じ選択スロット1bitだけを要求します。
 
-待機は1ステップ最大86,400秒（1日）という運用上限を設ける。数値が有限でも極端に大きい値はタイマーの時間表現を超えるため、数値エイリアスで指定した場合も同じ上限を適用する。
+`endeffector`は幅機構の既存0/1指令です。同梱STARTは従来の1を保持し、広い／狭いの実機対応をここで推測しません。サービスの受理応答で次へ進み、機構の物理完了通知は待ちません。
 
-参照の深さは数値・姿勢・シーケンス各64まで、1シーケンスの展開後ステップ数と `move.waypoints` の点数の合計は10,000まで。初期化は前手順＋初期化命令1件＋後手順の合計にも同じ上限を適用する。座標・相対加算結果は有限であることを検証するが、実機の可動範囲・障害物・吸着成立をこのファイルの構文検証だけで保証するものではない。
+`call: sequence_name`は別手順を展開し、`extends`は継承元の後へ手順を追加します。`'$name'`は`values`内の数値を参照し、計算式は使えません。`manual: true`などの手動待ちステップは、学祭UIに完了操作がないため手順全体の最初の操作前に拒否します。
+
+初期化前後の手順は既存Triggerの前後に実行します。初期化の受理は原点復帰完了ではありません。ENDは明示要求時のみ実行し、STOP・取消・reset・失敗・Ctrl+Cで自動実行しません。
+
+`route_timeout_sec`は1経路の上限で、YAML指定が同名ROSパラメータより優先されます。値は有限の0秒超～86400秒です。全体上限は別の`sequence_timeout_sec`パラメータです。`debug:=true`は各動作開始前にYAMLを再読込します。実行中は変更しません。起動引数`sequence_file`が編集対象と一致していることを確認してください。
+
+旧競技用の汎用文法・静的解析はライブラリに残っていますが、公開actionの受付制限と学祭用回転拒否が優先されます。旧設定を読み込めてもPICK／PLACEは実行できません。実行制約と停止動作は[README](README.md)を参照してください。

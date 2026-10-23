@@ -1,9 +1,8 @@
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -14,17 +13,17 @@ def package_path(package, *parts):
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument('team', choices=['red', 'blue']),
+        DeclareLaunchArgument('team', default_value='red', choices=['red', 'blue']),
         DeclareLaunchArgument(
             'sequence_file', default_value=package_path(
                 'catchrobo2026_sequence', 'config', 'sequences.yaml')),
+        DeclareLaunchArgument('festival_config', default_value=PathJoinSubstitution([
+            get_package_share_directory('catchrobo2026_pump'),
+            'config', 'festival.yaml'])),
         DeclareLaunchArgument('debug', default_value='false'),
-        DeclareLaunchArgument('joy_source', default_value='web', choices=['web', 'local']),
+        DeclareLaunchArgument('joy_source', default_value='web', choices=['web']),
         DeclareLaunchArgument('manual_config', default_value=package_path(
             'catchrobo2026_ui', 'config', 'manual.yaml')),
-        DeclareLaunchArgument(
-            'queue_config', default_value=package_path(
-                'catchrobo2026_ui', 'config', 'queue.yaml')),
         DeclareLaunchArgument(
             'pump_config', default_value=package_path(
                 'catchrobo2026_pump', 'config', 'pump.yaml')),
@@ -44,6 +43,7 @@ def generate_launch_description():
             launch_arguments={
                 'team': LaunchConfiguration('team'),
                 'sequence_file': LaunchConfiguration('sequence_file'),
+                'festival_config': LaunchConfiguration('festival_config'),
                 'debug': LaunchConfiguration('debug'),
             }.items()),
         IncludeLaunchDescription(
@@ -53,8 +53,9 @@ def generate_launch_description():
                 'ipc_socket': LaunchConfiguration('ipc_socket'),
                 'listen': LaunchConfiguration('listen'),
                 'sequence_enabled': 'true',
-                'queue_config': LaunchConfiguration('queue_config'),
                 'manual_config': LaunchConfiguration('manual_config'),
+                'pump_config': LaunchConfiguration('pump_config'),
+                'festival_config': LaunchConfiguration('festival_config'),
                 'manual_velocity_config': LaunchConfiguration('manual_velocity_config'),
                 'joy_source': LaunchConfiguration('joy_source'),
                 'debug': LaunchConfiguration('debug'),
@@ -68,7 +69,8 @@ def generate_launch_description():
         Node(package='catchrobo2026_state_machine', executable='state_machine_node',
              name='state_machine_node', output='screen'),
         Node(package='catchrobo2026_pump', executable='pump_controller_node',
-             parameters=[LaunchConfiguration('pump_config')], output='screen'),
+             parameters=[LaunchConfiguration('pump_config'),
+                         LaunchConfiguration('festival_config')], output='screen'),
         Node(package='catchrobo2026_endeffector', executable='endeffector_state_node',
              output='screen'),
 
@@ -76,20 +78,12 @@ def generate_launch_description():
         # main.launch.py から追加したノード
         # ==================================
         Node(
-            package='joy', 
-            executable='joy_node', 
-            name='joy_node', 
-            condition=IfCondition(PythonExpression([
-                "'", LaunchConfiguration('joy_source'), "' == 'local'"
-            ])),
-            output='screen'
-        ),
-        Node(
             package='catchrobo2026_hand_operated', 
             executable='joy_controller_node', 
             name='joy_controller_node', 
             parameters=[LaunchConfiguration('joint_feedback_config'),
-                        LaunchConfiguration('manual_velocity_config'), {
+                        LaunchConfiguration('manual_velocity_config'),
+                        LaunchConfiguration('festival_config'), {
                             'debug': ParameterValue(
                                 LaunchConfiguration('debug'), value_type=bool),
                             'manual_velocity_config': ParameterValue(

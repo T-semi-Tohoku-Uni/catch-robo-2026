@@ -62,8 +62,7 @@ class WristControlTest(unittest.TestCase):
         cls.child = subprocess.Popen(
             [str(cls.executable), '--ros-args', '-r', f'__ns:={cls.node.get_namespace()}',
              '-p', 'rotation_joint_timeout_sec:=0.3',
-             '-p', 'manual_linear_speed_mm_s:=25.0',
-             '-p', 'manual_angular_speed_rad_s:=0.25'],
+             '-p', 'manual_linear_speed_mm_s:=25.0'],
             stdout=cls.log, stderr=cls.log, start_new_session=True)
         deadline = time.monotonic() + 10.0
         while not (cls.client.service_is_ready() and cls.parameter_client.services_are_ready() and
@@ -107,14 +106,13 @@ class WristControlTest(unittest.TestCase):
 
     def test_manual_linear_velocity_and_neutral_hold(self):
         future = self.parameter_client.get_parameters([
-            'manual_linear_speed_mm_s', 'manual_angular_speed_rad_s',
-            'debug', 'manual_velocity_config'])
+            'manual_linear_speed_mm_s', 'debug', 'manual_velocity_config'])
         rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
         self.assertTrue(future.done())
         values = future.result().values
-        self.assertEqual([value.double_value for value in values[:2]], [25.0, 0.25])
-        self.assertFalse(values[2].bool_value)
-        self.assertEqual(values[3].string_value, '')
+        self.assertEqual(values[0].double_value, 25.0)
+        self.assertFalse(values[1].bool_value)
+        self.assertEqual(values[2].string_value, '')
         future = self.parameter_client.set_parameters([
             Parameter('manual_linear_speed_mm_s', value=10.0),
             Parameter('debug', value=True),
@@ -150,7 +148,7 @@ class WristControlTest(unittest.TestCase):
         self.assertGreater(len(wrist_motion), 5)
         phi = [joints[0] + joints[3] for joints in wrist_motion]
         for first, second in zip(phi[-6:-1], phi[-5:]):
-            self.assertAlmostEqual(second - first, 0.0005, delta=2e-5)
+            self.assertAlmostEqual(second - first, 0.0, delta=2e-5)
 
     def test_invalid_manual_velocity_parameters_are_rejected(self):
         for index, value in enumerate(['-1.0', '.nan']):
@@ -457,7 +455,7 @@ class WristControlTest(unittest.TestCase):
         self.assertTrue(self.request(WristControl.Request.TARGET, wrist=-1.0).success)
         self.assert_hold(self.joints(-1.0))
 
-    def test_post_end_new_pose_and_new_joy_resume_normal_control(self):
+    def test_post_end_new_pose_and_linear_joy_resume_without_rotation_input(self):
         self.begin()
         self.assertTrue(self.request(WristControl.Request.END).success)
         self.assert_hold(self.joints())
@@ -472,11 +470,18 @@ class WristControlTest(unittest.TestCase):
         self.assert_hold(self.joints())
         self.joy_pub.publish(self.joy(wrist=1.0))
         self.spin(0.1)
-        self.assertGreater(self.samples[-1][1][3], -1.98)
-        last_wrist = self.samples[-1][1][3]
+        self.assert_hold(self.joints())
+        before_x = self.marker_samples[-1][1][0]
+        before_phi = self.samples[-1][1][0] + self.samples[-1][1][3]
+        self.joy_pub.publish(self.joy(x=1.0))
+        self.spin(0.1)
+        self.assertLess(self.marker_samples[-1][1][0], before_x - 0.001)
+        self.assertAlmostEqual(self.samples[-1][1][0] + self.samples[-1][1][3],
+                               before_phi, delta=2e-5)
+        last_x = self.marker_samples[-1][1][0]
         self.assertTrue(self.request(WristControl.Request.END).success)
         self.spin(0.1)
-        self.assertGreater(self.samples[-1][1][3], last_wrist + 0.015)
+        self.assertLess(self.marker_samples[-1][1][0], last_x - 0.001)
 
 
 if __name__ == '__main__':

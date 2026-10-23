@@ -3,20 +3,19 @@
 import copy
 import math
 import os
-from pathlib import Path
 import signal
 import subprocess
 import time
 
-from catchrobo2026_msgs.action import ExecuteSequence, FollowRoute
+from catchrobo2026_msgs.action import FollowRoute
 from catchrobo2026_msgs.srv import PlanRotationGroup, WristControl
 from geometry_msgs.msg import PoseStamped
 import pytest
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
 from std_msgs.msg import Float32MultiArray
 from test_route_handoff import Harness, waypoint_pose, xyz
-import yaml
 
 
 @pytest.fixture
@@ -35,7 +34,19 @@ def rotation_rig(tmp_path, monkeypatch):
     log = log_path.open('w')
     try:
         rig = Harness(node, children, log, executor)
-        rig.joints, rig.commands = [], []
+        rig.joints, rig.commands, rig.wrist_updates = [], [], []
+        callbacks = ReentrantCallbackGroup()
+        wrist_client = node.create_client(
+            WristControl, 'actual_wrist_control', callback_group=callbacks)
+
+        async def observe_wrist(request, response):
+            reply = await wrist_client.call_async(request)
+            if reply.success and request.operation == WristControl.Request.TARGET:
+                rig.wrist_updates.append(copy.deepcopy(request))
+            return reply
+
+        wrist_proxy = node.create_service(
+            WristControl, 'wrist_control', observe_wrist, callback_group=callbacks)
         rig.subscriptions.extend([
             node.create_subscription(Float32MultiArray, 'current_joints', rig.joints.append, 100),
             node.create_subscription(
@@ -47,7 +58,9 @@ def rotation_rig(tmp_path, monkeypatch):
         rig.launch('nav_director', 'path_generator_3d')
         rig.launch('nav_director', 'path_follower_node', remaps=('route:=follower_route',))
         rig.dummy = rig.launch('nav_director', 'dummy_robot_node')
-        rig.launch('catchrobo2026_hand_operated', 'joy_controller_node')
+        rig.launch('catchrobo2026_hand_operated', 'joy_controller_node',
+                   remaps=('wrist_control:=actual_wrist_control',))
+        assert wrist_client.wait_for_service(timeout_sec=15)
         assert rig.plan.wait_for_service(timeout_sec=15)
         assert rig.wrist.wait_for_service(timeout_sec=15)
         assert rig.follow.wait_for_server(timeout_sec=15)
@@ -101,6 +114,7 @@ def begin(rig, response, group_id, **constraints):
         direction=response.direction, wrist_angle=first.wrist_angles[0],
         target=first.path.poses[0], **constraints)))
     assert result.success, result.message
+    rig.last_begin_wrist = first.wrist_angles[0]
 
 
 def end(rig, group_id):
@@ -119,6 +133,15 @@ def follow(rig, response, route_index, group_id):
     return result
 
 
+def assert_bounded_wrist_updates(rig, first):
+    # Topic observers can miss updates; the transparent service proxy records each command.
+    wrists = [rig.last_begin_wrist, *[request.wrist_angle for request in rig.wrist_updates[first:]]]
+    assert len(wrists) > 2
+    largest = max(abs(b - a) for a, b in zip(wrists, wrists[1:]))
+    assert largest <= 0.051
+    print(f'Wrist TARGET updates={len(wrists) - 1}, maximum command step={largest:.9f} rad')
+
+
 @pytest.mark.parametrize('direction', [1, -1])
 def test_auto_direction_across_routes_and_yaw_wrap(rotation_rig, direction):
     rig = rotation_rig
@@ -133,6 +156,7 @@ def test_auto_direction_across_routes_and_yaw_wrap(rotation_rig, direction):
     assert min(direction * (b - a) for a, b in zip(all_angles, all_angles[1:])) >= -1e-6
     begin(rig, response, 1)
     command_start, topic_start = len(rig.commands), len(rig.targets)
+    update_start = len(rig.wrist_updates)
     for index in range(2):
         handle = follow(rig, response, index, 1)
         assert rig.resolve(handle.get_result_async()).result.success
@@ -141,7 +165,7 @@ def test_auto_direction_across_routes_and_yaw_wrap(rotation_rig, direction):
     assert len(commands) > 10
     changes = [direction * (b - a) for a, b in zip(commands, commands[1:])]
     assert min(changes) >= -1e-5
-    assert max(changes) <= 0.051
+    assert_bounded_wrist_updates(rig, update_start)
     assert abs(rig.joints[-1].data[3] - (-3.0 + direction * 0.7)) < 0.05
     assert math.dist(xyz(rig.poses[-1]), (900, 250, 260)) < 20.1
     assert len(rig.targets) == topic_start
@@ -158,9 +182,9 @@ def test_pure_full_turn_requires_nonwrapped_arrival_and_holds(rotation_rig):
     begin(rig, response, 1)
     handle = follow(rig, response, 0, 1)
     result = handle.get_result_async()
-    rig.observe(0.3)
+    # Action acceptance does not synchronize the first physical command.
+    rig.until(lambda: -math.pi < rig.joints[-1].data[3] < -0.05)
     assert not result.done()
-    assert -0.5 < rig.joints[-1].data[3] < -0.05
     assert rig.resolve(result).result.success
     rig.observe(0.1)
     assert abs(rig.joints[-1].data[3] + 2 * math.pi) < 0.05
@@ -260,154 +284,6 @@ def test_follow_rejects_incomplete_or_reversing_constraints(rotation_rig):
         assert not handle.accepted
 
 
-def test_sequence_yaml_group_through_real_navigation(rotation_rig, tmp_path):
-    rig = rotation_rig
-    set_start(rig, -3.0)
-
-    def target(wrist, position):
-        base = math.atan2(position[0] - 675, position[1] + 190)
-        return [*position, base + wrist]
-
-    waypoint = target(-2.9, (725, 200, 220))
-    inline = target(-2.8, (750, 200, 230))
-    first_move = target(-2.7, (775, 200, 240))
-    final_move = target(-2.2, (900, 250, 260))
-    config = yaml.load((Path(__file__).parents[1] / 'config/sequences.yaml').read_text(),
-                       Loader=yaml.BaseLoader)
-    config['sequences']['ending'] = {'steps': [
-        {'rotation_group': 'start'},
-        {'waypoint': {'absolute': waypoint}},
-        {'move': {'absolute': first_move, 'waypoints': [inline]}},
-        {'wait': 0.2},
-        {'move': {'absolute': final_move}},
-        {'rotation_group': 'end'},
-    ]}
-    config['end_sequence'] = 'ending'
-    config['route_timeout_sec'] = 12.0
-    config_file = tmp_path / 'sequence_rotation_group.yaml'
-    config_file.write_text(yaml.safe_dump(config))
-    rig.launch('catchrobo2026_sequence', 'sequence_node', {
-        'team': 'red', 'sequence_file': config_file,
-    })
-    assert rig.sequence.wait_for_server(timeout_sec=15)
-    command_start, topic_start = len(rig.commands), len(rig.targets)
-    rig.execute(ExecuteSequence.Goal.END)
-
-    commands = [command.data[3] for command in rig.commands[command_start:]]
-    assert len(commands) > 20
-    assert min(b - a for a, b in zip(commands, commands[1:])) >= -1e-5
-    assert max(b - a for a, b in zip(commands, commands[1:])) <= 0.051
-    assert abs(rig.joints[-1].data[3] + 2.2) < 0.05
-    assert math.dist(xyz(rig.poses[-1]), final_move[:3]) < 20.1
-    assert len(rig.targets) == topic_start
-    command_start = len(rig.commands)
-    rig.observe(0.4)
-    assert all(abs(command.data[3] + 2.2) < 1e-5
-               for command in rig.commands[command_start:])
-
-    # A new BEGIN proves SequenceNode released its group before reporting success.
-    next_id = time.time_ns() // 1000 + 1000
-    released = rig.resolve(rig.wrist.call_async(WristControl.Request(
-        operation=WristControl.Request.BEGIN, group_id=next_id, direction=1,
-        wrist_angle=rig.joints[-1].data[3], target=rig.poses[-1])))
-    assert released.success, released.message
-    end(rig, next_id)
-
-
-@pytest.mark.parametrize('team', ['red', 'blue'])
-@pytest.mark.parametrize('grouped', [False, True])
-def test_first_pick_then_place_with_builtin_coordinates(rotation_rig, tmp_path, team, grouped):
-    from catchrobo2026_msgs.srv import EndeffectorControl, PumpControl
-
-    rig = rotation_rig
-
-    def mechanism_done(request, response):
-        response.success = True
-        return response
-
-    services = [
-        rig.node.create_service(PumpControl, 'set_pump_state', mechanism_done),
-        rig.node.create_service(EndeffectorControl, 'set_endeffector_state', mechanism_done),
-    ]
-    config_file = Path(__file__).parents[1] / 'config/sequences.yaml'
-    config = yaml.load(config_file.read_text(), Loader=yaml.BaseLoader)
-    if grouped:
-        place_name = config['bindings'][team]['place']['0,0']
-        steps = config['sequences'][place_name]['steps']
-        assert steps[-1] == {'call': f'place_pre_{team}_waypoint'}
-        steps.insert(0, {'rotation_group': 'start'})
-        steps.insert(len(steps) - 1, {'rotation_group': 'end'})
-        config_file = tmp_path / 'first_place_rotation_group.yaml'
-        config_file.write_text(yaml.safe_dump(config))
-    rig.launch('catchrobo2026_sequence', 'sequence_node', {
-        'team': team, 'sequence_file': config_file,
-    })
-    assert rig.sequence.wait_for_server(timeout_sec=15)
-
-    place_commands = []
-    for index, kind in enumerate([ExecuteSequence.Goal.PICK, ExecuteSequence.Goal.PLACE], 1):
-        if kind == ExecuteSequence.Goal.PLACE:
-            place_commands.append(rig.commands[-1].data[3])
-            command_start = len(rig.commands)
-            place_route_start = len(rig.routes)
-        handle = rig.resolve(rig.sequence.send_goal_async(ExecuteSequence.Goal(
-            control_epoch=1, step_id=index, kind=kind, row=0, column=1,
-            box=0, box_column=0, collector_mask=7)))
-        assert handle.accepted
-        result = rig.resolve(handle.get_result_async())
-        assert result.result.success, result.result.message
-        rig.observe(0.1)
-    place_commands.extend(command.data[3] for command in rig.commands[command_start:])
-    assert len(place_commands) > 5
-    assert min(place_commands) >= -2 * math.pi - 1e-5
-    assert max(place_commands) <= 1e-5
-    assert max(abs(b-a) for a, b in zip(place_commands, place_commands[1:])) < math.pi
-    if grouped:
-        direction = 1 if team == 'red' else -1
-        assert min(direction*(b-a) for a, b in zip(place_commands, place_commands[1:])) >= -1e-5
-        assert max(abs(b-a) for a, b in zip(place_commands, place_commands[1:])) <= 0.051
-    else:
-        def numeric(value):
-            return float(config['values'][value[1:]]) if value.startswith('$') else float(value)
-
-        place_above = [numeric(value) for value in config['poses'][f'place_{team}_0_0_above']]
-        place_retreat = place_above[:3]
-        place_retreat[2] += float(config['values']['place_retreat_dz'])
-        via = [float(value) for value in config['sequences'][
-            f'place_pre_{team}_waypoint']['steps'][0]['waypoint']['absolute']][:3]
-        pick_above = [numeric(value) for value in config['poses']['pick_0_1_above']]
-        pick_retreat = pick_above[:3]
-        pick_retreat[2] += float(config['values']['pick_retreat_dz'])
-
-        # PLACE finishes at its retreat target; its trailing waypoint is still deferred.
-        rig.observe(0.3)
-        assert len(rig.routes) == place_route_start + 3
-        assert math.dist(xyz(rig.poses[-1]), place_retreat) < 20.1
-        assert math.dist(xyz(rig.poses[-1]), via) > 100.0
-        placed_position = xyz(rig.poses[-1])
-        route_start, pose_start = len(rig.routes), len(rig.poses)
-        rig.observe(0.3)
-        assert len(rig.routes) == route_start
-        assert math.dist(xyz(rig.poses[-1]), placed_position) < 1.0
-
-        handle = rig.resolve(rig.sequence.send_goal_async(ExecuteSequence.Goal(
-            control_epoch=1, step_id=3, kind=ExecuteSequence.Goal.PICK,
-            row=0, column=1, collector_mask=7)))
-        assert handle.accepted
-        result = rig.resolve(handle.get_result_async())
-        assert result.result.success, result.result.message
-        rig.observe(0.1)
-        assert len(rig.routes) == route_start + 4
-        first_route = rig.routes[route_start]
-        assert math.dist(xyz(first_route.poses[0]), placed_position) < 1.0
-        assert math.dist(xyz(first_route.poses[-1]), pick_above[:3]) < 0.1
-        assert min(math.dist(xyz(pose), via) for pose in first_route.poses) < 3.0
-        assert min(math.dist(xyz(pose), via) for pose in rig.poses[pose_start:]) < 90.0
-        assert math.dist(xyz(rig.poses[-1]), pick_retreat) < 20.1
-    for service in services:
-        rig.node.destroy_service(service)
-
-
 def commanded_phi_travel(commands):
     angles = [float(command.data[0]) + float(command.data[3]) for command in commands]
     return sum(abs(b - a) for a, b in zip(angles, angles[1:]))
@@ -464,13 +340,13 @@ def test_phi_limit_counts_reversals_and_combines_with_direction(rotation_rig):
     assert response.direction == 0
     begin(rig, response, 1, limit_phi_travel=True, max_phi_travel=0.81)
     before = len(rig.commands)
+    update_start = len(rig.wrist_updates)
     for index in range(2):
         assert rig.resolve(follow(rig, response, index, 1).get_result_async()).result.success
     rig.observe(0.1)
     commands = rig.commands[before:]
     assert commanded_phi_travel(commands) == pytest.approx(0.8, abs=0.06)
-    wrists = [message.data[3] for message in commands]
-    assert max(abs(b - a) for a, b in zip(wrists, wrists[1:])) <= 0.051
+    assert_bounded_wrist_updates(rig, update_start)
     end(rig, 1)
     rejected = plan(rig, targets, [1, 2], limit_phi_travel=True, max_phi_travel=1.0)
     assert not rejected.success and not rejected.routes
@@ -478,53 +354,6 @@ def test_phi_limit_counts_reversals_and_combines_with_direction(rotation_rig):
                     limit_phi_travel=True, max_phi_travel=0.4)
     assert accepted.success and accepted.direction == 1
     assert accepted.phi_travel == pytest.approx(0.3, abs=0.05)
-
-
-@pytest.mark.parametrize('local_budget,start_xyz', [
-    (False, (375, 238, 196.95)), (True, (375, 238, 196.95)),
-    (True, (1199.13, -736, 304.35)),
-])
-def test_sequence_group_looks_ahead_across_ending_moves(
-        rotation_rig, tmp_path, local_budget, start_xyz):
-    rig = rotation_rig
-    start = PoseStamped(pose=waypoint_pose(start_xyz, -math.pi))
-    for _ in range(3):
-        rig.pose_pub.publish(start)
-        rig.observe(0.1)
-    rig.until(lambda: math.dist(xyz(rig.poses[-1]), start_xyz) < 0.1)
-    rig.observe(0.1)
-    config = yaml.load((Path(__file__).parents[1] / 'config/sequences.yaml').read_text(),
-                       Loader=yaml.BaseLoader)
-    config['sequences']['ending'] = {'steps': [
-        {'sequence_group': {'start': True, 'max_phi_travel': math.pi + 0.01}},
-        {'move': {'absolute': [675, 200, 300, 0]}}, {'wait': 0.05},
-        {'move': {'absolute': 'lifecycle_pose'}}, {'sequence_group': 'end'},
-    ]}
-    if local_budget:
-        config['sequences']['ending']['steps'] = [
-            {'sequence_group': 'start'},
-            {'move': {'absolute': [675, 200, 300, 0]}},
-            {'phi_travel': {'start': True, 'limit': math.pi / 6}}, {'wait': 0.05},
-            {'move': {'absolute': 'lifecycle_pose'}}, {'phi_travel': 'end'},
-            {'sequence_group': 'end'},
-        ]
-    config['end_sequence'] = 'ending'
-    config['route_timeout_sec'] = 12.0
-    config_file = tmp_path / 'sequence_phi_limit.yaml'
-    config_file.write_text(yaml.safe_dump(config))
-    rig.launch('catchrobo2026_sequence', 'sequence_node', {
-        'team': 'red', 'sequence_file': config_file,
-    })
-    assert rig.sequence.wait_for_server(timeout_sec=15)
-    before = len(rig.commands)
-    rig.execute(ExecuteSequence.Goal.END)
-    rig.observe(0.1)
-    commands = rig.commands[before:]
-    assert commanded_phi_travel(commands) <= math.pi + (0.1 if local_budget else 0.011)
-    a_index = min(range(len(commands)), key=lambda i: abs(commands[i].data[3] + 2 * math.pi))
-    assert abs(commands[a_index].data[3] + 2 * math.pi) < 1e-4
-    assert commanded_phi_travel(commands[a_index:]) < (math.pi / 6 if local_budget else 1e-4)
-    assert abs(rig.joints[-1].data[3] - (-6.220766497)) < 0.05
 
 
 def test_unrestricted_wrist_interpolation_limits_reversal_speed(rotation_rig):
@@ -540,6 +369,7 @@ def test_unrestricted_wrist_interpolation_limits_reversal_speed(rotation_rig):
     route.phi_angles = []
     begin(rig, response, 1)
     before = len(rig.commands)
+    update_start = len(rig.wrist_updates)
     handle = follow(rig, response, 0, 1)
     pending = handle.get_result_async()
     rig.observe(0.2)
@@ -549,5 +379,5 @@ def test_unrestricted_wrist_interpolation_limits_reversal_speed(rotation_rig):
     wrists = [command.data[3] for command in rig.commands[before:]]
     assert max(wrists) > -1.56
     assert abs(wrists[-1] + 2.0) < 1e-4
-    assert max(abs(b - a) for a, b in zip(wrists, wrists[1:])) <= 0.051
+    assert_bounded_wrist_updates(rig, update_start)
     end(rig, 1)

@@ -59,11 +59,9 @@ class ManualVelocityReloadTest(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def write_config(self, linear=None, angular=None, node='/**/joy_controller_node'):
-        lines = [f'{node}:', '  ros__parameters:']
+        lines = [f'{node}:', '  ros__parameters:', '    use_sim_time: false']
         if linear is not None:
             lines.append(f'    manual_linear_speed_mm_s: {linear}')
-        if angular is not None:
-            lines.append(f'    manual_angular_speed_rad_s: {angular}')
         self.config.write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
     def start_node(self, debug=True, linear=20.0, angular=0.2):
@@ -122,7 +120,7 @@ class ManualVelocityReloadTest(unittest.TestCase):
         self.joy_pub.publish(self.joy(wrist=1.0))
         self.spin(0.08)
         self.assertGreater(len(self.joint_samples), 5)
-        expected_step_rad = expected_rad_s * 0.002
+        expected_step_rad = 0.0  # Rotation input is disabled in festival operation.
         for first, second in zip(self.joint_samples[-6:-1], self.joint_samples[-5:]):
             self.assertAlmostEqual(second - first, expected_step_rad, delta=2e-5)
 

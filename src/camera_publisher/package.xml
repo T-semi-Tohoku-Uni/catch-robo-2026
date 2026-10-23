@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>camera_publisher</name>
+  <version>0.1.0</version>
+  <description>Publish USB and Jetson CSI camera images using OpenCV.</description>
+  <maintainer email="t-semi@users.noreply.github.com">t-semi</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>libopencv-dev</depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -238,13 +238,13 @@ def test_monitor_keeps_pump_publication_and_setter_running(pump):
     changed = pump.result(pump.set_pump.call_async(
         PumpControl.Request(left=1, center=0, right=-1)), timeout=0.25)
     assert changed.success and not future.done()
-    pump.wait_until(lambda: pump.output[-1][1] == 38)
+    pump.wait_until(lambda: pump.output[-1][1] == 6)
     response = pump.result(future)
     assert not response.success and response.timed_out
     readings = pump.output[start_count:]
     assert len(readings) >= 30, '100 Hz publication stalled during service wait'
     assert max(b[0] - a[0] for a, b in zip(readings, readings[1:])) < 0.15
-    assert readings[-1][1] == 38, 'monitoring must not alter pump outputs'
+    assert readings[-1][1] == 6, 'monitoring must not alter pump outputs'
 
 
 def test_reverse_comparison_and_pressure_mapping(ros_context):
@@ -298,3 +298,22 @@ def test_invalid_startup_configuration_is_rejected(ros_context, tmp_path, name, 
     ], cwd=tmp_path, capture_output=True, text=True, timeout=4.0)
     assert process.returncode == 1
     assert name in process.stderr
+
+
+@pytest.mark.parametrize('selected', [1, 2, 3])
+def test_only_selected_collector_can_be_active_on_boot_or_direct_service(ros_context, selected):
+    harness = PumpHarness({'selected_pump': selected, 'initial_state': 1})
+    try:
+        expected = 63 & ~(1 << (selected - 1))
+        harness.wait_until(lambda: harness.output[-1][1] == expected)
+        assert all(value == expected for _, value in harness.output)
+        assert harness.result(harness.set_pump.call_async(
+            PumpControl.Request(left=-1, center=-1, right=-1))).success
+        expected = 63 & ~(1 << (selected + 2))
+        harness.wait_until(lambda: harness.output[-1][1] == expected)
+        harness.spin_for(0.05)
+        assert harness.output[-1][1] == expected
+        assert harness.result(harness.set_pump.call_async(PumpControl.Request())).success
+        harness.wait_until(lambda: harness.output[-1][1] == 63)
+    finally:
+        harness.close()

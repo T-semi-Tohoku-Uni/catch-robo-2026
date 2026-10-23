@@ -3,6 +3,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -16,7 +17,11 @@ def generate_launch_description():
     manual_velocity_config = os.path.join(
         get_package_share_directory('catchrobo2026_hand_operated'),
         'config', 'manual_velocity.yaml')
+    festival_config = os.path.join(
+        get_package_share_directory('catchrobo2026_pump'),
+        'config', 'festival.yaml')
     return LaunchDescription([
+        DeclareLaunchArgument('festival_config', default_value=festival_config),
         DeclareLaunchArgument(
             'pump_config',
             default_value=pump_config,
@@ -28,9 +33,11 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'manual_velocity_config', default_value=manual_velocity_config,
-            description='Manual Cartesian and angular velocity parameter file'
+            description='Manual Cartesian velocity parameter file'
         ),
         DeclareLaunchArgument('debug', default_value='false'),
+        DeclareLaunchArgument('use_dummy', default_value='false'),
+        DeclareLaunchArgument('initial_pose', default_value='[600.0, 200.0, 200.0, 0.0]'),
         # ==================================
         # 自動制御 (アクション通信) 系
         # ==================================
@@ -70,7 +77,8 @@ def generate_launch_description():
             executable='joy_controller_node',
             name='joy_controller_node',
             parameters=[LaunchConfiguration('joint_feedback_config'),
-                        LaunchConfiguration('manual_velocity_config'), {
+                        LaunchConfiguration('manual_velocity_config'),
+                        LaunchConfiguration('festival_config'), {
                             'debug': ParameterValue(
                                 LaunchConfiguration('debug'), value_type=bool),
                             'manual_velocity_config': ParameterValue(
@@ -90,7 +98,8 @@ def generate_launch_description():
             package='catchrobo2026_pump',
             executable='pump_controller_node',
             name='pump_controller_node',
-            parameters=[LaunchConfiguration('pump_config')],
+            parameters=[LaunchConfiguration('pump_config'),
+                        LaunchConfiguration('festival_config')],
             output='screen'
         ),
 
@@ -114,10 +123,8 @@ def generate_launch_description():
             package='nav_director',
             executable='dummy_robot_node',
             name='dummy_robot_node',
+            condition=IfCondition(LaunchConfiguration('use_dummy')),
             output='screen',
-            parameters=[
-                # ここで初期角度を自由に変更できます (例: 1.57は90度)
-                {'initial_joints': [600.0, 200.0, 200.0, 0.0]}
-            ]
+            parameters=[{'initial_pose': LaunchConfiguration('initial_pose')}]
         )
     ])

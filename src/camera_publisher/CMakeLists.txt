@@ -1,0 +1,20 @@
+cmake_minimum_required(VERSION 3.8)
+project(camera_publisher)
+
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rcl_interfaces REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio)
+
+add_executable(camera_publisher_node src/camera_publisher_node.cpp)
+target_compile_features(camera_publisher_node PUBLIC cxx_std_17)
+target_compile_options(camera_publisher_node PRIVATE -Wall -Wextra -Wpedantic)
+ament_target_dependencies(camera_publisher_node rclcpp rcl_interfaces std_msgs sensor_msgs)
+target_include_directories(camera_publisher_node PRIVATE ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(camera_publisher_node ${OpenCV_LIBS})
+
+install(TARGETS camera_publisher_node DESTINATION lib/${PROJECT_NAME})
+install(FILES README.md DESTINATION share/${PROJECT_NAME})
+ament_package()

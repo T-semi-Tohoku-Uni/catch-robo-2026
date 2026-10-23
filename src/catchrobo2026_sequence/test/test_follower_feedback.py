@@ -83,6 +83,10 @@ def launch_follower(rig, streams, tolerance=None):
                parameter_files=(config,))
     assert rig.follow.wait_for_server(timeout_sec=15)
     rig.until(lambda: streams.current.get_subscription_count() > 0)
+    if streams.current_enabled:
+        # Publish fresh frames after DDS matching, while continuing to spin the fixture.
+        first_publication = streams.current_publications
+        rig.until(lambda: streams.current_publications >= first_publication + 10)
     rig.observe(0.15)
 
 

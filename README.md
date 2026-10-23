@@ -4,10 +4,10 @@
 
 ## 取得とビルド
 
-UIと運動学はサブモジュールです。親リポジトリが記録するコミットも含めて取得します。以下はROS 2 Jazzy、colcon、rosdep、Ninjaを導入済みの環境での例です。
+UIと運動学はサブモジュールです。親リポジトリが記録するコミットも含めて取得します。以下はROS 2 Jazzy、colcon、rosdep、Ninjaを導入済みの環境で、リモートの既定ブランチを取得する一般例です。実機へ使う公開済みブランチ・コミットはチームの配布指示で確認してください。未pushの作業変更はこのcloneには含まれません。
 
 ```bash
-git clone --recurse-submodules --branch 41_ryuzot_UI_Sequence_merge \
+git clone --recurse-submodules \
   git@github.com:T-semi-Tohoku-Uni/catch-robo-2026.git
 cd catch-robo-2026
 source /opt/ros/jazzy/setup.bash
@@ -41,9 +41,9 @@ ROSの選択順は `ROBOT_ROS_DISTRO`、現在の `ROS_DISTRO`、`/opt/ros` に�
 
 本番launchは既存の `raspi_can.launch.py` でCANブリッジを起動し、activeへの遷移を確認してから自動操縦launch（UI・シーケンサ・経路生成／追従・Joy・機構ノード）を1回起動します。CANブリッジが終了すると全体も終了します。CANの設定は既存どおり `can0`、1 Mbps／CAN FD 2 Mbpsです。設定変更が必要な場合は既存launchの `sudo -n ip ...` が実行できる権限が必要です。
 
-既定のシーケンス・キュー・ポンプ・関節フィードバック・手動操作設定は、このチェックアウトの `src/` 内のYAMLです。`sequence_file:=...`、`queue_config:=...`、`pump_config:=...`、`joint_feedback_config:=...`、`manual_config:=...`、`manual_velocity_config:=...`、`joy_source:=web|local`、`listen:=...`、`ipc_socket:=...`、`non_blocking:=...` を変更できます。`./run_production.sh --show-args` は引数を表示するだけで実機ノードを起動しません。起動後は `/current_joints` の実測値が届くことを確認してからUIで操作します。CANのactiveは関節角の受信確認ではありません。
+既定のシーケンス・ポンプ・関節フィードバック・手動操作設定は、このチェックアウトの `src/` 内のYAMLです。`sequence_file:=...`、`pump_config:=...`、`joint_feedback_config:=...`、`manual_config:=...`、`manual_velocity_config:=...`、`festival_config:=...`、`joy_source:=web`、`listen:=...`、`ipc_socket:=...`、`non_blocking:=...` を変更できます。引数一覧は`ros2 launch launch/production.launch.py --show-args`で確認します。起動後は `/current_joints` の実測値が届くことを確認してからUIで操作します。CANのactiveは関節角の受信確認ではありません。
 
-Joy入力は既定で `joy_source:=web` です。USBコントローラーをPCへ接続してWeb UIで機器・割当を選び、送信を有効にします。Raspberry Piの従来のJoy入力を使う場合は `joy_source:=local` とします。完全手動モード・シーケンス内の手動待ち・ジョグ操作の詳細は [UIの手動操作説明](src/catchrobo2026_ui/README.md#pcのusbコントローラーと手動操作) を参照してください。ジョグ距離は [manual.yaml](src/catchrobo2026_ui/config/manual.yaml) の `manual_step_cm` で設定します。
+学祭用の本番・automatic launchは`joy_source:=web`のみを許可します。USBコントローラーをPCへ接続してWeb UIで機器・割当を選び、送信を有効にします。`joy_source:=local`はUIのSTOP状態を迂回するため起動時に拒否します。単独の手動launchでは従来のローカルJoyを利用できます。Webゲームパッドと並進ジョグの操作は[学祭UIの説明](src/catchrobo2026_ui/README.md)を参照してください。シーケンス内の`manual`待ちは学祭UIに完了操作がないため拒否します。ジョグ距離は [manual.yaml](src/catchrobo2026_ui/config/manual.yaml) の `manual_step_cm` で設定します。
 
 同梱RVizでは、手動操作の指令姿勢を `/target_arm_markers`（Target Arm）、`/current_joints`から求めた実測姿勢を `/current_robot_markers`（Current Arm）で区別して表示します。`automatic.launch.py`だけを起動し実測入力がない場合、Current Armは表示されません。別PCのRVizで見る場合は`ROS_DOMAIN_ID`を合わせ、`ROS_LOCALHOST_ONLY=1`を解除してLAN上のDDS通信を有効にしてください。
 
@@ -53,28 +53,28 @@ Joy入力は既定で `joy_source:=web` です。USBコントローラーをPC�
 
 `install/_local_setup_util*.py` が欠損している場合、スクリプトは不完全な環境で起動を続けずエラーを表示します。新しい端末で対象ROS環境を読み込み、上のビルド手順で `install` を再生成してください。起動スクリプトはビルドを自動実行しません。フロントの同梱distを使用するためnpmは不要です。
 
-## UIからの自動操縦
+## 学祭の手動取得
 
-[シーケンスノード](src/catchrobo2026_sequence/README.md) がUIのPICK／PLACEを経路生成・追従と機構操作へ変換します。[設定仕様](src/catchrobo2026_sequence/CONFIG.md) に従い、絶対座標・相対ウェイポイント・共通値・手順のエイリアス／継承をYAMLで指定します。
+UIでは初期化後にSTARTし、任意の1箇所へ並進操作で移動してワークを手動取得します。競技用PICK／PLACEのキュー・座標・運用シーケンスは削除しました。公開sequence actionもPICK／PLACEを拒否します。START・STOP・停止解除・ENDを使い、幅切替機構は保持します。
 
-ワークスペースのルートで、編集するソースYAMLを指定して起動します。
+[共通festival.yaml](src/catchrobo2026_pump/config/festival.yaml)の`selected_pump: 1..3`で、使用する吸引を1つ選びます。UI・Joy・sequence・pumpが同じ`festival_config`を読み込みます。1/2/3は既存ROSのPumpControl.left/center/rightというスロット順で、物理L/C/Rの確定値ではありません。既定1は変更可能な仮値です。非選択スロットは起動時と直接service呼出しでもOFFを保持します。変更後は関係する全ノードを再起動してください。
+
+[sequences.yaml](src/catchrobo2026_sequence/config/sequences.yaml)は初期化前後が空、STARTが既存の幅指令1、ENDが`[675,400,300]`→`[675,-110,220]` mmの2移動です。ENDの旧回転・phi区間は削除し、各MOVE・経由点のphiは動作開始時の実測`q0+q3`に固定します。MOVEを含む動作では1秒以内の有限な4関節値が必要です。実機での位置・経路・停止性能は別途確認が必要です。[シーケンス説明](src/catchrobo2026_sequence/README.md)と[設定仕様](src/catchrobo2026_sequence/CONFIG.md)を参照してください。
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 ros2 launch catchrobo2026_sequence automatic.launch.py \
-  team:=red \
   sequence_file:="$PWD/src/catchrobo2026_sequence/config/sequences.yaml" \
+  festival_config:="$PWD/src/catchrobo2026_pump/config/festival.yaml" \
   debug:=true
 ```
 
-既定の [sequences.yaml](src/catchrobo2026_sequence/config/sequences.yaml) はCSV座標とデバッグ用手順を記入済みです。相対Z値は全てユーザー指定の仮値+10 mmで、各手順の2回の相対目標はどちらも直近の絶対姿勢のZ+10 mmになります。PLACEは「相対移動→開放→相対移動→オフ」の初期手順です。高さ・移動量・PLACEの操作順は実機確認済みではありません。[sequences.example.yaml](src/catchrobo2026_sequence/config/sequences.example.yaml) は全位置未設定の雛形として残しています。
-
-調整時はYAMLを直接編集します。実行時にCSVは読み込みません。`debug:=true` はPICK／PLACEごとに設定を再読込し、`false` は起動時に1回だけ読み込みます。
+`debug:=true`はライフサイクル動作前にsequence YAMLを再読込します。ポンプ選択は再読込対象外です。STOPで実行中動作を取り消し、停止解除後のSTART手順再実行は行いません。ENDは明示操作だけで実行します。
 
 ## 手動操縦とダミー動作確認
 
-手動操縦は次のコマンドで起動します。実機の `current_joints` を供給するCANブリッジ等は別途起動します。`pump_config:=/path/to/pump.yaml` でポンプ設定を差し替えられます。各並進軸の最大速度は [manual_velocity.yaml](src/catchrobo2026_hand_operated/config/manual_velocity.yaml) の `manual_linear_speed_mm_s`、最大先端回転速度は `manual_angular_speed_rad_s` で設定します。どちらもスティック最大入力時の1秒あたりの速度で、UIとローカルJoyに共通です。同じYAMLの `/**/control_node.ros__parameters` ではWebの軸・ボタン・固定移動距離・差分プリセットを指定します。
+手動操縦は次のコマンドで起動します。実機の `current_joints` を供給するCANブリッジ等は別途起動します。`pump_config:=/path/to/pump.yaml` でポンプ設定を差し替えられます。各並進軸の最大速度は [manual_velocity.yaml](src/catchrobo2026_hand_operated/config/manual_velocity.yaml) の `manual_linear_speed_mm_s` で設定します。スティック最大入力時のmm/sで、UIとローカルJoyに共通です。手先回転の操作と角速度設定は削除しました。同じYAMLの `/**/control_node.ros__parameters` ではWebの軸・ボタン・固定移動距離・差分プリセットを指定します。
 
 ```bash
 ros2 launch catchrobo2026_hand_operated handoperated.launch.py
@@ -92,7 +92,7 @@ Web UIを使う `automatic.launch.py` にも同じ2引数を指定できます�
 
 Webの設定はJoy OFF・ジョグ停止中、速度はJoy入力が中立の間に読み直します。操作中はその操作の設定を維持するため、編集後はいったんJoyをOFFにし、スティック・ボタンを離してから再度有効にしてください。プリセットは選択中のIDを引き継ぎ、そのIDが削除された場合は新しい既定値へ戻ります。各ノードは担当する設定を別々の停止・中立境界で適用します。
 
-再読込は毎回コードの既定値から構築し、削除した項目に直前の値を残しません。速度を省略した場合のコード既定値は並進50 mm/s・回転0.5 rad/sです。同梱YAMLの10 mm/s・0.1 rad/sを維持する場合は、その指定を残してください。ROSのread-onlyパラメータ表示は起動時の値で、再読込後のWeb設定はUI、速度はJoyノードの読込ログが有効値を示します。
+再読込は毎回コードの既定値から構築し、削除した項目に直前の値を残しません。速度を省略した場合のコード既定値は並進50 mm/sです。同梱YAMLの10 mm/sを維持する場合は、その指定を残してください。ROSのread-onlyパラメータ表示は起動時の値で、再読込後のWeb設定はUI、速度はJoyノードの読込ログが有効値を示します。
 
 不正な設定は適用せず、該当ノードの新たなJoy操作を拒否します。Web設定のエラーは「設定・入力確認」、速度設定のエラーはJoyノードのログで確認できます。起動時からWebのゲームパッド割当に誤りがある場合もUIと生入力表示は利用でき、Joy操作を禁止した状態で原因を表示します。ファイルを修正すると再読込で復帰します。`debug:=false` は起動時の設定を固定し、編集の反映には再起動が必要です。この再読込機能を含むコードの初回導入時はビルドと再起動が必要です。
 
@@ -154,5 +154,4 @@ ros2 launch path_planning preview.launch.py
 直接 `ros2 run` する場合も `--ros-args -r __ns:=/gakusai_preview` などを指定します。
 将来のカメラ入力、実測関節角からの計画、既存追従器への変換・取消・停止処理は未接続です。
 妨害機構はMCU側で扱うため、ROS側での削除・追加対応は不要です。
-学祭では吸引1個を使う方針ですが、使用チャンネル・実寸・動作手順の確定と
-専用設定への反映は次段で行います。
+学祭の吸引1個選択は共通`festival.yaml`へ反映しました。物理チャンネル対応と1吸引ハンドの実寸は未確認です。

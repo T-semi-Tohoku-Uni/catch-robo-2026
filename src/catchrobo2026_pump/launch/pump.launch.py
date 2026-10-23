@@ -10,7 +10,11 @@ from launch_ros.actions import Node
 def generate_launch_description():
     pump_config = os.path.join(
         get_package_share_directory('catchrobo2026_pump'), 'config', 'pump.yaml')
+    festival_config = os.path.join(
+        get_package_share_directory('catchrobo2026_pump'),
+        'config', 'festival.yaml')
     return LaunchDescription([
+        DeclareLaunchArgument('festival_config', default_value=festival_config),
         DeclareLaunchArgument(
             'pump_config',
             default_value=pump_config,
@@ -20,7 +24,8 @@ def generate_launch_description():
             package='catchrobo2026_pump',
             executable='pump_controller_node',
             name='pump_controller_node',
-            parameters=[LaunchConfiguration('pump_config')],
+            parameters=[LaunchConfiguration('pump_config'),
+                        LaunchConfiguration('festival_config')],
             output='screen'
         )
     ])

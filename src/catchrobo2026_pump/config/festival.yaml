@@ -1,0 +1,6 @@
+# Shared by UI, Joy, sequence and pump nodes. Restart all nodes after edits.
+# ROS collector slot: 1=left, 2=center, 3=right in PumpControl.
+# This does not establish the physical L/C/R wiring. 1 is a provisional default.
+/**:
+  ros__parameters:
+    selected_pump: 1

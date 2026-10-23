@@ -38,7 +38,12 @@ public:
             initial_state > PumpControl::Request::SUCTION) {
             throw std::invalid_argument("initial_state must be -1, 0 or 1");
         }
-        collector_states_.fill(static_cast<int8_t>(initial_state));
+        selected_pump_ = declare_parameter<int>("selected_pump", 1, descriptor);
+        if (selected_pump_ < 1 || selected_pump_ > 3) {
+            throw std::invalid_argument("selected_pump must be 1, 2 or 3");
+        }
+        collector_states_.fill(PumpControl::Request::OFF);
+        collector_states_[selected_pump_ - 1] = static_cast<int8_t>(initial_state);
 
         if (pump_bits_.size() != 3 || valve_bits_.size() != 3) {
             throw std::invalid_argument("pump_bits and valve_bits must each contain 3 entries (L/C/R)");
@@ -227,7 +232,8 @@ private:
                 return;
             }
         }
-        collector_states_ = states;
+        collector_states_.fill(PumpControl::Request::OFF);
+        collector_states_[selected_pump_ - 1] = states[selected_pump_ - 1];
         response->success = true;
         RCLCPP_INFO(this->get_logger(), "Collectors: L=%d, C=%d, R=%d",
                     request->left, request->center, request->right);
@@ -271,6 +277,7 @@ private:
     size_t max_pending_suction_checks_;
     std::vector<PendingSuctionCheck> pending_suction_checks_;
 
+    int selected_pump_{1};
     std::array<int8_t, 3> collector_states_;
     std::vector<int64_t> pump_bits_;
     std::vector<int64_t> valve_bits_;

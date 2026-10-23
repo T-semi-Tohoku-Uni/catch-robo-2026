@@ -16,7 +16,11 @@ def generate_launch_description():
     manual_velocity_config = os.path.join(
         get_package_share_directory('catchrobo2026_hand_operated'),
         'config', 'manual_velocity.yaml')
+    festival_config = os.path.join(
+        get_package_share_directory('catchrobo2026_pump'),
+        'config', 'festival.yaml')
     return LaunchDescription([
+        DeclareLaunchArgument('festival_config', default_value=festival_config),
         DeclareLaunchArgument(
             'pump_config',
             default_value=pump_config,
@@ -28,7 +32,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'manual_velocity_config', default_value=manual_velocity_config,
-            description='Manual Cartesian and angular velocity parameter file'
+            description='Manual Cartesian velocity parameter file'
         ),
         DeclareLaunchArgument('debug', default_value='false'),
         # ==================================
@@ -70,7 +74,8 @@ def generate_launch_description():
             executable='joy_controller_node',
             name='joy_controller_node',
             parameters=[LaunchConfiguration('joint_feedback_config'),
-                        LaunchConfiguration('manual_velocity_config'), {
+                        LaunchConfiguration('manual_velocity_config'),
+                        LaunchConfiguration('festival_config'), {
                             'debug': ParameterValue(
                                 LaunchConfiguration('debug'), value_type=bool),
                             'manual_velocity_config': ParameterValue(
@@ -89,7 +94,8 @@ def generate_launch_description():
             package='catchrobo2026_pump',
             executable='pump_controller_node',
             name='pump_controller_node',
-            parameters=[LaunchConfiguration('pump_config')],
+            parameters=[LaunchConfiguration('pump_config'),
+                        LaunchConfiguration('festival_config')],
             output='screen'
         ),
         Node(

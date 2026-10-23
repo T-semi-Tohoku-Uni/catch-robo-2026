@@ -15,6 +15,7 @@
 #include "rcl_interfaces/msg/parameter_descriptor.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_srvs/srv/trigger.hpp"
+#include "std_msgs/msg/float32_multi_array.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "geometry_msgs/msg/pose.hpp"
 #include "catchrobo2026_msgs/action/execute_sequence.hpp"
@@ -82,7 +83,22 @@ public:
         const auto default_file = ament_index_cpp::get_package_share_directory(
             "catchrobo2026_sequence") + "/config/sequences.yaml";
         config_file_ = declare_parameter<std::string>("sequence_file", default_file, descriptor);
-        team_ = declare_parameter<std::string>("team", "", descriptor);
+        team_ = declare_parameter<std::string>("team", "red", descriptor);
+        selected_pump_ = declare_parameter<int>("selected_pump", 1, descriptor);
+        if (selected_pump_ < 1 || selected_pump_ > 3) {
+            throw std::invalid_argument("selected_pump must be 1, 2 or 3");
+        }
+        joints_sub_ = create_subscription<std_msgs::msg::Float32MultiArray>(
+            "current_joints", 10, [this](std_msgs::msg::Float32MultiArray::ConstSharedPtr msg) {
+                if (msg->data.size() != 4 || !std::all_of(msg->data.begin(), msg->data.end(),
+                        [](float value) { return std::isfinite(value); })) {
+                    have_phi_ = false;
+                    return;
+                }
+                current_phi_ = static_cast<double>(msg->data[0]) + msg->data[3];
+                phi_received_ = Clock::now();
+                have_phi_ = true;
+            });
         debug_ = declare_parameter<bool>("debug", false, descriptor);
         service_timeout_ = declare_parameter<double>("service_timeout_sec", 3.0, descriptor);
         route_timeout_ = declare_parameter<double>("route_timeout_sec", 30.0, descriptor);
@@ -115,18 +131,9 @@ public:
             [this](const rclcpp_action::GoalUUID &, std::shared_ptr<const ExecuteSequence::Goal> goal) {
                 if (goal_ || faulted_ || stop_requested || goal->control_epoch == 0 || goal->step_id == 0 ||
                     goal->collector_mask == 0 || goal->collector_mask > 7 ||
-                    (goal->kind != ExecuteSequence::Goal::PICK &&
-                     goal->kind != ExecuteSequence::Goal::PLACE &&
-                     goal->kind != ExecuteSequence::Goal::START &&
+                    (goal->kind != ExecuteSequence::Goal::START &&
                      goal->kind != ExecuteSequence::Goal::INITIALIZE &&
-                     goal->kind != ExecuteSequence::Goal::END) ||
-                    ((goal->kind == ExecuteSequence::Goal::START ||
-                      goal->kind == ExecuteSequence::Goal::INITIALIZE ||
-                      goal->kind == ExecuteSequence::Goal::END) && goal->collector_mask != 7) ||
-                    (goal->kind == ExecuteSequence::Goal::PICK &&
-                     (goal->row > 3 || goal->column < 1 || goal->column > 4)) ||
-                    (goal->kind == ExecuteSequence::Goal::PLACE &&
-                     (goal->box > 3 || goal->box_column > 1))) {
+                     goal->kind != ExecuteSequence::Goal::END)) {
                     RCLCPP_WARN(get_logger(), "Sequence rejected: busy, faulted or invalid UI request");
                     return rclcpp_action::GoalResponse::REJECT;
                 }
@@ -157,6 +164,11 @@ public:
     }
 
 private:
+    int selected_pump_{1};
+    double current_phi_{0.0};
+    bool have_phi_{false};
+    Clock::time_point phi_received_;
+    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr joints_sub_;
     enum class Phase {
         READY, WAIT_PLAN, PLAN, WAIT_FOLLOW, FOLLOW_GOAL, FOLLOWING,
         WAIT_GROUP_PLAN, GROUP_PLAN, WAIT_WRIST_BEGIN, WRIST_BEGIN,
@@ -288,7 +300,6 @@ private:
         try {
             // Compile the entire action before sending any hardware command.
             auto candidate = debug_ ? SequenceConfig::load(config_file_) : *config_;
-            const bool pick = request->kind == ExecuteSequence::Goal::PICK;
             switch (request->kind) {
             case ExecuteSequence::Goal::INITIALIZE:
                 steps_ = candidate.compile_initialization();
@@ -300,17 +311,33 @@ private:
                 steps_ = candidate.compile_start();
                 break;
             default:
-                steps_ = candidate.compile(team_, pick ? "pick" : "place",
-                    pick ? request->row : request->box,
-                    pick ? request->column : request->box_column);
-                break;
+                throw std::runtime_error("festival mode accepts lifecycle actions only");
+            }
+            const bool has_moves = std::any_of(steps_.begin(), steps_.end(),
+                [](const Step &step) { return step.type == StepType::MOVE; });
+            if (has_moves && (!have_phi_ || Clock::now() - phi_received_ > std::chrono::seconds(1))) {
+                throw std::runtime_error("fresh current_joints required to preserve phi");
+            }
+            for (auto &step : steps_) {
+                if (step.type == StepType::MANUAL) {
+                    throw std::runtime_error("manual sequence waits are disabled for festival operation");
+                }
+                if (step.type == StepType::SEQUENCE_START || step.type == StepType::SEQUENCE_END ||
+                    step.type == StepType::PHI_TRAVEL_START || step.type == StepType::PHI_TRAVEL_END) {
+                    throw std::runtime_error("rotation and phi groups are disabled for festival operation");
+                }
+                step.manual_allowed_controls &= ~catchrobo2026_sequence::MANUAL_CONTROL_PHI;
+                if (step.type == StepType::MOVE) {
+                    step.pose[3] = current_phi_;
+                    for (auto &point : step.waypoints) { point[3] = current_phi_; }
+                }
             }
             if (steps_.empty() && !lifecycle) {
                 throw std::runtime_error("the selected sequence has no steps");
             }
             auto prepared = catchrobo2026_sequence::prepare_sequence(
                 std::move(steps_), pending_waypoints_);
-            steps_ = std::move(prepared.steps);
+            steps_ = preserve_phi_routes(std::move(prepared.steps));
             staged_waypoints_ = std::move(prepared.deferred_waypoints);
             clear_pending_waypoints();
             if (prepared.consumed_pending_waypoints != 0 || !staged_waypoints_.empty()) {
@@ -326,6 +353,43 @@ private:
         } catch (const std::exception &error) {
             finish(false, std::string("configuration: ") + error.what());
         }
+    }
+
+    static std::vector<Step> preserve_phi_routes(std::vector<Step> original)
+    {
+        std::vector<Step> result;
+        std::vector<size_t> remap(original.size() + 1);
+        for (size_t i = 0; i < original.size();) {
+            remap[i] = result.size();
+            if (original[i].type != StepType::MOVE) {
+                result.push_back(std::move(original[i++]));
+                continue;
+            }
+            // Keep each complete route in the existing unwrapped joint runner.
+            Step begin;
+            begin.type = StepType::SEQUENCE_START;
+            begin.max_phi_travel = 0.0;
+            result.push_back(begin);
+            while (true) {
+                const bool waypoint = original[i].waypoint;
+                result.push_back(std::move(original[i++]));
+                if (!waypoint) {
+                    break;
+                }
+                // Validated waypoint chains cannot be entered by a branch.
+                remap[i] = result.size();
+            }
+            Step end;
+            end.type = StepType::SEQUENCE_END;
+            result.push_back(end);
+        }
+        remap[original.size()] = result.size();
+        for (auto &step : result) {
+            if (step.type == StepType::IF_SUCTION || step.type == StepType::JUMP) {
+                step.jump_index = remap.at(step.jump_index);
+            }
+        }
+        return result;
     }
 
     void begin_stop(const std::string &message)
@@ -400,7 +464,7 @@ private:
             throw std::logic_error("a suction check is already active");
         }
         auto value = std::make_shared<CheckSuction::Request>();
-        value->collector_mask = goal_->get_goal()->collector_mask;
+        value->collector_mask = 1u << (selected_pump_ - 1);
         value->timeout_sec = steps_[index_].seconds;
         // The sensor deadline is independent of ordinary command deadlines.
         suction_deadline_ = after(value->timeout_sec) +
@@ -422,7 +486,7 @@ private:
                 }
                 try {
                     const auto reply = response.get();
-                    const auto mask = goal_->get_goal()->collector_mask;
+                    const auto mask = 1u << (selected_pump_ - 1);
                     if (reply->suction_mask > 7 || (reply->success &&
                         (reply->timed_out || (reply->suction_mask & mask) != mask))) {
                         begin_stop("invalid suction check response");
@@ -731,7 +795,7 @@ private:
             break;
         case StepType::PUMP:
             {
-                const auto mask = goal_->get_goal()->collector_mask;
+                const auto mask = 1u << (selected_pump_ - 1);
                 const auto command = static_cast<int8_t>(step.command);
                 pump_request_ = std::make_shared<PumpControl::Request>();
                 pump_request_->left = (mask & 1u) ? command : PumpControl::Request::OFF;

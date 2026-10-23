@@ -12,12 +12,14 @@ from ament_index_python.packages import get_package_prefix
 import pytest
 import rclpy
 from rclpy.action import ActionClient
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import SingleThreadedExecutor
 from catchrobo2026_msgs.action import ExecuteSequence, FollowRoute
-from catchrobo2026_msgs.srv import GenerateRoute, Waypoint
+from catchrobo2026_msgs.srv import GenerateRoute, PlanRotationGroup, Waypoint
 from geometry_msgs.msg import Pose, PoseStamped
 from nav_msgs.msg import Path as RosPath
 from std_srvs.srv import Trigger
+from std_msgs.msg import Float32MultiArray
 import yaml
 
 
@@ -70,6 +72,33 @@ class Harness:
         self.follow = ActionClient(node, FollowRoute, 'follow_route')
         self.generate = node.create_client(GenerateRoute, 'generate_route')
         self.step_id = 0
+        self.group_observer = False
+        self.joint_commands = []
+        self.joint_feedback = []
+        self.subscriptions.append(node.create_subscription(
+            Float32MultiArray, 'target_joint_angles', self.joint_commands.append, 100))
+
+    def observe_group_routes(self):
+        self.group_observer = True
+        self.subscriptions.append(self.node.create_subscription(
+            Float32MultiArray, 'current_joints', self.joint_feedback.append, 100))
+        self.group_callbacks = ReentrantCallbackGroup()
+        self.group_client = self.node.create_client(
+            PlanRotationGroup, 'actual_plan_rotation_group', callback_group=self.group_callbacks)
+
+        async def record_plan(request, response):
+            start_joints = list(self.joint_feedback[-1].data) if self.joint_feedback else []
+            reply = await self.group_client.call_async(request)
+            if not reply.success:
+                print('group rejected:', reply.message, 'start_joints:', start_joints,
+                      'target_yaws:', [2 * math.atan2(target.orientation.z, target.orientation.w)
+                                      for target in request.targets], flush=True)
+            self.routes.extend(route.path for route in reply.routes)
+            return reply
+
+        self.group_proxy = self.node.create_service(
+            PlanRotationGroup, 'plan_rotation_group', record_plan,
+            callback_group=self.group_callbacks)
 
     def initialize(self, request, response):
         self.initializations.append((copy.deepcopy(self.poses[-1]), len(self.routes)))
@@ -80,6 +109,8 @@ class Harness:
         prefix = Path(get_package_prefix(package))
         args = [str(prefix / 'lib' / package / executable), '--ros-args',
                 '-r', f'__ns:={self.node.get_namespace()}']
+        if self.group_observer and executable == 'path_generator_3d':
+            args += ['-r', 'plan_rotation_group:=actual_plan_rotation_group']
         for remap in remaps:
             args += ['-r', remap]
         for parameter_file in parameter_files:
@@ -135,6 +166,7 @@ def waypoint_pose(position, yaw=0.0):
 
 
 def test_lifecycle_route_handoff(rig, tmp_path):
+    rig.observe_group_routes()
     before, after, ending = (450, 100, 200), (670, -110, 220), (550, 200, 200)
     # Preserve strings such as pump "off" across the YAML 1.1 round trip.
     config = yaml.load((Path(__file__).parents[1] / 'config/sequences.yaml').read_text(),
@@ -181,7 +213,7 @@ def test_lifecycle_route_handoff(rig, tmp_path):
     rig.observe()
     for cycle in range(3):
         start_routes = len(rig.routes)
-        start_targets = len(rig.targets)
+        start_targets = len(rig.joint_commands)
         rig.execute(ExecuteSequence.Goal.INITIALIZE)
         assert len(rig.initializations) == cycle + 1
         trigger_pose, trigger_routes = rig.initializations[-1]
@@ -191,13 +223,13 @@ def test_lifecycle_route_handoff(rig, tmp_path):
         assert_at(rig.routes[-2].poses[-1], before)
         assert_at(rig.routes[-1].poses[-1], after)
         assert_at(rig.poses[-1], after)
-        assert len(rig.targets) > start_targets
-        start_targets = len(rig.targets)
+        assert len(rig.joint_commands) > start_targets
+        start_targets = len(rig.joint_commands)
         rig.execute(ExecuteSequence.Goal.END)
         assert len(rig.routes) == start_routes + 3
         assert_at(rig.routes[-1].poses[-1], ending)
         assert_at(rig.poses[-1], ending)
-        assert len(rig.targets) > start_targets
+        assert len(rig.joint_commands) > start_targets
 
     # Freeze feedback so the active goal cannot finish before competing requests.
     response = rig.resolve(rig.generate.call_async(GenerateRoute.Request(
@@ -250,6 +282,7 @@ def test_lifecycle_route_handoff(rig, tmp_path):
 
 
 def test_sequence_waypoints_share_one_route(rig, tmp_path):
+    rig.observe_group_routes()
     start, waypoint, ending = (600, 200, 200), (675, 200, 300), (670, -110, 220)
     config = yaml.load((Path(__file__).parents[1] / 'config/sequences.yaml').read_text(),
                        Loader=yaml.BaseLoader)
@@ -288,9 +321,9 @@ def test_sequence_waypoints_share_one_route(rig, tmp_path):
         [{'move': {'absolute': [*ending, 0], 'waypoints': [[*waypoint, 0]]}}],
     ]
     for steps in variants:
-        # Restore the same starting pose before exercising each syntax.
+        # Use an interior wrist angle so this syntax test does not cross a joint limit.
         response = rig.resolve(rig.generate.call_async(GenerateRoute.Request(
-            x=float(start[0]), y=float(start[1]), z=float(start[2]), phi=0.0,
+            x=float(start[0]), y=float(start[1]), z=float(start[2]), phi=-1.2,
             use_explicit_waypoints=True)))
         assert response.success
         handle = rig.resolve(rig.follow.send_goal_async(
@@ -382,3 +415,38 @@ def test_explicit_waypoints_preserve_manual_queue(rig):
     assert min(math.dist(xyz(pose), manual_point) for pose in legacy.poses) < 3.0
     consumed = generate(GenerateRoute.Request(**target))
     assert max(xyz(pose)[0] for pose in consumed.poses) < 610.0
+
+
+def test_fixed_phi_waypoint_overshoot_is_rejected_before_motion(rig, tmp_path):
+    rig.observe_group_routes()
+    config = yaml.safe_load((Path(__file__).parents[1] / 'config/sequences.yaml').read_text())
+    config['sequences']['ending'] = {'steps': [
+        {'waypoint': {'absolute': [675, 200, 300, 0]}},
+        {'move': {'absolute': [670, -110, 220, 0]}},
+    ]}
+    config_file = tmp_path / 'fixed_phi_overshoot.yaml'
+    config_file.write_text(yaml.safe_dump(config))
+    rig.launch('nav_director', 'path_generator_3d')
+    rig.launch('nav_director', 'path_follower_node', remaps=('route:=follower_route',))
+    rig.launch('nav_director', 'dummy_robot_node')
+    rig.launch('catchrobo2026_hand_operated', 'joy_controller_node')
+    rig.launch('catchrobo2026_sequence', 'sequence_node', {'sequence_file': config_file})
+    assert rig.sequence.wait_for_server(timeout_sec=15)
+    publisher = rig.node.create_publisher(PoseStamped, 'target_pose', 10)
+    rig.until(lambda: rig.joint_feedback and publisher.get_subscription_count() > 0)
+    for _ in range(5):
+        publisher.publish(PoseStamped(pose=waypoint_pose((600, 200, 200), 0.0)))
+        rig.observe(0.1)
+    rig.until(lambda: math.dist(xyz(rig.poses[-1]), (600, 200, 200)) < 0.1)
+    before = len(rig.joint_commands)
+    held = list(rig.joint_feedback[-1].data)
+    handle = rig.resolve(rig.sequence.send_goal_async(ExecuteSequence.Goal(
+        control_epoch=1, step_id=1, kind=ExecuteSequence.Goal.END, collector_mask=7)))
+    assert handle.accepted
+    result = rig.resolve(handle.get_result_async())
+    assert not result.result.success
+    assert 'Minimum phi travel exceeds' in result.result.message
+    assert not rig.routes
+    rig.observe(0.2)
+    assert all(max(abs(a - b) for a, b in zip(message.data, held)) < 1e-6
+               for message in rig.joint_commands[before:])

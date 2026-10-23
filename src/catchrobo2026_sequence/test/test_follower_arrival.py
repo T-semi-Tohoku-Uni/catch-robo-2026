@@ -67,6 +67,7 @@ class JointStreams:
         self.rig = rig
         self.current_values = list(initial)
         self.current_enabled = True
+        self.current_publications = 0
         self.command_values = list(initial)
         self.command_publications = 0
         self.current = rig.node.create_publisher(Float32MultiArray, 'current_joints', 10)
@@ -77,6 +78,7 @@ class JointStreams:
     def publish(self):
         if self.current_enabled:
             self.current.publish(Float32MultiArray(data=self.current_values))
+            self.current_publications += 1
         if self.command is not None:
             self.command.publish(Float32MultiArray(data=self.command_values))
             self.command_publications += 1

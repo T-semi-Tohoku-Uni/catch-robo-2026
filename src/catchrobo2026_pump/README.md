@@ -1,3 +1,19 @@
+# 学祭のポンプ選択
+
+[config/festival.yaml](config/festival.yaml)の`selected_pump: 1..3`が、UI・Joy・sequence・pumpで共有する選択値です。すべてのlaunchで同じ`festival_config`を渡してください。既定`1`は変更可能な仮値で、実機の物理L/C/Rは未確定です。変更後は関係する全ノードの再起動が必要です。
+
+| 選択値 | PumpControlフィールド | 既定pump bit | 既定valve bit | 既定圧力配列index |
+| --- | --- | --- | --- | --- |
+| 1 | left | 0 | 3 | 0 |
+| 2 | center | 1 | 4 | 1 |
+| 3 | right | 2 | 5 | 2 |
+
+表は[config/pump.yaml](config/pump.yaml)の論理スロット順です。`pump_bits`、`valve_bits`、`pressure_indices`で変更でき、実配線の確認結果ではありません。`pump_state`はポンプ3bit＋弁3bitの既存6bit形式を維持します。既定の極性では全OFF=63、選択1/2/3の吸引は62/61/59、開放は55/47/31です。ポンプ・弁の通電極性とMCUの解釈は既存設定を使います。
+
+起動時も直接`set_pump_state`が3スロットを指定した場合も、非選択スロットは常にOFFを保持します。選択スロットの値だけを採用し、各値が-1/0/1以外の不正requestは全体を拒否します。`check_suction`は出力を変更しない既存診断APIとして残り、要求maskの圧力を読みます。
+
+以下は既存6bit通信・吸引判定APIの説明です。複数スロットを指定する例でも、現在の出力は上記の選択1スロットに制限されます。
+
 # catchrobo2026_pump
 
 3つの回収機構のポンプ・電磁弁を操作するROS 2パッケージ。
