@@ -3,7 +3,7 @@
 Jetson上で `camera/image_raw → red_cylinder_detector → vision_http_bridge` を動かし、
 同じLANのブラウザーへJPEG画像と認識座標を配信します。ロボット制御用topic・service・actionへの接続はありません。
 親 `production.launch.py` は `camera_enabled:=true` の場合にこの独立launchを起動します。
-既定は無効なので、カメラがなくてもUIを起動できます。
+本番起動では既定で有効です。カメラを使わない場合は`./run_production.sh camera_enabled:=false`を指定します。
 
 ```bash
 source /opt/ros/jazzy/setup.bash # Jetsonでは使用するROS環境に合わせる

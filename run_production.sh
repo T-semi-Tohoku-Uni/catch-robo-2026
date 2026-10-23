@@ -14,12 +14,15 @@ fail() {
 
 if [[ "${1:-}" == '--help' || "${1:-}" == '-h' ]]; then
     cat <<'USAGE'
-Usage: ./run_production.sh team:=red [debug:=true] [launch arguments...]
+Usage: ./run_production.sh [launch arguments...]
        ROBOT_ROS_DISTRO=humble ./run_production.sh team:=blue
 
 ROS環境とこのワークスペースのinstallを読み直し、CAN付き本番launchを起動します。
+引数なし: team=red、UI=0.0.0.0:8000、joy_source=web、カメラ有効（auto、/dev/video0）。
+カメラを使わない場合は camera_enabled:=false を指定してください。
 ROS選択順: ROBOT_ROS_DISTRO → ROS_DISTRO → /opt/ros内の唯一の環境。
---show-args でlaunch引数を表示できます。ビルドは自動実行しません。
+引数一覧: ros2 launch launch/production.launch.py --show-args
+ビルドは自動実行しません。
 手首実測角の許容設定は joint_feedback_config:=/path/to/joint_feedback.yaml で変更できます。
 USAGE
     exit 0

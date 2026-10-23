@@ -32,10 +32,14 @@ git submodule update --init --recursive
 ルートの [run_production.sh](run_production.sh) でROS環境を読み直し、[production.launch.py](launch/production.launch.py) を起動します。スクリプトは実行場所に依存せず、このチェックアウトの `install` を使用します。
 
 ```bash
-./run_production.sh team:=red
+./run_production.sh
 # YAMLを動作ごとに読み直す実機調整時
-./run_production.sh team:=red debug:=true
+./run_production.sh debug:=true
+# カメラを使用しない場合
+./run_production.sh camera_enabled:=false
 ```
+
+引数なしで、陣営red・Webコントローラー・UI `0.0.0.0:8000`・カメラ有効で起動します。カメラは`auto`で`/dev/video0`を使用し、640×480・20 FPS、映像配信は`0.0.0.0:8081`です。ブラウザーでは`http://<起動した機体のIP>:8000`を開きます。`listen:=...`や`camera_backend:=...`などの明示引数で既定値を上書きできます。
 
 ROSの選択順は `ROBOT_ROS_DISTRO`、現在の `ROS_DISTRO`、`/opt/ros` にある唯一の環境です。明示する場合は `ROBOT_ROS_DISTRO=humble ./run_production.sh team:=red` のように指定します。`sh run_production.sh ...` でも実行できます。スクリプト内部でBashへ切り替え、既存のROS検索パスをクリアしてROS本体と `install/local_setup.bash` を読み込みます。`ROS_DOMAIN_ID` や `RMW_IMPLEMENTATION` などの通信設定は引き継ぎます。
 

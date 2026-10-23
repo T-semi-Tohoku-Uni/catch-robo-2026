@@ -29,7 +29,7 @@ def stop_on_bridge_exit(event, context):
 def generate_launch_description():
     workspace = Path(__file__).resolve().parent.parent
     arguments = [
-        DeclareLaunchArgument('camera_enabled', default_value='false', choices=['true', 'false']),
+        DeclareLaunchArgument('camera_enabled', default_value='true', choices=['true', 'false']),
         DeclareLaunchArgument('camera_backend', default_value='auto'),
         DeclareLaunchArgument('camera_device', default_value='/dev/video0'),
         DeclareLaunchArgument('camera_video_path', default_value=''),
@@ -59,7 +59,7 @@ def generate_launch_description():
             'manual_velocity_config', default_value=str(
                 workspace / 'src/catchrobo2026_hand_operated/config/manual_velocity.yaml')),
         DeclareLaunchArgument('debug', default_value='false', choices=['true', 'false']),
-        DeclareLaunchArgument('listen', default_value='0.0.0.0:8080'),
+        DeclareLaunchArgument('listen', default_value='0.0.0.0:8000'),
         DeclareLaunchArgument('ipc_socket', default_value='/tmp/catchrobo2026-control.sock'),
         DeclareLaunchArgument('non_blocking', default_value='true', choices=['true', 'false']),
     ]
