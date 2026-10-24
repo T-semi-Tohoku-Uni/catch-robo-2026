@@ -76,9 +76,11 @@ def check_repo(repo, role):
             ioc(f'PC{pin}.Signal', 'GPIO_Output')
             ioc(f'PC{pin}.GPIO_Label', f'OUT{index}')
             ioc(f'PC{pin}.GPIO_PuPd', 'GPIO_PULLDOWN')
-            ioc(f'PC{pin}.PinState', 'GPIO_PIN_SET')
+            # CubeMX may omit the default Low level in .ioc files.
+            if f'PC{pin}.PinState' in settings:
+                ioc(f'PC{pin}.PinState', 'GPIO_PIN_RESET')
         pattern(r'GPIO_InitStruct.Pin\s*=\s*OUT1_Pin\|OUT2_Pin\|OUT3_Pin\|OUT4_Pin\s*\|OUT5_Pin\|OUT6_Pin;\s*GPIO_InitStruct.Mode\s*=\s*GPIO_MODE_OUTPUT_PP;\s*GPIO_InitStruct.Pull\s*=\s*GPIO_PULLDOWN;', 'pump output GPIO mode/pull changed')
-        pattern(r'HAL_GPIO_WritePin\(GPIOC,\s*OUT1_Pin\|OUT2_Pin\|OUT3_Pin\|OUT4_Pin\s*\|OUT5_Pin\|OUT6_Pin,\s*GPIO_PIN_SET\)', 'pump outputs must initialize high (active-low OFF)')
+        pattern(r'HAL_GPIO_WritePin\(GPIOC,\s*OUT1_Pin\|OUT2_Pin\|OUT3_Pin\|OUT4_Pin\s*\|OUT5_Pin\|OUT6_Pin,\s*GPIO_PIN_RESET\)', 'pump outputs must initialize Low (wire mask63, configured logical OFF)')
     elif role == 'pressure':
         irqs += ['DMA1_Channel1_IRQn']
         for key, value in dict(NbrOfConversion=3, ContinuousConvMode='ENABLE', DMAContinuousRequests='ENABLE', EOCSelection='ADC_EOC_SEQ_CONV').items():

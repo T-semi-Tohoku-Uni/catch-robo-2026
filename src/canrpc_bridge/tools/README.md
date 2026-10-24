@@ -69,3 +69,5 @@ second. High-rate targets and individual successful CAN frames are not logged.
 Output is best effort: overflow, IRQ failures and immediate resets can omit
 lines; no reset/stop acknowledgement depends on log delivery. Actual UART
 wiring, runtime timing and physical hardware behavior require board testing.
+
+Route `enabled` is a strict boolean (default true) controlling ROS publishers/subscriptions and forwarding. Disabled routes retain full schema validation and MCU wire definitions; the STM32 vendor/header output is unchanged. The festival profile disables pressure and omits node4 from reset targets; restore both settings and restart the ROS stack to re-enable it.

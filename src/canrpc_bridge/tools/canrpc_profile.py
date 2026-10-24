@@ -104,7 +104,7 @@ def validate_profile(path):
     names, topics, tx_subjects, rx_subjects = set(), set(), set(), set()
     subjects = {}
     for route in p['routes']:
-        _mapping(route, 'route', ['name', 'direction', 'topic', 'subject', 'type', 'count', 'priority', 'source', 'require_peer', 'finite', 'min', 'max'],
+        _mapping(route, 'route', ['name', 'direction', 'topic', 'subject', 'type', 'count', 'priority', 'source', 'require_peer', 'finite', 'min', 'max', 'enabled'],
                  ['name', 'direction', 'topic', 'subject', 'type', 'count'])
         if not isinstance(route['name'], str) or not route['name'].strip() or route['name'] in names:
             raise ValueError('route names must be unique nonempty strings')
@@ -141,7 +141,7 @@ def validate_profile(path):
         subjects[route['subject']] = signature
         if 'finite' in route and route['type'] != 'float32':
             raise ValueError('finite applies only to float32')
-        for key in ['require_peer', 'finite']:
+        for key in ['require_peer', 'finite', 'enabled']:
             if key in route and type(route[key]) is not bool:
                 raise ValueError('route.' + key + ' must be boolean')
         for key in ['min', 'max']:

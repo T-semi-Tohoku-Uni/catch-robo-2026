@@ -14,6 +14,9 @@ int main(int argc,char **argv) {
   assert(default_config.local_node==1 && default_config.routes.size()==2);
   assert(alternate.local_node==17 && alternate.reset_targets.size()==2 && alternate.routes.back().count==9);
   assert(default_config.nodes.at("arm").rpc.response_timeout_ms==100);
+  assert(default_config.reset_targets==std::vector<uint8_t>({2,3}));
+  assert(default_config.routes[0].enabled && !default_config.routes[1].enabled);
+  for(const auto &route:alternate.routes) assert(route.enabled);
   assert(default_config.rpc_endpoints[1].response_bytes==64 && default_config.rpc_endpoints[1].startup_diagnostic);
   // Retain a generic TX fixture for route validation independent of this project's RX-only profile.
   auto routes=YAML::Node(YAML::NodeType::Sequence);
@@ -47,6 +50,9 @@ int main(int argc,char **argv) {
   bad([](auto &n){n["nodes"]["arm"]["reset_sources"].push_back(1);});
   bad([](auto &n){n["nodes"]["arm"]["id"]=1;});
   bad([](auto &n){n["routes"][0]["subject"]=4096;});
+  bad([](auto &n){n["routes"][0]["enabled"]=0;});
+  bad([](auto &n){n["routes"][0]["enabled"]="true";n["routes"][0]["enabled"].SetTag("tag:yaml.org,2002:str");});
+  bad([](auto &n){n["routes"][2]["enabled"]=false;n["routes"][2]["topic"]="invalid disabled topic";});
   bad([](auto &n){n["routes"][0]["type"]="double";});
   bad([](auto &n){n["routes"][0]["count"]=17;});
   bad([](auto &n){n["routes"][0]["source"]=1;});

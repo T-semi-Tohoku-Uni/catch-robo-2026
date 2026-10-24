@@ -24,7 +24,7 @@ ros2 run canrpc_bridge canrpc_bridge --ros-args -p config_file:=/absolute/projec
 
 UI・自動制御プロセスはCANの成否と独立して起動します。起動RESETは全対象の現在READYを確認してから世代条件付きSYSTEM_RESETを送り、異なるBoot IDのREADYを全対象で確認するまで実機操作を許可しません。CAN/初期化失敗ではDEGRADEDとして診断を続け、全体を終了しません。CAN設定はlaunchへ集約し、help/`--show-args`では実行しません。
 
-学祭armは起動後、通信READY／モーターWAITINGで待機し、明示UI INITの`arm_initialize`要求までnative設定・STOP・原点復帰を送りません。startup SYSTEM_RESETは有効のままで、未開始ならnative送信なし、開始済みなら既存q0 STOPの実TX確認後にresetします。手順内・FAULT時のSTOPは維持します。ポンプは6出力OFF（active-low GPIO SET）で起動します。UI INITは開始応答のBoot IDと一致する64byte/version2の`arm_ready`で完了を有限時間確認します。[wireと運用](docs/protocol.md#明示的なモーター初期化)。
+学祭armは起動後、通信READY／モーターWAITINGで待機し、明示UI INITの`arm_initialize`要求までnative設定・STOP・原点復帰を送りません。startup SYSTEM_RESETは有効のままで、未開始ならnative送信なし、開始済みなら既存q0 STOPの実TX確認後にresetします。手順内・FAULT時のSTOPは維持します。ポンプは6出力OFF（既存ROS極性に対応するGPIO Low／wire mask63）で起動します。UI INITは開始応答のBoot IDと一致する64byte/version2の`arm_ready`で完了を有限時間確認します。[wireと運用](docs/protocol.md#明示的なモーター初期化)。
 
 
 ### CAN未接続・駆動電源なしでの診断
@@ -38,3 +38,7 @@ STARTINGは元の全体期限（学祭30秒）内で非同期にRESETを進め�
 `reset_on_startup=false`は開発・再利用用で、READYはtransport準備のみです。全reset.targets必須監視は導入せず、RPCは各endpointのpeer条件で拒否します。設定不正・他ノード自体の故障まで隠す契約ではありません。
 
 通常はMCU起動→駆動電源投入→UI INITの順です。駆動電源を維持した外部MCU reset／MCU電源断では、モーター側に前回の電流・位置指令が残る可能性があります。開始済みCANRPC resetのSTOP実TX確認は維持しますが、外部resetまで安全化する保証ではありません。FAULT後は駆動電源OFF→MCU reset→駆動電源ON→bridge明示復旧→UI INITを基本手順として新しい試行を開始します。UART printfは診断であり、駆動電源の検出や物理停止の証明ではありません。
+
+## 圧力基板の省略と再追加
+
+既定profileはpressure routeを`enabled: false`、`reset.targets`を`[2,3]`とし、圧力基板を起動条件から外します。圧力Node/wire定義とfirmwareは保持し、圧力topic配信・吸引判定・UI圧力表示は使いません。再追加は同profileでrouteをtrue、targetsを`[2,3,4]`へ戻してROS一式を再起動してください。[設定手順と保証境界](docs/configuration.md#圧力基板を省略する既定構成)。

@@ -97,7 +97,7 @@ class CanRpcBridge : public rclcpp_lifecycle::LifecycleNode {
   void transmit(size_t index,typename Message::ConstSharedPtr message) {
     if(health_!=Health::Ready || !runtime_active_ || !socket_) return;
     const auto &route=config_.routes[index];
-    if(message->data.size()!=route.count || message->layout.data_offset!=0) return;
+    if(!route.enabled || message->data.size()!=route.count || message->layout.data_offset!=0) return;
     std::vector<uint8_t> data(canrpc_wire_length(static_cast<uint8_t>(route.logical_size())),0);
     for(size_t i=0;i<route.count;++i) {
       const auto value=message->data[i];if(!allowed(route,static_cast<double>(value))) return;
@@ -117,7 +117,7 @@ class CanRpcBridge : public rclcpp_lifecycle::LifecycleNode {
     routes_.resize(config_.routes.size());
     for(size_t i=0;i<config_.routes.size();++i) {
       const auto &route=config_.routes[i];
-      if(!route.transmit) {
+      if(route.enabled && !route.transmit) {
         if(route.type==Type::Float32) routes_[i].floats=rclcpp::create_publisher<Floats>(this,route.topic,10);
         else if(route.type==Type::Int32) routes_[i].ints=rclcpp::create_publisher<Ints>(this,route.topic,10);
         else routes_[i].bytes=rclcpp::create_publisher<Bytes>(this,route.topic,10);
@@ -126,7 +126,7 @@ class CanRpcBridge : public rclcpp_lifecycle::LifecycleNode {
   }
   void enable_transmit_routes() {
     ++command_generation_;
-    for(size_t i=0;i<config_.routes.size();++i) if(config_.routes[i].transmit) {
+    for(size_t i=0;i<config_.routes.size();++i) if(config_.routes[i].enabled && config_.routes[i].transmit) {
       if(config_.routes[i].type==Type::Float32) subscribe<Floats>(i);
       else if(config_.routes[i].type==Type::Int32) subscribe<Ints>(i);
       else subscribe<Bytes>(i);
@@ -273,7 +273,7 @@ class CanRpcBridge : public rclcpp_lifecycle::LifecycleNode {
           send(canrpc_id(config_.priority,CANRPC_CONTROL,source,CANRPC_REJECT_SERVICE,config_.local_node,canrpc_tag(id)),{});
         } else if(health_!=Health::Starting && canrpc_class(id)==CANRPC_PUBLISH) {
           for(size_t i=0;i<config_.routes.size();++i) {const auto &route=config_.routes[i];
-            if(!route.transmit && route.subject==canrpc_subject(id) && route.source==source &&
+            if(route.enabled && !route.transmit && route.subject==canrpc_subject(id) && route.source==source &&
                (!route.require_peer || canrpc_peer_ready(&peers_[source],uptime(),config_.peer_timeout_ms))) {publish(i,d);break;}}
         }
       }

@@ -6,7 +6,7 @@
 
 使用ポンプは[festival.yaml](config/festival.yaml)の`selected_pump: 1..3`です。各PumpControl要求はleft/center/rightの3値（開放=-1、OFF=0、吸引=1）を検証し、選択チャネルだけを採用、非選択はOFFにした絶対maskを送ります。これらのROSスロットと物理L/C/Rの対応は未確認です。
 
-[pump.yaml](config/pump.yaml)の`pump_bits`/`valve_bits`とON極性を保持します。既定の両ON極性falseでは全OFF=63、選択1/2/3の吸引=62/61/59、開放=55/47/31です。MCUは既存のactive-low GPIO規約で適用します。
+[pump.yaml](config/pump.yaml)の`pump_bits`/`valve_bits`とON極性を保持します。既定の両ON極性falseでは全OFF=63、選択1/2/3の吸引=62/61/59、開放=55/47/31です。MCUはwire bit1→GPIO Low、bit0→Highの規約で適用します。したがって現ROS設定の全OFFは全Lowです。MCU起動時の生成GPIO初期値もLow/mask63へ揃え、起動後の切替loopは追加しません。この対応は設定との整合であり、reset中やGPIO設定前の電圧・物理配線を保証しません。
 
 | パラメータ | 既定 | 意味 |
 |---|---|---|
@@ -61,6 +61,7 @@ CAN-RPC Subject `0x406`（Source Node 4）の3個のlittle-endian 32bit整数は
 
 | 起動パラメータ | ノード内既定値 | 意味 |
 |---|---|---|
+| `pressure_enabled` | `true` | 起動時固定。falseなら圧力購読を作らず、吸引確認は直ちに不明として拒否 |
 | `pressure_indices` | `[0, 1, 2]` | L/C/Rに対応する受信配列index。0〜2を重複なく指定 |
 | `pressure_threshold` | `96`（`0x60`） | 比較の閾値、int32の範囲 |
 | `pressure_comparison` | `unconfigured` | `ge`は圧力>=閾値、`le`は圧力<=閾値 |
@@ -79,3 +80,7 @@ CAN-RPC Subject `0x406`（Source Node 4）の3個のlittle-endian 32bit整数は
 ros2 service call /check_suction catchrobo2026_msgs/srv/CheckSuction \
   '{collector_mask: 7, timeout_sec: 2.0}'
 ```
+
+圧力基板を省く構成では、CANRPC profileのpressure route.enabledからlaunchが`pressure_enabled: false`を渡します。CheckSuctionは待機せずsuccess=false・timed_out=false・suction_mask=0・pressure全要素INT32_MIN（不明）と圧力無効のmessageを返します。高い圧力値が別ノードから配信されても成功しません。PumpControlとCANRPC pump_setは従来どおり動作します。
+
+単独起動時のノード内既定はtrueです。圧力基板を再追加する場合はprofileのroute/reset対象を復元して関連ROSノードを再起動してください。`pressure_enabled`はread-onlyで、実行中に切替できません。

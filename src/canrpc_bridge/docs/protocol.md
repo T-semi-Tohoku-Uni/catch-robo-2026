@@ -121,7 +121,7 @@ reasonは0 NONE、1 TX_ENQUEUE_TIMEOUT、2 TX_COMPLETE_TIMEOUT、3 RESPONSE_TIME
 
 ### 明示的なモーター初期化
 
-MCU先・駆動電源後の投入順に対応し、arm起動直後は通信BOOTのREADYとアプリWAITINGを分離します。起動だけではnativeモーター設定・STOP・原点復帰を送りません。本番のstartup SYSTEM_RESETは有効のままで、未開始ならnative送信なしで再起動できます。既に初期化開始済みのSYSTEM_RESET安全化、初期化手順内のSTOP、FAULT cleanupのSTOPは維持します。ポンプは6出力OFF（active-low GPIO SET）で起動します。
+MCU先・駆動電源後の投入順に対応し、arm起動直後は通信BOOTのREADYとアプリWAITINGを分離します。起動だけではnativeモーター設定・STOP・原点復帰を送りません。本番のstartup SYSTEM_RESETは有効のままで、未開始ならnative送信なしで再起動できます。既に初期化開始済みのSYSTEM_RESET安全化、初期化手順内のSTOP、FAULT cleanupのSTOPは維持します。ポンプは6出力OFF（既存ROS極性に対応するGPIO Low／wire mask63）で起動します。
 
 明示UI INITはtarget gateをpause/drainし、`arm_initialize`で開始を依頼します。返却responseは受付時点の状態であり、モーター準備完了を保証しません。stateは返却Boot IDを固定し、同じBoot IDの`arm_ready`を有限間隔で照会し、outcome OK・result READY・flags 0x1fのときだけresumeします。RUNNING／WAITING、世代変更、通信UNAVAILABLE（診断data付きも含む）、FAULT、期限超過はINIT成功にしません。
 

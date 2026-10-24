@@ -8,7 +8,7 @@ namespace canrpc_bridge {
 enum class ValueType { Float32, Int32, UInt8 };
 struct Route {
   std::string name, topic;
-  bool transmit=false, require_peer=true, finite=true, has_min=false, has_max=false;
+  bool enabled=true, transmit=false, require_peer=true, finite=true, has_min=false, has_max=false;
   uint16_t subject=0;
   uint8_t source=0, priority=0;
   ValueType type=ValueType::Float32;

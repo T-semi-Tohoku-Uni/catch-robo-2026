@@ -17,7 +17,7 @@ timing:
   poll_period_ms: 2
   rx_budget: 32
 reset:
-  targets: [2, 3, 4]
+  targets: [2, 3]
   timeout_sec: 30.0
   request_window_ms: 1000
   max_window_ms: 2000
@@ -35,7 +35,7 @@ nodes:
   pressure: {id: 4, reset_sources: [1], announce_priority: 6}
 routes:
   - {name: current, direction: rx, topic: current_joints, subject: 528, source: 2, type: float32, count: 3, require_peer: true, finite: true}
-  - {name: pressure, direction: rx, topic: pressure_sensor, subject: 1030, source: 4, type: int32, count: 3, require_peer: true}
+  - {name: pressure, enabled: false, direction: rx, topic: pressure_sensor, subject: 1030, source: 4, type: int32, count: 3, require_peer: true}
 
 rpc:
   ros_service: canrpc/call

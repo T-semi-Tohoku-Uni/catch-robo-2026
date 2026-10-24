@@ -23,7 +23,7 @@ ROS環境とこのワークスペースのinstallを読み直し、CAN付き本�
 ROS選択順: ROBOT_ROS_DISTRO → ROS_DISTRO → /opt/ros内の唯一の環境。
 引数一覧: ros2 launch launch/production.launch.py --show-args
 ビルドは自動実行しません。
-CAN設定はlaunchに集約します。UIはCAN成否と独立して起動し、全3MCUの新READYまで指令を拒否します。
+CAN設定はlaunchに集約します。UIはCAN成否と独立して起動し、設定した必須MCU（既定arm/pump）の新READYまで指令を拒否します。
 CAN異常はDEGRADEDで診断を継続し、復旧には明示lifecycle再activateとUI INITが必要です。
 CANRPC設定は canrpc_config:=/absolute/project.yaml で差し替えます。
 通信RESET待機は設定ファイルを使い、startup_timeout_sec:=30.0 で明示上書きできます。

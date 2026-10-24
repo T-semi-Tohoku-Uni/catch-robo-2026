@@ -91,6 +91,7 @@ profileのlocal_nodeはROS側の送信元です。MCUの自身のIDは生成対�
 | 項目 | 内容 |
 | --- | --- |
 | name | 空でない一意のroute名 |
+| enabled | 任意boolean、既定true。falseはROS publisher/subscriptionと転送を生成しない |
 | direction | `tx`: ROS→CAN、`rx`: CAN→ROS |
 | topic | ROS topic名。絶対／相対／`~/`を使用可能、置換式なし |
 | subject | 0〜4095 |
@@ -103,6 +104,8 @@ profileのlocal_nodeはROS側の送信元です。MCUの自身のIDは生成対�
 | min／max | 任意の全要素共通値域。有限値、min<=max |
 
 float32は `std_msgs/msg/Float32MultiArray`、int32は `Int32MultiArray`、uint8は `ByteMultiArray` です。txはdata要素数がcountと一致し、layout.data_offset=0であることを要求します。layoutのshape／labelはwireへ載せません。rxもcount値だけの配列を発行します。
+
+enabled=falseでもrouteの型・長さ・source・重複等の全検証は省略しません。MCU生成ではenabledをROS側の配信設定として扱い、既存wire定義を保持します。設定変更後はROS一式の再起動が必要です。
 
 同Subjectは全routeで同type/countを要求します。TX Subject重複と同source+subjectのRX重複、同方向topic重複は拒否します。int32/uint8のmin/maxは型範囲内の整数に限定します。NaNはfinite=falseでもmin/maxとの比較を満たしません。rxのrequire_peer=falseはBOOT未受信でもそのrouteを受け付けますが、起動RESETの新READY確認は別途必須です。
 
@@ -215,3 +218,12 @@ startup diagnosticは同じdestinationに1endpointまでです。resumeの応答
 bridgeのread-only ROS parameter `status_topic`（既定canrpc/status）は型付きBridgeStatusの宛先です。本番launchは`canrpc_status_topic`をbridge/targetへ共通伝播し、`bridge_status_timeout_sec`（既定2.5秒）をtarget側監視に渡します。status READY/commands_enabled/socket_openと新sessionを受信しても、targetの初期PAUSED・明示INIT規約は解除しません。
 
 運用中のCAN/RESET失敗はプロセス終了ではなくDEGRADEDで診断を続けます。初期化中のCallは未準備、DEGRADEDのstartup_diagnosticは実data付きUNAVAILABLE、一般指令は拒否です。明示deactivate→activateで再試行し、単なる電源/BOOT復帰では運動許可へ戻りません。profile不正は設定修正が必要です。
+
+
+## 圧力基板を省略する既定構成
+
+`gakusai.yaml`は現在`reset.targets: [2, 3]`、`name: pressure` routeの`enabled: false`です。圧力Node4とSubject0x406の定義・MCU firmwareは残しますが、bridgeは圧力ROS publisherを作らず受信CANを転送しません。arm／pumpの起動RESET・fresh READY／世代監視は維持します。圧力Nodeの不在・FAULT・世代変更で全体をDEGRADEDへ移しません。
+
+automatic／main／handoperated launchは同じ`canrpc_config`のname=pressure routeから`pressure_enabled`を導出し、pumpとUIへ伝播します。routeが無い別project設定ではfalse、enabled省略はtrueです。省略中はCheckSuctionをunknownとして拒否し、圧力0や吸着成功で代用しません。ポンプの通常設定RPCは使用できます。
+
+圧力基板を再追加するときは、同じprofileのpressure routeを`enabled: true`にし、`reset.targets`を`[2, 3, 4]`へ戻してROS一式を再起動します。再追加後はNode4も新Boot ID・fresh READYを必要とし、未接続なら起動確認は完了しません。MCUの再生成・firmware変更は不要です。物理的にCANバスを壊している基板は、この設定で電気的に切り離せません。controller異常では従来どおりDEGRADEDとして操作を拒否します。

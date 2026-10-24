@@ -113,8 +113,8 @@ Config load_config(const std::string &path) {
   require(root["routes"].IsSequence(),"routes must be a list");std::set<std::string> names,topics;std::set<uint16_t> tx;std::set<uint32_t> rx;
   std::map<uint16_t,std::pair<ValueType,size_t>> subjects;
   for(auto node:root["routes"]) {
-    keys(node,{"name","direction","topic","subject","source","type","count","priority","require_peer","finite","min","max"},"route");
-    Route route;route.name=text(node,"name");route.topic=text(node,"topic");const auto direction=text(node,"direction");
+    keys(node,{"name","direction","topic","subject","source","type","count","priority","require_peer","finite","min","max","enabled"},"route");
+    Route route;route.enabled=node["enabled"]?boolean(node,"enabled"):true;route.name=text(node,"name");route.topic=text(node,"topic");const auto direction=text(node,"direction");
     require(direction=="tx" || direction=="rx","invalid route direction");route.transmit=direction=="tx";
     require(names.insert(route.name).second,"duplicate route name");
     require(std::regex_match(route.topic,std::regex("(~/|/)?[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*")),"invalid ROS topic name");

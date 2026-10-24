@@ -51,6 +51,7 @@ public:
             used_bits[bit] = true;
         }
 
+        pressure_enabled_ = declare_parameter<bool>("pressure_enabled", true, descriptor);
         pressure_indices_ = this->declare_parameter<std::vector<int64_t>>(
             "pressure_indices", {0, 1, 2}, descriptor);
         if (pressure_indices_.size() != 3) {
@@ -111,14 +112,18 @@ public:
                    const std::shared_ptr<CheckSuction::Request> request) {
                 handle_suction_request(header, request);
             });
-        pressure_sub_ = this->create_subscription<std_msgs::msg::Int32MultiArray>(
-            "pressure_sensor", rclcpp::SensorDataQoS().keep_last(1),
-            std::bind(&PumpControllerNode::pressure_callback, this, std::placeholders::_1));
-        suction_timer_ = this->create_wall_timer(
-            10ms, [this]() { expire_suction_checks(SteadyClock::now()); });
+        if (pressure_enabled_) {
+            pressure_sub_ = this->create_subscription<std_msgs::msg::Int32MultiArray>(
+                "pressure_sensor", rclcpp::SensorDataQoS().keep_last(1),
+                std::bind(&PumpControllerNode::pressure_callback, this, std::placeholders::_1));
+            suction_timer_ = this->create_wall_timer(
+                10ms, [this]() { expire_suction_checks(SteadyClock::now()); });
+        }
 
         RCLCPP_INFO(this->get_logger(), "Pump Controller Node started.");
-        if (pressure_comparison_ == "unconfigured") {
+        if (!pressure_enabled_) {
+            RCLCPP_INFO(get_logger(), "Pressure input disabled; check_suction is unavailable.");
+        } else if (pressure_comparison_ == "unconfigured") {
             RCLCPP_WARN(this->get_logger(),
                         "check_suction is unavailable until pressure_comparison is set to ge or le.");
         }
@@ -153,7 +158,9 @@ private:
         expire_suction_checks(now);
         CheckSuction::Response response;
         response.pressure.fill(std::numeric_limits<int32_t>::min());
-        if (request->collector_mask == 0 || (request->collector_mask & 0xf8) != 0) {
+        if (!pressure_enabled_) {
+            response.message = "pressure input disabled; suction cannot be confirmed";
+        } else if (request->collector_mask == 0 || (request->collector_mask & 0xf8) != 0) {
             response.message = "collector_mask must be in 1..7 (L/C/R bits 0/1/2)";
         } else if (!std::isfinite(request->timeout_sec) || request->timeout_sec <= 0.0 ||
                    request->timeout_sec > 86400.0) {
@@ -188,6 +195,7 @@ private:
     }
 
     void pressure_callback(const std_msgs::msg::Int32MultiArray::SharedPtr msg) {
+        if (!pressure_enabled_) return;
         const auto now = SteadyClock::now();
         // Expire first so a late sample cannot turn a timeout into success.
         expire_suction_checks(now);
@@ -317,6 +325,7 @@ private:
     rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr pressure_sub_;
     rclcpp::TimerBase::SharedPtr suction_timer_;
 
+    bool pressure_enabled_ = true;
     std::vector<int64_t> pressure_indices_;
     int32_t pressure_threshold_;
     std::string pressure_comparison_;

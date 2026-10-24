@@ -11,6 +11,8 @@ import uuid
 import pytest
 import rclpy
 from rclpy.qos import qos_profile_sensor_data
+from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+from rcl_interfaces.srv import SetParameters
 from std_msgs.msg import Int32MultiArray, MultiArrayDimension
 
 from canrpc_bridge.srv import Call
@@ -54,7 +56,8 @@ class PumpHarness:
         try:
             assert self.check.wait_for_service(timeout_sec=8.0)
             assert self.set_pump.wait_for_service(timeout_sec=8.0)
-            self.wait_until(lambda: self.pressure.get_subscription_count() == 1)
+            enabled = parameters.get("pressure_enabled", "true") not in (False, "false")
+            self.wait_until(lambda: self.pressure.get_subscription_count() == int(enabled))
             self.spin_for(0.15)
         except BaseException:
             self.close()
@@ -324,5 +327,44 @@ def test_only_selected_collector_can_be_active_on_direct_service(ros_context, se
         assert harness.output[-1][1] == expected
         assert harness.result(harness.set_pump.call_async(PumpControl.Request())).success
         harness.wait_until(lambda: harness.output[-1][1] == 63)
+    finally:
+        harness.close()
+
+
+def test_disabled_pressure_is_immediate_unknown_and_pump_control_continues(ros_context):
+    harness = PumpHarness({'pressure_enabled': 'false', 'pressure_comparison': 'ge'})
+    try:
+        harness.publish([2147483647] * 3)
+        started = time.monotonic()
+        response = harness.result(harness.begin(timeout=86400.0), timeout=1.0)
+        assert time.monotonic() - started < 0.5
+        assert not response.success and not response.timed_out
+        assert response.suction_mask == 0 and list(response.pressure) == [UNKNOWN] * 3
+        assert 'disabled' in response.message
+        assert harness.pressure.get_subscription_count() == 0
+        parameters = harness.node.create_client(SetParameters, 'pump_controller_node/set_parameters')
+        assert parameters.wait_for_service(timeout_sec=2.0)
+        changed = harness.result(parameters.call_async(SetParameters.Request(parameters=[
+            Parameter(name='pressure_enabled', value=ParameterValue(
+                type=ParameterType.PARAMETER_BOOL, bool_value=True))])))
+        assert not changed.results[0].successful
+        assert harness.pressure.get_subscription_count() == 0
+        assert harness.result(harness.set_pump.call_async(
+            PumpControl.Request(left=1, center=1, right=1))).success
+        harness.wait_until(lambda: bool(harness.output))
+        assert harness.result(harness.set_pump.call_async(PumpControl.Request())).success
+    finally:
+        harness.close()
+
+
+def test_reenabled_pressure_uses_fresh_samples_after_restart(ros_context):
+    harness = PumpHarness({'pressure_enabled': 'true', 'pressure_comparison': 'ge'})
+    try:
+        future = harness.begin(timeout=1.0)
+        assert not future.done()
+        harness.publish([100, 101, 102])
+        response = harness.result(future)
+        assert response.success and not response.timed_out and response.suction_mask == 7
+        assert list(response.pressure) == [100, 101, 102]
     finally:
         harness.close()

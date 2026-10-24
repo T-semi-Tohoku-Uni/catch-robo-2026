@@ -19,6 +19,10 @@ def rpc_settings(context):
     import yaml
     with open(LaunchConfiguration('canrpc_config').perform(context), encoding='utf-8') as source:
         profile = yaml.safe_load(source)
+    pressure_routes = [route for route in profile.get('routes', []) if route['name'] == 'pressure']
+    if any(type(route.get('enabled', True)) is not bool for route in pressure_routes):
+        raise ValueError('pressure route.enabled must be boolean')
+    pressure_enabled = any(route.get('enabled', True) for route in pressure_routes)
     rpc = profile['rpc']
     response_sec = float(rpc['response_timeout_ms']) / 1000.0
 
@@ -39,6 +43,7 @@ def rpc_settings(context):
                              endpoint_seconds('arm_ready') + 1.0)
     application_sec = max(initialization_sec, pump_sec + 0.5)
     return [
+        SetLaunchConfiguration('pressure_enabled', str(pressure_enabled).lower()),
         SetLaunchConfiguration('canrpc_service', rpc.get('ros_service', 'canrpc/call')),
         SetLaunchConfiguration('rpc_timeout_sec', str(pump_sec + 0.5)),
         SetLaunchConfiguration('target_rpc_timeout_sec', str(target_sec + 0.05)),
@@ -108,6 +113,7 @@ def generate_launch_description():
                 'ipc_socket': LaunchConfiguration('ipc_socket'),
                 'listen': LaunchConfiguration('listen'),
                 'sequence_enabled': 'true',
+                'pressure_enabled': LaunchConfiguration('pressure_enabled'),
                 'request_timeout_ms': LaunchConfiguration('web_request_timeout_ms'),
                 'trajectory_cleanup_enabled': 'true',
                 'trajectory_cleanup_timeout_sec': LaunchConfiguration(
@@ -157,6 +163,8 @@ def generate_launch_description():
         Node(package='catchrobo2026_pump', executable='pump_controller_node',
              parameters=[LaunchConfiguration('pump_config'),
                          LaunchConfiguration('festival_config'), {
+                            'pressure_enabled': ParameterValue(
+                                LaunchConfiguration('pressure_enabled'), value_type=bool),
                             'canrpc_service': LaunchConfiguration('canrpc_service'),
                             'rpc_timeout_sec': ParameterValue(
                                 LaunchConfiguration('rpc_timeout_sec'), value_type=float),
