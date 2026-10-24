@@ -23,7 +23,8 @@ ROS環境とこのワークスペースのinstallを読み直し、CAN付き本�
 ROS選択順: ROBOT_ROS_DISTRO → ROS_DISTRO → /opt/ros内の唯一の環境。
 引数一覧: ros2 launch launch/production.launch.py --show-args
 ビルドは自動実行しません。
-手首実測角の許容設定は joint_feedback_config:=/path/to/joint_feedback.yaml で変更できます。
+CAN設定はlaunchに集約し、CAN-RPCで全3MCUを初期化して新世代READYを待ちます。
+初期化待機時間は startup_timeout_sec:=30.0 で変更できます。
 USAGE
     exit 0
 fi
@@ -74,11 +75,6 @@ for robot_package in catchrobo2026_sequence catchrobo2026_ui nav_director canrpc
         fail "$robot_package が別のワークスペースを参照しています: $robot_prefix"
     fi
 done
-
-# マイコンのリセット処理
-sudo ip link set can0 down
-sudo ip link set can0 up type can bitrate 1000000 dbitrate 2000000 fd on
-cansend can0 001#00000001
 
 cd -- "$robot_workspace"
 printf 'ROS=%s workspace=%s\n' "$ROS_DISTRO" "$robot_workspace"

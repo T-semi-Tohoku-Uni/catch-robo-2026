@@ -22,7 +22,10 @@
 #define CANRPC_ANNOUNCE_QUERY 0x11u
 #define CANRPC_RESET_REQUEST 0x12u
 #define CANRPC_RESET_STATUS 0x13u
+#define CANRPC_RESET_PREPARING 0x00u
+#define CANRPC_RESET_ACCEPTED 0x01u
 #define CANRPC_RESET_REJECT_AUTHORITY 0x12u
+#define CANRPC_CAP_SYSTEM_RESET 1u
 #define CANRPC_STARTING 0u
 #define CANRPC_READY 1u
 #define CANRPC_DEGRADED 2u
@@ -55,6 +58,19 @@ static inline void canrpc_put_u32(uint8_t *p, uint32_t v) {
 static inline uint32_t canrpc_get_u32(const uint8_t *p) {
   return (uint32_t)p[0] | ((uint32_t)p[1]<<8) | ((uint32_t)p[2]<<16) | ((uint32_t)p[3]<<24);
 }
+static inline void canrpc_put_u64(uint8_t *p,uint64_t v) {
+  canrpc_put_u32(p,(uint32_t)v); canrpc_put_u32(p+4,(uint32_t)(v>>32));
+}
+static inline uint64_t canrpc_get_u64(const uint8_t *p) {
+  return (uint64_t)canrpc_get_u32(p) | ((uint64_t)canrpc_get_u32(p+4)<<32);
+}
+static inline void canrpc_reset_payload(uint8_t *p,const uint8_t *target_boot,
+                                       const uint8_t *requester_boot,uint64_t nonce,
+                                       uint32_t not_after) {
+  memcpy(p,target_boot,16); memcpy(p+16,requester_boot,16);
+  canrpc_put_u64(p+32,nonce); canrpc_put_u32(p+40,not_after);
+  memset(p+44,0,4);
+}
 static inline void canrpc_put_float(uint8_t *p, float v) {
   uint32_t bits; memcpy(&bits,&v,4); canrpc_put_u32(p,bits);
 }
@@ -70,13 +86,13 @@ static inline void canrpc_boot_payload(uint8_t *p, const uint8_t *boot_id,
 /* Application peer gate; announcements never refresh sensor timestamps. */
 typedef struct {
   uint8_t boot[16], retired[8][16];
-  uint8_t known, state, retired_count, retired_next;
+  uint8_t known, state, retired_count, retired_next, capabilities;
   uint32_t uptime_ms, seen_ms;
 } canrpc_peer_t;
 static inline int canrpc_peer_announce(canrpc_peer_t *peer, const uint8_t *p,
                                        uint32_t length, uint32_t now_ms) {
   unsigned i; uint8_t nonzero=0;
-  if (length!=24 || p[20]!=1 || p[21]!=0 || p[22]>CANRPC_FAULT || p[23]!=0) return 0;
+  if (length!=24 || p[20]!=1 || p[21]!=0 || p[22]>CANRPC_FAULT || (p[23] & ~CANRPC_CAP_SYSTEM_RESET)!=0) return 0;
   for(i=0;i<16;++i) nonzero|=p[i];
   if(!nonzero) return 0;
   if(peer->known && memcmp(peer->boot,p,16)==0) {
@@ -90,7 +106,7 @@ static inline int canrpc_peer_announce(canrpc_peer_t *peer, const uint8_t *p,
     }
     memcpy(peer->boot,p,16); peer->known=1;
   }
-  peer->uptime_ms=canrpc_get_u32(p+16); peer->seen_ms=now_ms; peer->state=p[22];
+  peer->uptime_ms=canrpc_get_u32(p+16); peer->seen_ms=now_ms; peer->state=p[22]; peer->capabilities=p[23];
   return 1;
 }
 static inline int canrpc_peer_ready(const canrpc_peer_t *peer,uint32_t now_ms) {

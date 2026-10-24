@@ -89,9 +89,9 @@ YAMLを指定しない直接起動では起動時が吸引56で、ボタンを�
 吸引開始は従来どおり `/set_pump_state` へ指示します。
 監視中も100 Hzの出力配信とポンプ操作、圧力購読を継続します。
 
-CAN ID `0x406` の3個のbig-endian 32bit整数は、ブリッジで
+CAN-RPC Subject `0x406`（Source Node 4）の3個のlittle-endian 32bit整数は、ブリッジで
 `pressure_sensor`（`std_msgs/msg/Int32MultiArray`）へ変換済みです。
-たとえば `00 00 00 45 00 00 00 45 00 00 00 3F` は `[69, 69, 63]` です。
+たとえば `45 00 00 00 45 00 00 00 3F 00 00 00` は `[69, 69, 63]` です。
 ポンプノードで再度4バイトずつ組み直す必要はありません。
 
 | 要求 | 意味 |
@@ -144,14 +144,13 @@ ros2 service call /check_suction catchrobo2026_msgs/srv/CheckSuction \
 ## CAN指令と実機調整
 
 出力は `/pump_state`（`std_msgs/msg/Int32MultiArray`、要素1個）、100 Hz。
-`nhk2026_bridge` がCAN ID `0x401` の4バイトbig-endian整数として送ります。
+`canrpc_bridge` がCAN-RPC Subject `0x401`、Source Node 1の4バイトlittle-endian整数として送ります。
 
 [PumpCommand](include/catchrobo2026_pump/pump_command.hpp) は `union` で32bit整数 `raw` と、
 MCU出力番号に対応する `pump1..3` / `valve1..3` のビットフィールドを表します。
 上位26bitは0です。L/C/Rの状態は起動設定に従って各フィールドへ割り当てます。
-トピックにはホスト順の整数を渡し、ブリッジの `send_int()` で `htobe32()` と
-`memcpy()` によりバイト列へ変換します。受信側の `rxdata_to_int()` は `be32toh()` を使います。
-たとえば吸引56の送信データは `00 00 00 38` です。
+トピックにはホスト順の整数を渡し、ブリッジの `canrpc_put_u32()` でlittle-endianへ変換します。
+たとえば吸引56の送信データは `38 00 00 00` です。
 
 ビットフィールドの配置は対象ABIに依存し、`union` の別メンバからの読出しには
 [GCCの拡張](https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html#index-fstrict-aliasing)を使用します。

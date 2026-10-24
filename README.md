@@ -43,7 +43,7 @@ git submodule update --init --recursive
 
 ROSの選択順は `ROBOT_ROS_DISTRO`、現在の `ROS_DISTRO`、`/opt/ros` にある唯一の環境です。明示する場合は `ROBOT_ROS_DISTRO=humble ./run_production.sh team:=red` のように指定します。`sh run_production.sh ...` でも実行できます。スクリプト内部でBashへ切り替え、既存のROS検索パスをクリアしてROS本体と `install/local_setup.bash` を読み込みます。`ROS_DOMAIN_ID` や `RMW_IMPLEMENTATION` などの通信設定は引き継ぎます。
 
-本番launchは既存の `raspi_can.launch.py` でCANブリッジを起動し、activeへの遷移を確認してから自動操縦launch（UI・シーケンサ・経路生成／追従・Joy・機構ノード）を1回起動します。CANブリッジが終了すると全体も終了します。CANの設定は既存どおり `can0`、1 Mbps／CAN FD 2 Mbpsです。設定変更が必要な場合は既存launchの `sudo -n ip ...` が実行できる権限が必要です。
+本番launchは `canrpc_bridge/raspi_can.launch.py` でCANを設定し、全3MCUへ世代条件付きSYSTEM_RESETを送ります。新しいBoot IDとREADYを全台で確認してからブリッジをactiveにし、自動操縦launch（UI・シーケンサ・経路生成／追従・Joy・ポンプ）を1回起動します。既定30秒以内に完了しなければ全体を終了し、自動操縦は起動しません。待機時間は `startup_timeout_sec:=60.0` などで変更できます。CAN設定はこのlaunchの1箇所だけで行い、`can0`、1 Mbps／CAN FD 2 Mbpsです。設定変更が必要な場合は `sudo -n ip ...` が実行できる権限が必要です。旧標準IDのcansendと旧nhk2026_bridgeは撤去しました。
 
 既定のシーケンス・ポンプ・関節フィードバック・手動操作設定は、このチェックアウトの `src/` 内のYAMLです。`sequence_file:=...`、`pump_config:=...`、`joint_feedback_config:=...`、`manual_config:=...`、`manual_velocity_config:=...`、`festival_config:=...`、`joy_source:=web`、`listen:=...`、`ipc_socket:=...`、`non_blocking:=...` を変更できます。引数一覧は`ros2 launch launch/production.launch.py --show-args`で確認します。起動後は `/current_joints` の実測値が届くことを確認してからUIで操作します。CANのactiveは関節角の受信確認ではありません。
 

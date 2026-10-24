@@ -258,7 +258,7 @@ private:
         command.bits.valve2 = levels[4];
         command.bits.valve3 = levels[5];
 
-        // Publish a host-order integer; the CAN bridge applies htobe32.
+        // Publish host order; CAN-RPC encodes little-endian.
         std_msgs::msg::Int32MultiArray msg;
         msg.data = {static_cast<int32_t>(command.raw)};
         pump_pub_->publish(msg);

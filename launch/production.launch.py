@@ -62,6 +62,7 @@ def generate_launch_description():
         DeclareLaunchArgument('listen', default_value='0.0.0.0:8000'),
         DeclareLaunchArgument('ipc_socket', default_value='/tmp/catchrobo2026-control.sock'),
         DeclareLaunchArgument('non_blocking', default_value='true', choices=['true', 'false']),
+        DeclareLaunchArgument('startup_timeout_sec', default_value='30.0'),
     ]
     automatic = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(str(
@@ -86,7 +87,9 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(str(
             Path(get_package_share_directory('canrpc_bridge')) /
             'launch/raspi_can.launch.py')),
-        launch_arguments={'non_blocking': LaunchConfiguration('non_blocking')}.items(),
+        launch_arguments={'non_blocking': LaunchConfiguration('non_blocking'),
+                          'reset_on_startup': 'true',
+                          'startup_timeout_sec': LaunchConfiguration('startup_timeout_sec')}.items(),
     )
     return LaunchDescription(arguments + [
         # Register before launching the bridge so its first activation is observed.
@@ -95,7 +98,7 @@ def generate_launch_description():
                 isinstance(event, StateTransition) and
                 is_can_bridge(event.action) and event.goal_state == 'active'
             ),
-            entities=[LogInfo(msg='CAN bridge active; starting automatic control'), automatic],
+            entities=[LogInfo(msg='MCU initialization complete; starting automatic control'), automatic],
             handle_once=True,
         )),
         RegisterEventHandler(OnProcessExit(on_exit=stop_on_bridge_exit)),

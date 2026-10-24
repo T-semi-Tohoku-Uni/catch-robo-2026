@@ -33,5 +33,15 @@ int main(void) {
   assert(canrpc_peer_ready(&peer,803));
   bytes[20]=2;assert(!canrpc_peer_announce(&peer,bytes,24,804));
   assert(!canrpc_peer_announce(&peer,bytes,23,804));
+  uint8_t reset[48], requester[16]={9};
+  canrpc_reset_payload(reset,boot,requester,UINT64_C(0x123456789abcdef0),1234);
+  assert(memcmp(reset,boot,16)==0 && memcmp(reset+16,requester,16)==0);
+  assert(reset[32]==0xf0 && reset[39]==0x12);
+  assert(canrpc_get_u64(reset+32)==UINT64_C(0x123456789abcdef0));
+  assert(canrpc_get_u32(reset+40)==1234 && reset[44]==0 && reset[47]==0);
+  canrpc_boot_payload(bytes,boot,500,CANRPC_READY); bytes[23]=CANRPC_CAP_SYSTEM_RESET;
+  canrpc_peer_t capable={0};assert(canrpc_peer_announce(&capable,bytes,24,1));
+  assert(capable.capabilities==CANRPC_CAP_SYSTEM_RESET);
+  bytes[23]=2;assert(!canrpc_peer_announce(&capable,bytes,24,2));
   puts("protocol C99: ID 131072 combinations, LE and Boot payload passed");
 }
