@@ -42,11 +42,9 @@ def arrival_rig(tmp_path, monkeypatch):
             if not rig.commands:
                 return
             joints = list(rig.commands[-1].data)
-            if rig.feedback_wrist is not None:
-                joints[3] = rig.feedback_wrist
             joint_publisher.publish(Float32MultiArray(data=joints))
 
-        # Echo all four physical joint values without wrapping the wrist angle.
+        # Echo the three physical joints without angular wrapping.
         rig.subscriptions.extend([
             node.create_subscription(
                 Float32MultiArray, 'target_joint_angles', rig.commands.append, 100),
@@ -58,7 +56,10 @@ def arrival_rig(tmp_path, monkeypatch):
                    remaps=('route:=follower_route',))
         rig.launch('catchrobo2026_hand_operated', 'joy_controller_node')
         assert rig.follow.wait_for_server(timeout_sec=15)
+        rig.until(lambda: joint_publisher.get_subscription_count() >= 3)
         rig.until(lambda: len(rig.commands) >= 5 and len(rig.joints) >= 5)
+        settled = time.monotonic() + 0.1
+        rig.until(lambda: time.monotonic() >= settled)
         yield rig
         node.destroy_timer(timer)
     finally:
@@ -79,38 +80,26 @@ def arrival_rig(tmp_path, monkeypatch):
 
 
 def joint_match(actual, expected, tolerance=1e-6):
-    return len(actual) == len(expected) == 4 and all(
+    return len(actual) == len(expected) == 3 and all(
         math.isfinite(value) and abs(value - target) <= tolerance
         for value, target in zip(actual, expected))
 
 
-@pytest.mark.parametrize(
-    'x, phi, expected_wrist, hold_equivalent_wrist',
-    [
-        pytest.param(675.0, 0.0, 0.0, False, id='axis-zero'),
-        pytest.param(675.0, math.pi, -math.pi, False, id='axis-positive-pi'),
-        pytest.param(675.0, -math.pi, -math.pi, False, id='axis-negative-pi'),
-        pytest.param(675.0, math.tau, 0.0, False, id='axis-positive-full-turn'),
-        pytest.param(675.0, -math.tau, -math.tau, True, id='axis-negative-full-turn'),
-        pytest.param(674.0, 0.0, -math.tau + math.atan2(1.0, 390.0), False,
-                     id='left-of-axis'),
-        pytest.param(676.0, 0.0, -math.atan2(1.0, 390.0), False,
-                     id='right-of-axis'),
-    ],
-)
-def test_ordinary_endpoint_matches_joy_joint_command(
-        arrival_rig, x, phi, expected_wrist, hold_equivalent_wrist):
+@pytest.mark.parametrize('x, phi', [
+    (675.0,0.0),(675.0,math.pi),(675.0,-math.pi),
+    (675.0,math.tau),(675.0,-math.tau),(674.0,0.0),(676.0,0.0),
+])
+def test_ordinary_endpoint_matches_joy_joint_command(arrival_rig,x,phi):
     rig = arrival_rig
     endpoint = (x, 200.0, 200.0)
     expected_base = math.atan2(x - 675.0, 390.0)
     target_start, command_start = len(rig.targets), len(rig.commands)
-    if hold_equivalent_wrist:
-        # Zero and -2pi have the same Cartesian pose but distinct physical turns.
-        rig.feedback_wrist = 0.0
 
     path = Path()
     path.header.frame_id = 'map'
-    path.poses = [PoseStamped(pose=waypoint_pose(endpoint, phi))]
+    endpoint_pose = PoseStamped(pose=waypoint_pose(endpoint, phi))
+    endpoint_pose.header.stamp = rig.node.get_clock().now().to_msg()
+    path.poses = [endpoint_pose]
     handle = rig.resolve(rig.follow.send_goal_async(FollowRoute.Goal(start=True, path=path)))
     assert handle.accepted
     result = handle.get_result_async()
@@ -128,22 +117,13 @@ def test_ordinary_endpoint_matches_joy_joint_command(
 
     def endpoint_commands():
         return [message for message in rig.commands[command_start:]
-                if len(message.data) == 4 and
-                abs(message.data[0] - expected_base) < 1e-6 and
-                abs(message.data[3] - expected_wrist) < 1e-6]
+                if len(message.data) == 3 and
+                abs(message.data[0] - expected_base) < 1e-6]
 
     # Observe Joy's actual output after the follower has encoded the endpoint.
     rig.until(lambda: bool(endpoint_commands()))
     final_command = list(endpoint_commands()[0].data)
     assert all(math.isfinite(value) for value in final_command)
-    if hold_equivalent_wrist:
-        rig.until(lambda: rig.joints and
-                  all(abs(a - b) < 1e-6
-                      for a, b in zip(rig.joints[-1].data[:3], final_command[:3])))
-        rig.observe(0.2)
-        assert rig.joints[-1].data[3] == 0.0
-        assert not result.done(), 'Equivalent orientation must not erase a physical wrist turn'
-        rig.feedback_wrist = None
 
     wrapped_result = rig.resolve(result)
     assert wrapped_result.status == GoalStatus.STATUS_SUCCEEDED
@@ -152,5 +132,6 @@ def test_ordinary_endpoint_matches_joy_joint_command(
     rig.observe(0.1)
     assert joint_match(rig.commands[-1].data, final_command)
     assert joint_match(rig.joints[-1].data, final_command)
-    # Compare raw joint angles; angular-distance wrapping would hide regressions.
-    assert abs(rig.joints[-1].data[3] - expected_wrist) < 1e-6
+    assert all(len(message.data) == 3 for message in rig.commands + rig.joints)
+    assert rig.lease_events[0] == 0 and rig.lease_events[-1] == 2
+    assert rig.lease_token == 0

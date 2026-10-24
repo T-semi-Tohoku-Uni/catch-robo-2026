@@ -31,6 +31,7 @@ set(PATH_PLANNER_CORE_SOURCES
   src/jerk_limiter.cpp
   src/trajectory_validator.cpp
   src/trajectory_pipeline.cpp
+  src/trajectory_follower.cpp
   src/trajectory_node.cpp
 )
 
@@ -79,11 +80,14 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/rviz")
   )
 endif()
 
-install(TARGETS rrt_connect trajectory_node
+install(TARGETS rrt_connect
+  EXPORT export_path_planner
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
+
+install(TARGETS trajectory_node RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 include(CTest)
 if(BUILD_TESTING)
@@ -95,6 +99,7 @@ set(PATH_PLANNER_TESTS
   test_toppra_parameterizer
   test_trajectory_validator
   test_trajectory_pipeline
+  test_trajectory_follower
 )
 
 foreach(test_name IN LISTS PATH_PLANNER_TESTS)
@@ -119,5 +124,7 @@ endif()
 if(PATH_PLANNER_WITH_ROS)
   ament_export_include_directories(include)
   ament_export_libraries(rrt_connect)
+  ament_export_targets(export_path_planner HAS_LIBRARY_TARGET)
+  ament_export_dependencies(Threads)
   ament_package()
 endif()

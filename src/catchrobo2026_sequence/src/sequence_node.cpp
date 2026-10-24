@@ -465,10 +465,18 @@ private:
                  bool handle_interruption = false)
     {
         service_pending_ = true;
+        const auto token = ++service_request_token_;
+        const auto accepted_goal = goal_;
+        const auto expires = deadline_;
         auto pending = client->async_send_request(value,
-            [this, callback, handle_interruption](typename rclcpp::Client<Service>::SharedFuture response) {
+            [this, callback, handle_interruption, token, accepted_goal, expires](typename rclcpp::Client<Service>::SharedFuture response) {
+                if (token != service_request_token_ || goal_ != accepted_goal) return;
                 service_pending_ = false;
                 abandon_request_ = {};
+                if (Clock::now() >= expires) {
+                    if (goal_ && !stopping_) begin_stop("service response timed out; outcome unknown");
+                    return;
+                }
                 if (!goal_ || (interrupted() && !handle_interruption)) {
                     return;
                 }
@@ -1037,6 +1045,7 @@ private:
     double manual_remaining_sec_{0.0};
     Clock::time_point manual_started_;
     Clock::time_point feedback_at_;
+    uint64_t service_request_token_ = 0;
     Clock::time_point deadline_, sequence_deadline_, stop_deadline_;
     Clock::time_point suction_deadline_;
     std::unique_ptr<SequenceConfig> config_;

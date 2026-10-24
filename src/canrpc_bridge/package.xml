@@ -2,16 +2,21 @@
 <package format="3">
   <name>canrpc_bridge</name>
   <version>0.1.0</version>
-  <description>Festival three-axis CAN-RPC bridge based on nhk2026_bridge SocketCAN transport.</description>
+  <description>Configurable ROS 2 CAN-RPC gateway with a portable C99 protocol core.</description>
   <maintainer email="robot@example.com">CatchRobo team</maintainer>
   <license>MIT</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>rosidl_default_generators</build_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
   <depend>std_msgs</depend>
   <depend>lifecycle_msgs</depend>
+  <depend>yaml-cpp</depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <test_depend>ament_cmake_test</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

@@ -74,6 +74,31 @@ std::array<Transform, kLinkCount> forwardKinematics(
 /// リンク名からリンク番号を返す。無ければ -1。
 int findLinkIndex(const KinematicChain & chain, const std::string & link_name);
 
+/// Cartesian position in mm and field yaw in radians.
+struct CartesianPose
+{
+  double x_mm{0.0};
+  double y_mm{0.0};
+  double z_mm{0.0};
+  double phi_rad{0.0};
+};
+
+/// Normalize the wrist angle into [-2*pi, 0] radians.
+double normalizeWristAngle(double wrist_rad);
+
+/// Forward flange position and yaw from four internal joint angles.
+CartesianPose forwardKinematicsPose(
+  const KinematicChain & chain,
+  const State & theta);
+
+/// Solve the elbow-up inverse kinematics for a Cartesian target.
+/// Reject unreachable or nonfinite targets.
+bool inverseKinematics(
+  const KinematicChain & chain,
+  const CartesianPose & target,
+  State & out_theta,
+  bool normalize_wrist = true);
+
 /// 関節位置の上下限。
 struct JointBounds
 {

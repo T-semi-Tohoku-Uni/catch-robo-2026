@@ -1,0 +1,62 @@
+schema_version: 1
+project: gakusai2026
+local_node: 1
+bus:
+  interface: can0
+  configure: true
+  nominal_bitrate: 1000000
+  data_bitrate: 2000000
+  brs: false
+  non_blocking: true
+  tx_retry_timeout_ms: 5
+timing:
+  priority: 4
+  announce_priority: 4
+  announce_period_ms: 200
+  peer_timeout_ms: 750
+  poll_period_ms: 2
+  rx_budget: 32
+reset:
+  targets: [2, 3, 4]
+  timeout_sec: 30.0
+  request_window_ms: 1000
+  max_window_ms: 2000
+  retry_interval_ms: 200
+  retry_window_ms: 900
+  execution_timeout_ms: 200
+nodes:
+  ros: {id: 1, reset_sources: []}
+  arm:
+    id: 2
+    reset_sources: [1]
+    announce_priority: 6
+    rpc: {retry_interval_ms: 10, retry_window_ms: 20, query_interval_ms: 10, response_timeout_ms: 100, result_retention_ms: 120, tag_guard_ms: 240, max_frame_age_ms: 20, cache_capacity: 32}
+  pump: {id: 3, reset_sources: [1], announce_priority: 6}
+  pressure: {id: 4, reset_sources: [1], announce_priority: 6}
+routes:
+  - {name: current, direction: rx, topic: current_joints, subject: 528, source: 2, type: float32, count: 3, require_peer: true, finite: true}
+  - {name: pressure, direction: rx, topic: pressure_sensor, subject: 1030, source: 4, type: int32, count: 3, require_peer: true}
+
+rpc:
+  ros_service: canrpc/call
+  retry_interval_ms: 100
+  retry_window_ms: 300
+  query_interval_ms: 100
+  response_timeout_ms: 1000
+  result_retention_ms: 3000
+  tag_guard_ms: 5000
+  max_frame_age_ms: 250
+  cache_capacity: 8
+rpc_endpoints:
+  - {name: pump_set, destination: 3, service: 0, request_bytes: 4, response_bytes: 8, require_ready: true}
+  - {name: arm_ready, destination: 2, service: 0, request_bytes: 0, response_bytes: 48, require_ready: false, startup_diagnostic: true}
+  - {name: arm_target, destination: 2, service: 1, request_bytes: 12, response_bytes: 20, require_ready: true}
+application:
+  arm_control: {native_ack_timeout_ms: 40, target_period_ms: 10}
+  motor_initialization:
+    step_timeout_ms: 200
+    homing_timeout_ms: 10000
+    feedback_timeout_ms: 1000
+    feedback_max_age_ms: 100
+    inter_command_ms: 10
+    home_settle_ms: 100

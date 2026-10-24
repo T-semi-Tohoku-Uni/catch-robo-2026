@@ -10,6 +10,7 @@ find_package(rclcpp REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(catchrobo2026_msgs REQUIRED)
+find_package(canrpc_bridge REQUIRED)
 
 add_executable(pump_controller_node src/pump_controller_node.cpp)
 target_compile_features(pump_controller_node PRIVATE cxx_std_17)
@@ -19,6 +20,7 @@ ament_target_dependencies(pump_controller_node
   rcl_interfaces
   std_msgs
   catchrobo2026_msgs
+  canrpc_bridge
 )
 
 install(TARGETS
@@ -34,6 +36,7 @@ install(DIRECTORY
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_application_rpc test/test_application_rpc.py TIMEOUT 120)
   ament_add_pytest_test(test_check_suction test/test_check_suction.py
     TIMEOUT 90
     ENV PUMP_NODE_EXECUTABLE=$<TARGET_FILE:pump_controller_node>)

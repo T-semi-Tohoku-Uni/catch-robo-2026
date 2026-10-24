@@ -1,0 +1,8 @@
+# ROS-local handshake; both nodes share the same host monotonic clock.
+bool pause
+uint64 token
+uint64 deadline_steady_ns
+---
+bool success
+uint64 token
+string message

@@ -438,9 +438,9 @@ ConfigurationValidator::ConfigurationValidator(
   }
   for (std::size_t i = 0; i < kDof; ++i) {
     if (!std::isfinite(bounds_.lower[i]) || !std::isfinite(bounds_.upper[i]) ||
-      bounds_.lower[i] >= bounds_.upper[i])
+      bounds_.lower[i] > bounds_.upper[i])
     {
-      throw std::invalid_argument("joint bounds must satisfy lower < upper");
+      throw std::invalid_argument("joint bounds must satisfy lower <= upper");
     }
   }
   if (!checker_) {

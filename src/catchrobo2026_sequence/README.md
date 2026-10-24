@@ -33,3 +33,5 @@ ros2 run catchrobo2026_sequence check_sequence_config \
 ```
 
 `check_sequence_config`の名前付き手順・旧bindings・回転制約検査は設定ライブラリ用に残っています。これらの文法を検査できても、学祭用`execute_sequence`が競技goalや回転グループを許可することにはなりません。オフラインの経路検査はYAMLに記載されたphiを使うため、XYZのみの運用動作の代わりにはなりません。
+
+初期化ステップは`request_initialization`経由でMCUの`arm_ready`結果と必須flagsを照会します。物理rehomeを追加しません。PumpControlもMCU APPLIEDまで待ち、false/unknownや期限超過では後続MOVE/吸引判定へ進みません。BOOT/再準備はROS状態操作で、旧set_value/end_stateの疑似成功は使用しません。

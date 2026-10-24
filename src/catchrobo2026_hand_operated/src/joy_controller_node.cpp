@@ -58,6 +58,50 @@ public:
         pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
             "target_pose", 10, std::bind(&JoyControllerNode::pose_callback, this, std::placeholders::_1));
 
+        current_sub_ = create_subscription<std_msgs::msg::Float32MultiArray>(
+            "current_joints", rclcpp::QoS(1), [this](std_msgs::msg::Float32MultiArray::ConstSharedPtr msg) {
+                feedback_valid_ = msg->data.size() == 3 && msg->layout.data_offset == 0 &&
+                    std::all_of(msg->data.begin(), msg->data.end(), [](float q) { return std::isfinite(q); });
+                if (feedback_valid_) {
+                    std::copy_n(msg->data.begin(), 3, feedback_joints_.begin());
+                    feedback_at_ = std::chrono::steady_clock::now();
+                }
+            });
+        rebase_service_ = create_service<std_srvs::srv::Trigger>("joy/rebase",
+            [this](std_srvs::srv::Trigger::Request::SharedPtr,
+                   std_srvs::srv::Trigger::Response::SharedPtr response) {
+                clear_velocity();
+                manual_input_active_ = false;
+                manual_input_blocked_until_neutral_ = true;
+                if (!feedback_valid_ || std::chrono::steady_clock::now() - feedback_at_ > 500ms) {
+                    response->message = "fresh three-axis feedback required for Joy rebase";
+                    return;
+                }
+                float joints[4] = {feedback_joints_[0], feedback_joints_[1], feedback_joints_[2], 0.0f};
+                float pose[6] = {};
+                kin_.forward_kinematics(pose, joints);
+                if (!std::all_of(pose, pose + 3, [](float v) { return std::isfinite(v); })) {
+                    response->message = "Joy rebase FK failed";
+                    return;
+                }
+                pose_cutoff_ns_ = now().nanoseconds();
+                pose_clock_valid_ = pose_cutoff_ns_ > 0;
+                last_ros_ns_ = pose_cutoff_ns_;
+                last_clock_check_ = std::chrono::steady_clock::now();
+                if (!pose_clock_valid_) {
+                    response->message = "Joy rebase requires a valid ROS clock";
+                    return;
+                }
+                std::copy_n(pose, 3, current_pose_);
+                current_pose_[3] = 0.0f;
+                // Replace the subscription to discard queued commands from the previous owner.
+                pose_sub_.reset();
+                pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>("target_pose", 1,
+                    std::bind(&JoyControllerNode::pose_callback, this, std::placeholders::_1));
+                response->success = true;
+                response->message = "Joy rebased; new neutral input required";
+            });
+
         // 3. サービスクライアント
         pump_client_ = this->create_client<catchrobo2026_msgs::srv::PumpControl>("set_pump_state");
         state_client_ = this->create_client<std_srvs::srv::Trigger>("request_initialization");
@@ -67,6 +111,10 @@ public:
         velocity_descriptor.description = "Maximum manual velocity at full Joy input";
         manual_linear_speed_mm_s_ = declare_parameter(
             "manual_linear_speed_mm_s", kDefaultManualLinearSpeedMmS, velocity_descriptor);
+        service_timeout_sec_ = declare_parameter("service_timeout_sec", 2.0, velocity_descriptor);
+        if (!std::isfinite(service_timeout_sec_) || service_timeout_sec_ <= 0.0) {
+            throw std::invalid_argument("service_timeout_sec must be finite and positive");
+        }
         selected_pump_ = declare_parameter("selected_pump", 1, velocity_descriptor);
         if (selected_pump_ < 1 || selected_pump_ > 3) {
             throw std::invalid_argument("selected_pump must be 1, 2 or 3");
@@ -188,6 +236,12 @@ private:
     }
 
     void pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+        if (msg->header.stamp.sec < 0 || msg->header.stamp.nanosec >= 1000000000U) return;
+        const int64_t timestamp = int64_t(msg->header.stamp.sec) * 1000000000LL +
+            msg->header.stamp.nanosec;
+        const int64_t ros_now = now().nanoseconds();
+        if (!pose_clock_valid_ || timestamp <= pose_cutoff_ns_ || timestamp <= 0 ||
+            timestamp > ros_now || ros_now - timestamp > 500000000LL) return;
         const auto &position = msg->pose.position;
         if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
             !std::isfinite(position.z)) return;
@@ -254,7 +308,7 @@ private:
             return;
         }
 
-        // Request a shared initialization toggle on each X button press.
+        // Query arm readiness on each initialization button press.
         const bool current_x_button = msg->buttons[0] != 0;
         if (current_x_button && !prev_x_button_ && !state_request_pending_) {
             if (!state_client_->service_is_ready()) {
@@ -263,9 +317,13 @@ private:
                 auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
                 state_request_pending_ = true;
                 state_request_time_ = std::chrono::steady_clock::now();
+                const auto token = ++state_token_;
                 state_request_id_ = state_client_->async_send_request(request,
-                    [this](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
+                    [this, token](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
+                        if (!state_request_pending_ || token != state_token_) return;
                         state_request_pending_ = false;
+                        if (std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                state_request_time_).count() >= service_timeout_sec_) return;
                         if (!future.get()->success) {
                             RCLCPP_WARN(this->get_logger(), "State request was rejected.");
                             return;
@@ -289,9 +347,13 @@ private:
                 request->right = selected_pump_ == 3 ? next_pump_state_ : PumpRequest::OFF;
                 pump_request_pending_ = true;
                 pump_request_time_ = std::chrono::steady_clock::now();
+                const auto token = ++pump_token_;
                 pump_request_id_ = pump_client_->async_send_request(request,
-                    [this](rclcpp::Client<catchrobo2026_msgs::srv::PumpControl>::SharedFuture future) {
+                    [this, token](rclcpp::Client<catchrobo2026_msgs::srv::PumpControl>::SharedFuture future) {
+                        if (!pump_request_pending_ || token != pump_token_) return;
                         pump_request_pending_ = false;
+                        if (std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                pump_request_time_).count() >= service_timeout_sec_) return;
                         if (!future.get()->success) {
                             RCLCPP_WARN(this->get_logger(), "Pump request was rejected.");
                             return;
@@ -311,8 +373,22 @@ private:
     }
 
     void publish_timer_callback() {
+        const auto steady_now = std::chrono::steady_clock::now();
+        const int64_t ros_now = now().nanoseconds();
+        if (last_ros_ns_ != 0) {
+            const double wall_elapsed = std::chrono::duration<double>(steady_now - last_clock_check_).count();
+            const double ros_elapsed = double(ros_now - last_ros_ns_) / 1e9;
+            if (ros_elapsed < 0 || std::abs(ros_elapsed - wall_elapsed) > 0.5) {
+                pose_clock_valid_ = false;
+                clear_velocity();
+            }
+        }
+        last_ros_ns_ = ros_now;
+        last_clock_check_ = steady_now;
+        if (!pose_clock_valid_) return;
         if (state_request_pending_ &&
-            std::chrono::steady_clock::now() - state_request_time_ >= 1s) {
+            std::chrono::steady_clock::now() - state_request_time_ >=
+                std::chrono::duration<double>(service_timeout_sec_)) {
             state_client_->remove_pending_request(state_request_id_);
             state_request_pending_ = false;
             RCLCPP_WARN(this->get_logger(), "State request timed out. Press again to retry.");
@@ -320,7 +396,8 @@ private:
 
         // 応答が途絶えても、次のボタン操作で同じ状態を再要求できるようにする。
         if (pump_request_pending_ &&
-            std::chrono::steady_clock::now() - pump_request_time_ >= 1s) {
+            std::chrono::steady_clock::now() - pump_request_time_ >=
+                std::chrono::duration<double>(service_timeout_sec_)) {
             pump_client_->remove_pending_request(pump_request_id_);
             pump_request_pending_ = false;
             RCLCPP_WARN(this->get_logger(), "Pump request timed out. Press again to retry.");
@@ -417,6 +494,14 @@ private:
     
     robot_kinematics kin_; // 運動学クラスのインスタンス
 
+    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr current_sub_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr rebase_service_;
+    std::array<float, 3> feedback_joints_{};
+    bool feedback_valid_ = false;
+    bool pose_clock_valid_ = true;
+    int64_t pose_cutoff_ns_ = 0, last_ros_ns_ = 0;
+    std::chrono::steady_clock::time_point last_clock_check_;
+    std::chrono::steady_clock::time_point feedback_at_;
     float current_pose_[6];
     double manual_linear_speed_mm_s_ = kDefaultManualLinearSpeedMmS;
     bool debug_ = false;
@@ -426,6 +511,8 @@ private:
     bool manual_input_active_ = false;
     bool manual_input_blocked_until_neutral_ = false;
     std::string last_manual_velocity_error_;
+    double service_timeout_sec_ = 2.0;
+    uint64_t state_token_ = 0, pump_token_ = 0;
     bool prev_x_button_ = false;
     bool state_request_pending_ = false;
     int64_t state_request_id_ = 0;

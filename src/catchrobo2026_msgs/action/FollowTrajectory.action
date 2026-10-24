@@ -1,0 +1,31 @@
+# Hardware: explicit three-axis trajectory only; generate it with GenerateTrajectory first.
+# Hardware rejects cached-start mode, plan_from_start_goal, and payload changes.
+# Goal:
+# 1) If trajectory.points is non-empty, follow that validated timed trajectory.
+# 2) Else if plan_from_start_goal is true, generate a trajectory from start_state to goal_state and follow it.
+# 3) Else if start is true, follow the latest validated timed trajectory held by the node.
+bool start true
+bool plan_from_start_goal false
+sensor_msgs/JointState start_state
+sensor_msgs/JointState goal_state
+Payload payload
+uint32 seed 0
+trajectory_msgs/JointTrajectory trajectory
+---
+# Result
+bool success
+uint16 failure_code
+string message
+float64 elapsed_time_sec
+float64 final_position_error_mm
+float64 final_yaw_error_rad
+float64 max_joint_tracking_error_rad
+---
+# Feedback
+float32 progress_ratio
+float32 time_remaining_sec
+float32 distance_remaining_mm
+float64[3] desired_positions
+float64[3] actual_positions
+float64[3] tracking_error
+float64 theta1_torque_nm

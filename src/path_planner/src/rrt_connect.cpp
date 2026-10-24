@@ -68,9 +68,11 @@ RrtConnect::RrtConnect(
   if (config_.bounds.lower.size() != kDof || config_.bounds.upper.size() != kDof) {
     throw std::invalid_argument("RrtConnect bounds must have 4 elements");
   }
+  if(config_.active_axes!=3 && config_.active_axes!=4) throw std::invalid_argument("active_axes must be 3 or 4");
   for (std::size_t i = 0; i < kDof; ++i) {
     if (!std::isfinite(config_.bounds.lower[i]) || !std::isfinite(config_.bounds.upper[i]) ||
-      config_.bounds.lower[i] >= config_.bounds.upper[i])
+      (i<config_.active_axes ? config_.bounds.lower[i]>=config_.bounds.upper[i] :
+       config_.bounds.lower[i]!=0.0 || config_.bounds.upper[i]!=0.0))
     {
       throw std::invalid_argument("RrtConnect bounds require lower < upper");
     }
@@ -82,7 +84,7 @@ RrtConnect::RrtConnect(
     throw std::invalid_argument("distance_weights[0] must be >= 1.0");
   }
   for (std::size_t i = 0; i < kDof; ++i) {
-    if (!std::isfinite(config_.distance_weights[i]) || config_.distance_weights[i] <= 0.0) {
+    if (!std::isfinite(config_.distance_weights[i]) || (i<config_.active_axes ? config_.distance_weights[i]<=0.0 : config_.distance_weights[i]!=0.0)) {
       throw std::invalid_argument("distance_weights must be positive and finite");
     }
   }

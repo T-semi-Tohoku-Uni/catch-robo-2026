@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "path_planner/trajectory_follower.hpp"
 #include "path_planner/trajectory_pipeline.hpp"
 #include "path_planner/types.hpp"
 
@@ -88,16 +89,58 @@ struct GenerateTrajectoryResponse
   double minimum_torque_margin{0.0};
 };
 
+/// ROS-independent timed-follow request.
+struct FollowTrajectoryGoalRequest
+{
+  bool start{true};
+  bool plan_from_start_goal{false};
+  std::vector<std::string> start_joint_names;
+  State start_positions;
+  std::vector<std::string> goal_joint_names;
+  State goal_positions;
+  bool has_payload{false};
+  Payload payload{};
+  std::uint32_t seed{0};
+  JointTrajectoryMsg trajectory;
+};
+
+/// ROS-independent timed-follow result.
+struct FollowTrajectoryActionResult
+{
+  bool success{false};
+  std::uint16_t failure_code{0};
+  std::string message;
+  double elapsed_time_sec{0.0};
+  double final_position_error_mm{0.0};
+  double final_yaw_error_rad{0.0};
+  double max_joint_tracking_error_rad{0.0};
+};
+
 class TrajectoryNode
 {
 public:
   TrajectoryNode(
     std::shared_ptr<TrajectoryPipeline> pipeline,
-    ConcurrencyPolicy policy = ConcurrencyPolicy::kReject);
+    ConcurrencyPolicy policy = ConcurrencyPolicy::kReject,
+    TrajectoryFollowerConfig follower_config = TrajectoryFollowerConfig{});
 
   /// /generate_trajectory サービス要求を処理する。
   /// 成功時のみ lastTimedTrajectory() を更新し、失敗時は直前の成功軌道を再利用させない。
   GenerateTrajectoryResponse handleGenerateTrajectory(const GenerateTrajectoryRequest & request);
+
+  /// Validate and start a timed trajectory, optionally planning it first.
+  bool acceptFollowTrajectoryGoal(
+    const FollowTrajectoryGoalRequest & goal,
+    double now_sec,
+    FollowTrajectoryActionResult * out_immediate_failure = nullptr);
+
+  /// Convert a trajectory message into the internal four-axis form.
+  FollowerStepOutput stepFollowTrajectory(double now_sec);
+
+  bool convertMsgToTimedTrajectory(
+    const JointTrajectoryMsg & msg,
+    TimedTrajectory & out_traj,
+    std::string * reason = nullptr) const;
 
   /// 現在進行中の計画へキャンセル要求を出す（cancel_previous のテスト・外部制御用）。
   void requestCancelCurrent();
@@ -111,10 +154,13 @@ public:
   std::uint64_t publishedTimedTrajectoryCount() const {return timed_publish_count_.load();}
 
   const std::shared_ptr<TrajectoryPipeline> & pipeline() const {return pipeline_;}
+  const std::shared_ptr<TrajectoryFollower> & follower() const {return follower_;}
 
 private:
   std::shared_ptr<TrajectoryPipeline> pipeline_;
+  std::shared_ptr<TrajectoryFollower> follower_;
   ConcurrencyPolicy policy_;
+  std::atomic<std::uint64_t> execution_dynamics_version_{0},execution_scene_version_{0};
 
   mutable std::mutex active_mutex_;
   bool planning_active_{false};

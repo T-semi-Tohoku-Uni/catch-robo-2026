@@ -197,6 +197,91 @@ int findLinkIndex(const KinematicChain & chain, const std::string & link_name)
   return -1;
 }
 
+double normalizeWristAngle(double wrist_rad)
+{
+  const double full_turn = 2.0 * kPi;
+  double normalized = wrist_rad;
+  if (normalized > 0.0 || normalized < -full_turn) {
+    normalized = std::fmod(normalized, full_turn);
+    if (normalized > 0.0) {
+      normalized -= full_turn;
+    }
+  }
+  return normalized;
+}
+
+CartesianPose forwardKinematicsPose(
+  const KinematicChain & chain,
+  const State & theta)
+{
+  requireTheta(theta);
+  const auto q_urdf = toUrdfJointPositions(theta);
+  const auto frames = forwardKinematics(chain, q_urdf);
+  const Transform & flange = frames[kUrdfJointCount];
+  CartesianPose pose;
+  pose.x_mm = flange.translation.x * 1000.0;
+  pose.y_mm = flange.translation.y * 1000.0;
+  pose.z_mm = flange.translation.z * 1000.0;
+  pose.phi_rad = theta[0] + theta[3];
+  return pose;
+}
+
+bool inverseKinematics(
+  const KinematicChain & chain,
+  const CartesianPose & target,
+  State & out_theta,
+  bool normalize_wrist)
+{
+  if (!std::isfinite(target.x_mm) || !std::isfinite(target.y_mm) ||
+    !std::isfinite(target.z_mm) || !std::isfinite(target.phi_rad))
+  {
+    return false;
+  }
+
+  const double base_x_m = chain.world_to_base.translation.x;
+  const double base_y_m = chain.world_to_base.translation.y;
+  const double base_z_m = chain.world_to_base.translation.z;
+
+  const double shoulder_offset_x_m = chain.joints[1].origin_xyz.x;  // -0.040
+  const double shoulder_z_m = base_z_m + chain.joints[1].origin_xyz.z;  // 0.090
+  const double l1_m = chain.joints[2].origin_xyz.z;  // 0.480
+  const double l2_m = chain.joints[3].origin_xyz.z;  // 0.480
+  const double flange_offset_x_m = chain.joints[4].origin_xyz.x;  // +0.040
+
+  if (l1_m <= 0.0 || l2_m <= 0.0) {
+    return false;
+  }
+
+  const double dx_m = target.x_mm / 1000.0 - base_x_m;
+  const double dy_m = target.y_mm / 1000.0 - base_y_m;
+  const double radial_m = std::hypot(dx_m, dy_m) - (shoulder_offset_x_m + flange_offset_x_m);
+  const double dz_m = target.z_mm / 1000.0 - shoulder_z_m;
+
+  const double theta1 = std::atan2(dx_m, dy_m);
+  const double dist_sq = radial_m * radial_m + dz_m * dz_m;
+  const double cos_diff = (dist_sq - l1_m * l1_m - l2_m * l2_m) / (2.0 * l1_m * l2_m);
+  if (!std::isfinite(cos_diff) || cos_diff < -1.0 - 1e-6 || cos_diff > 1.0 + 1e-6) {
+    return false;
+  }
+  const double clamped_cos = std::max(-1.0, std::min(1.0, cos_diff));
+  const double delta = std::acos(clamped_cos);  // theta3 - theta2 >= 0 (elbow-up branch)
+
+  const double k1 = l1_m + l2_m * std::cos(delta);
+  const double k2 = l2_m * std::sin(delta);
+  const double alpha = std::atan2(radial_m, dz_m);
+  const double gamma = std::atan2(k2, k1);
+
+  const double theta2 = alpha - gamma;
+  const double theta3 = theta2 + delta;
+  double theta4 = target.phi_rad - theta1;
+  if (normalize_wrist) {
+    theta4 = normalizeWristAngle(theta4);
+  }
+
+  out_theta = {theta1, theta2, theta3, theta4};
+  return isFiniteState(out_theta);
+}
+
 bool JointBounds::contains(const State & q, double tolerance) const
 {
   if (q.size() != kDof || lower.size() != kDof || upper.size() != kDof) {

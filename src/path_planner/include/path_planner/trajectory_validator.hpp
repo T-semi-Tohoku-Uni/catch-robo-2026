@@ -17,6 +17,7 @@ namespace path_planner
 {
 struct ValidatorConfig
 {
+  std::size_t active_axes{4};
   JointBounds bounds{{-kPi, -kPi, -kPi, -kPi}, {kPi, kPi, kPi, kPi}};
   State max_velocity{1.0, 1.0, 1.0, 1.0};
   State max_acceleration{1.0, 1.0, 1.0, 1.0};
@@ -75,6 +76,7 @@ public:
     std::shared_ptr<const StateValidator> state_validator,
     std::shared_ptr<const RneaDynamicsModel> dynamics = nullptr);
 
+  /// Discrete sample checks do not certify continuous-time physical motion.
   ValidationReport validate(
     const TimedTrajectory & trajectory,
     const State & expected_start,

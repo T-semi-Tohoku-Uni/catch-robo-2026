@@ -9,8 +9,8 @@
 #include <thread>
 
 CanBridge::CanBridge(
-    const std::string &interface_name, SocketMode socket_mode, int tx_retry_timeout_ms)
-: ifname(interface_name), tx_retry_timeout_(tx_retry_timeout_ms), sock(-1)
+    const std::string &interface_name, SocketMode socket_mode, int tx_retry_timeout_ms, bool brs)
+: ifname(interface_name), tx_retry_timeout_(tx_retry_timeout_ms), sock(-1), brs_(brs)
 {
     if (tx_retry_timeout_ms < 0 || tx_retry_timeout_ms > 1000)
     {
@@ -120,7 +120,7 @@ void CanBridge::send_bytes(int canid, const std::vector<uint8_t> &txdata_b)
     canfd_frame frame{};
     frame.can_id = canid;
     frame.len = byte_length;
-    frame.flags = 0;
+    frame.flags = brs_ ? CANFD_BRS : 0;
 
     if (byte_length > 0)
     {

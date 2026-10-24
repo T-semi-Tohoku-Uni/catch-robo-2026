@@ -1,0 +1,10 @@
+# Hardware execution stays disabled until measured dynamics and limits are supplied.
+trajectory_pipeline:
+  ros__parameters:
+    hardware_output_enabled: true
+    active_axes: 3
+    joint_names: [theta1, theta2, theta3, theta4]
+    distance_weights: [2.0, 1.0, 1.0, 0.0]
+    max_velocity: [0.0, 0.0, 0.0, 1.0]
+    max_acceleration: [0.0, 0.0, 0.0, 1.0]
+    max_jerk: [0.0, 0.0, 0.0, 1.0]

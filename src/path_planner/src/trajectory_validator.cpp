@@ -141,6 +141,12 @@ ValidationReport TrajectoryValidator::validate(
       return report;
     }
   }
+  if(pts.front().time!=0.0) {report.failure=FailureCode::kInvalidInput;report.message="Trajectory must start at zero time";return report;}
+  for(const auto &point:pts) for(size_t j=config_.active_axes;j<kDof;++j) {
+    if(point.position[j]!=0.0 || point.velocity[j]!=0.0 || point.acceleration[j]!=0.0 || point.jerk[j]!=0.0) {
+      report.failure=FailureCode::kJointLimitViolation;report.message="Fixed axis must have zero position and derivatives";return report;
+    }
+  }
   report.duration = pts.back().time - pts.front().time;
 
   // 7. 始点・終点、および指定された始終端速度・加速度との一致（仕様書 第12.2節 7項）
@@ -198,6 +204,10 @@ ValidationReport TrajectoryValidator::validate(
     if (i + 1 < n) {
       const double dt = pts[i + 1].time - p.time;
       for (std::size_t j = 0; j < kDof; ++j) {
+        if(std::abs((pts[i+1].position[j]-p.position[j])/dt)>config_.max_velocity[j]+1e-4 ||
+           std::abs((pts[i+1].velocity[j]-p.velocity[j])/dt)>config_.max_acceleration[j]+1e-4) {
+          report.failure=FailureCode::kJointLimitViolation;report.message="Discrete trajectory differences violate velocity/acceleration limits";return report;
+        }
         const double diff_jerk = (pts[i + 1].acceleration[j] - p.acceleration[j]) / dt;
         if (std::abs(diff_jerk) > config_.max_jerk[j] + 1e-4) {
           report.failure = FailureCode::kJointLimitViolation;
@@ -205,6 +215,43 @@ ValidationReport TrajectoryValidator::validate(
             std::to_string(j) + " at t=" + std::to_string(p.time);
           return report;
         }
+      }
+    }
+  }
+
+  // Validate derivatives of the commanded position samples, independently of declared rates.
+  std::vector<State> slopes, accelerations;
+  std::vector<double> slope_times, acceleration_times;
+  slopes.push_back(pts.front().velocity);
+  slope_times.push_back(pts.front().time);
+  for(size_t i=0;i+1<n;++i) {
+    const double dt=pts[i+1].time-pts[i].time;
+    State slope(kDof);
+    for(size_t j=0;j<kDof;++j) slope[j]=(pts[i+1].position[j]-pts[i].position[j])/dt;
+    slopes.push_back(slope);slope_times.push_back((pts[i].time+pts[i+1].time)*.5);
+  }
+  slopes.push_back(pts.back().velocity);
+  slope_times.push_back(pts.back().time);
+  accelerations.push_back(pts.front().acceleration);
+  acceleration_times.push_back(pts.front().time);
+  for(size_t i=0;i+1<slopes.size();++i) {
+    const double dt=slope_times[i+1]-slope_times[i];State acceleration(kDof);
+    for(size_t j=0;j<kDof;++j) {
+      acceleration[j]=(slopes[i+1][j]-slopes[i][j])/dt;
+      if(!std::isfinite(acceleration[j]) || std::abs(acceleration[j])>config_.max_acceleration[j]+1e-4) {
+        report.failure=FailureCode::kJointLimitViolation;report.message="Position slopes violate acceleration limit";return report;
+      }
+    }
+    accelerations.push_back(acceleration);acceleration_times.push_back((slope_times[i]+slope_times[i+1])*.5);
+  }
+  accelerations.push_back(pts.back().acceleration);
+  acceleration_times.push_back(pts.back().time);
+  for(size_t i=0;i+1<accelerations.size();++i) {
+    const double dt=acceleration_times[i+1]-acceleration_times[i];
+    for(size_t j=0;j<kDof;++j) {
+      const double jerk=(accelerations[i+1][j]-accelerations[i][j])/dt;
+      if(!std::isfinite(jerk) || std::abs(jerk)>config_.max_jerk[j]+1e-4) {
+        report.failure=FailureCode::kJointLimitViolation;report.message="Position slopes violate jerk limit";return report;
       }
     }
   }

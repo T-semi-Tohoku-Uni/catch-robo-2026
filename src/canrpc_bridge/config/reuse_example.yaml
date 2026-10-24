@@ -1,0 +1,50 @@
+schema_version: 1
+project: conveyor_demo
+local_node: 17
+bus:
+  interface: vcan_demo
+  configure: false
+  nominal_bitrate: 500000
+  data_bitrate: 1000000
+  brs: true
+  non_blocking: true
+  tx_retry_timeout_ms: 8
+timing:
+  priority: 3
+  announce_priority: 2
+  announce_period_ms: 100
+  peer_timeout_ms: 500
+  poll_period_ms: 3
+  rx_budget: 16
+reset:
+  targets: [42, 77]
+  timeout_sec: 5.0
+  request_window_ms: 800
+  max_window_ms: 1500
+  retry_interval_ms: 100
+  retry_window_ms: 600
+  execution_timeout_ms: 200
+nodes:
+  supervisor: {id: 17, reset_sources: []}
+  conveyor: {id: 42, reset_sources: [17]}
+  sensor_hub: {id: 77, reset_sources: [17]}
+routes:
+  - {name: velocity, direction: tx, topic: conveyor/set_velocity, subject: 785, type: float32, count: 2, priority: 1, finite: true, min: -20, max: 20}
+  - {name: position, direction: rx, topic: conveyor/position, subject: 786, source: 42, type: float32, count: 2, require_peer: true, finite: true}
+  - {name: counters, direction: rx, topic: sensors/counters, subject: 1105, source: 77, type: int32, count: 4, require_peer: true}
+  - {name: lamps, direction: tx, topic: conveyor/lamps, subject: 1377, type: uint8, count: 9, priority: 5}
+  - {name: status, direction: rx, topic: conveyor/status, subject: 1378, source: 42, type: uint8, count: 9, require_peer: true}
+
+rpc:
+  ros_service: canrpc/call
+  retry_interval_ms: 100
+  retry_window_ms: 300
+  query_interval_ms: 100
+  response_timeout_ms: 1000
+  result_retention_ms: 3000
+  tag_guard_ms: 5000
+  max_frame_age_ms: 250
+  cache_capacity: 8
+rpc_endpoints:
+  - {name: conveyor_set, destination: 42, service: 3, request_bytes: 9, response_bytes: 9, require_ready: true}
+  - {name: sensor_ready, destination: 77, service: 5, request_bytes: 0, response_bytes: 8, require_ready: false}

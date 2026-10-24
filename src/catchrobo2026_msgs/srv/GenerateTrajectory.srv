@@ -1,0 +1,15 @@
+# Request: start/goal joint states [theta1, theta2, theta3], optional payload, and RNG seed.
+sensor_msgs/JointState start
+sensor_msgs/JointState goal
+Payload payload
+uint32 seed 0
+---
+# Response: validated timed trajectory and theta1 torque diagnostics (spec section 13.1).
+string request_id
+bool success
+uint16 failure_code
+string message
+trajectory_msgs/JointTrajectory trajectory
+float64 theta1_peak_torque
+float64 theta1_rms_torque
+float64 minimum_torque_margin

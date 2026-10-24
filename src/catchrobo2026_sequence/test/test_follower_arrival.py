@@ -63,6 +63,8 @@ def arrival_rig(tmp_path, monkeypatch):
 
 
 class JointStreams:
+    """Publish physical XYZ joints from legacy IK fixture constants."""
+
     def __init__(self, rig, initial, publish_commands=True):
         self.rig = rig
         self.current_values = list(initial)
@@ -77,10 +79,10 @@ class JointStreams:
 
     def publish(self):
         if self.current_enabled:
-            self.current.publish(Float32MultiArray(data=self.current_values))
+            self.current.publish(Float32MultiArray(data=self.current_values[:3] if len(self.current_values) == 4 else self.current_values))
             self.current_publications += 1
         if self.command is not None:
-            self.command.publish(Float32MultiArray(data=self.command_values))
+            self.command.publish(Float32MultiArray(data=self.command_values[:3] if len(self.command_values) == 4 else self.command_values))
             self.command_publications += 1
 
     def close(self):
@@ -115,6 +117,8 @@ def assert_succeeded(rig, result):
     wrapped = rig.resolve(result)
     assert wrapped.status == GoalStatus.STATUS_SUCCEEDED
     assert wrapped.result.success
+    assert rig.lease_events[0] == 0 and rig.lease_events[-1] == 2
+    assert rig.lease_token == 0
 
 
 @pytest.mark.parametrize('travel_mm', [10.0, 25.0])

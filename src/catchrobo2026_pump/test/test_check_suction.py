@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import struct
 import tempfile
 import time
 import uuid
@@ -12,6 +13,7 @@ import rclpy
 from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Int32MultiArray, MultiArrayDimension
 
+from canrpc_bridge.srv import Call
 from catchrobo2026_msgs.srv import CheckSuction, PumpControl
 
 
@@ -36,6 +38,11 @@ class PumpHarness:
         self.log = tempfile.TemporaryFile(mode='w+t')
         self.process = subprocess.Popen(command, stdout=self.log, stderr=subprocess.STDOUT)
         self.node = rclpy.create_node('pressure_test_client', namespace=self.namespace)
+        def acknowledge(request, response):
+            response.outcome = 0
+            response.data = list(struct.pack('<I', 0) + bytes(request.data))
+            return response
+        self.rpc = self.node.create_service(Call, 'canrpc/call', acknowledge)
         self.check = self.node.create_client(CheckSuction, 'check_suction')
         self.set_pump = self.node.create_client(PumpControl, 'set_pump_state')
         self.pressure = self.node.create_publisher(
@@ -43,12 +50,12 @@ class PumpHarness:
         self.output = []
         self.subscription = self.node.create_subscription(
             Int32MultiArray, 'pump_state',
-            lambda msg: self.output.append((time.monotonic(), msg.data[0])), 100)
+            lambda msg: self.output.append((time.monotonic(), msg.data[0])) if msg.data else None, 100)
         try:
             assert self.check.wait_for_service(timeout_sec=8.0)
             assert self.set_pump.wait_for_service(timeout_sec=8.0)
             self.wait_until(lambda: self.pressure.get_subscription_count() == 1)
-            self.wait_until(lambda: bool(self.output))
+            self.spin_for(0.15)
         except BaseException:
             self.close()
             raise
@@ -124,7 +131,7 @@ def ros_context():
 def pump(ros_context):
     harness = PumpHarness({
         'pressure_comparison': 'ge', 'max_pending_suction_checks': 2,
-        'initial_state': 0, 'valve_on_level': 'true',
+        'valve_on_level': 'true',
         'use_sim_time': 'true',
     })
     try:
@@ -227,7 +234,7 @@ def test_concurrent_limit_independent_masks_and_reusable_slots(pump):
     assert pump.result(future).success
 
 
-def test_monitor_keeps_pump_publication_and_setter_running(pump):
+def test_monitor_keeps_rpc_setter_running_without_periodic_output(pump):
     baseline = pump.result(pump.set_pump.call_async(
         PumpControl.Request(left=0, center=0, right=0)))
     assert baseline.success
@@ -242,8 +249,7 @@ def test_monitor_keeps_pump_publication_and_setter_running(pump):
     response = pump.result(future)
     assert not response.success and response.timed_out
     readings = pump.output[start_count:]
-    assert len(readings) >= 30, '100 Hz publication stalled during service wait'
-    assert max(b[0] - a[0] for a, b in zip(readings, readings[1:])) < 0.15
+    assert len(readings) == 1, 'confirmed state must be event-only, never a periodic CAN command'
     assert readings[-1][1] == 6, 'monitoring must not alter pump outputs'
 
 
@@ -301,9 +307,12 @@ def test_invalid_startup_configuration_is_rejected(ros_context, tmp_path, name, 
 
 
 @pytest.mark.parametrize('selected', [1, 2, 3])
-def test_only_selected_collector_can_be_active_on_boot_or_direct_service(ros_context, selected):
-    harness = PumpHarness({'selected_pump': selected, 'initial_state': 1})
+def test_only_selected_collector_can_be_active_on_direct_service(ros_context, selected):
+    harness = PumpHarness({'selected_pump': selected})
     try:
+        assert not harness.output
+        assert harness.result(harness.set_pump.call_async(
+            PumpControl.Request(left=1, center=1, right=1))).success
         expected = 63 & ~(1 << (selected - 1))
         harness.wait_until(lambda: harness.output[-1][1] == expected)
         assert all(value == expected for _, value in harness.output)

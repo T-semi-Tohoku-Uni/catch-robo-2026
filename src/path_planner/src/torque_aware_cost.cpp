@@ -32,8 +32,8 @@ TorqueAwareCost::TorqueAwareCost(
     throw std::invalid_argument("distance_weights must have 4 elements");
   }
   for (double w : distance_weights_) {
-    if (!std::isfinite(w) || w <= 0.0) {
-      throw std::invalid_argument("distance_weights must be > 0");
+    if (!std::isfinite(w) || w < 0.0) {
+      throw std::invalid_argument("distance_weights must be >= 0");
     }
   }
   if (norm_.path_length_ref <= 0.0 || norm_.theta1_motion_ref <= 0.0 ||

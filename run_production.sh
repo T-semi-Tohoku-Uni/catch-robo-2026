@@ -24,7 +24,8 @@ ROS選択順: ROBOT_ROS_DISTRO → ROS_DISTRO → /opt/ros内の唯一の環境�
 引数一覧: ros2 launch launch/production.launch.py --show-args
 ビルドは自動実行しません。
 CAN設定はlaunchに集約し、CAN-RPCで全3MCUを初期化して新世代READYを待ちます。
-初期化待機時間は startup_timeout_sec:=30.0 で変更できます。
+CANRPC設定は canrpc_config:=/absolute/project.yaml で差し替えます。
+初期化待機時間は設定ファイルを使い、startup_timeout_sec:=30.0 で明示上書きできます。
 USAGE
     exit 0
 fi

@@ -176,10 +176,34 @@ void testObstacleDetourAndUnreachableAndBounds()
   EXPECT_FALSE(r_unreach);
   EXPECT_EQ(r_unreach.failure, FailureCode::kPlanningFailed);
 }
+class FixedAxisDetourValidator : public StateValidator {
+public:
+  bool isStateValid(const State &q) const override {
+    return isFiniteState(q) && q[3]==0 && std::abs(q[0])<=2 && std::abs(q[1])<=2 &&
+      std::abs(q[2])<=2 && !(std::abs(q[0])<.2 && q[1]<.4);
+  }
+  bool isMotionValid(const State &a,const State &b) const override {
+    for(int i=0;i<=200;++i) {State q(kDof);for(size_t j=0;j<kDof;++j) q[j]=a[j]+(b[j]-a[j])*i/200.;if(!isStateValid(q)) return false;}
+    return true;
+  }
+  double clearance(const State &) const override {return 1;}
+};
+void testFixedAxisSamplingDetour() {
+  RrtConnectConfig cfg;cfg.active_axes=3;cfg.bounds={{-2,-2,-2,0},{2,2,2,0}};
+  cfg.distance_weights={2,1,1,0};cfg.step_size=.2;
+  auto validator=std::make_shared<FixedAxisDetourValidator>();RrtConnect planner(cfg,validator);
+  const State start{-1,0,0,0},goal{1,0,0,0};EXPECT_FALSE(validator->isMotionValid(start,goal));
+  const auto result=planner.plan(start,goal,42);EXPECT_TRUE(result);
+  for(const auto &q:result.path) EXPECT_EQ(q[3],0);
+  for(size_t i=1;i<result.path.size();++i) EXPECT_TRUE(validator->isMotionValid(result.path[i-1],result.path[i]));
+  EXPECT_TRUE(planner.weightedDistance(start,goal)>0);
+}
+
 }  // namespace
 
 int main()
 {
+  testFixedAxisSamplingDetour();
   testPrimitiveCollisionDistances();
   testStraightLineAndSeedDeterminism();
   testObstacleDetourAndUnreachableAndBounds();

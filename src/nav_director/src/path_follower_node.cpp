@@ -22,6 +22,9 @@
 // 提供された運動学ライブラリと独自メッセージ
 #include "ros2_inverse_kinematics/robot_kinematics.h"
 #include "catchrobo2026_msgs/action/follow_route.hpp"
+#include "catchrobo2026_msgs/srv/arm_command_lease.hpp"
+
+using namespace std::chrono_literals;
 
 using FollowRoute = catchrobo2026_msgs::action::FollowRoute;
 using GoalHandleFollowRoute = rclcpp_action::ServerGoalHandle<FollowRoute>;
@@ -62,6 +65,11 @@ public:
             
         sub_current_joints_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
             "current_joints", 10, std::bind(&PathFollowerNode::jointCallback, this, std::placeholders::_1));
+
+        lease_release_timeout_sec_ = declare_parameter("lease_release_timeout_sec", 2.0);
+        if (!std::isfinite(lease_release_timeout_sec_) || lease_release_timeout_sec_ <= 0)
+            throw std::invalid_argument("Invalid lease release timeout");
+        lease_client_ = create_client<catchrobo2026_msgs::srv::ArmCommandLease>("arm_target/route_lease");
 
         // アクションサーバーの初期化 (20Hzでの制御ループ用)
         action_server_ = rclcpp_action::create_server<FollowRoute>(
@@ -188,8 +196,12 @@ private:
         if (worker_.joinable()) worker_.join();
         worker_ = std::thread([this, goal_handle, path = std::move(accepted_path_)]() {
             try {
+                acquireLease();
                 executeLoop(goal_handle, path);
+                releaseLease();
             } catch (const std::exception &error) {
+                // Never publish further poses after ownership becomes uncertain.
+                try { releaseLease(); } catch (...) {}
                 RCLCPP_ERROR(get_logger(), "Route execution failed: %s", error.what());
                 if (rclcpp::ok() && goal_handle->is_active()) {
                     auto result = std::make_shared<FollowRoute::Result>();
@@ -242,8 +254,10 @@ private:
         auto last_update = std::chrono::steady_clock::now();
 
         while (rclcpp::ok() && !stopping_) {
+            if (std::chrono::steady_clock::now() >= lease_renew_at_) renewLease();
             if (goal_handle->is_canceling()) {
                 result->success = false;
+                releaseLease();
                 busy_ = false;
                 goal_handle->canceled(result);
                 return;
@@ -379,6 +393,7 @@ private:
                 std::cos(target_yaw - current_posrot[3]));
             if (targeting_final && joint_goal_reached && goal_distance <= 30.0) {
                 result->success = true;
+                releaseLease();
                 busy_ = false;
                 goal_handle->succeed(result);
                 RCLCPP_INFO(this->get_logger(), "Reached the end of the path with correct XYZ position and three joint angles.");
@@ -427,6 +442,7 @@ private:
                 final_target_joints = finalTargetJoints(target_pose_msg.pose);
             }
 
+            if (steadyNs() >= lease_expires_ns_) throw std::runtime_error("Route lease expired before pose publication");
             pub_target_pose_->publish(target_pose_msg);
             if (targeting_final && !final_target_sent) {
                 // Require feedback received after this command was sent or accepted.
@@ -459,6 +475,45 @@ private:
             loop_rate.sleep();
         }
     }
+
+    using Lease = catchrobo2026_msgs::srv::ArmCommandLease;
+    static uint64_t steadyNs() {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+    void leaseCall(uint8_t operation) {
+        if (!lease_client_->service_is_ready()) throw std::runtime_error("Arm owner service unavailable");
+        auto request = std::make_shared<Lease::Request>();
+        request->operation = operation; request->token = lease_token_;
+        request->deadline_steady_ns = steadyNs() + (operation == Lease::Request::RELEASE ? uint64_t(lease_release_timeout_sec_ * 1e9) : 200000000ULL);
+        auto future = lease_client_->async_send_request(request);
+        const auto wait = std::chrono::duration<double>(operation == Lease::Request::RELEASE ? lease_release_timeout_sec_ : 0.2);
+        if (future.wait_for(wait) != std::future_status::ready) {
+            lease_client_->remove_pending_request(future.request_id);
+            throw std::runtime_error("Arm ownership response deadline exceeded");
+        }
+        const auto reply = future.get();
+        if (!reply->success || (operation != Lease::Request::ACQUIRE && reply->token && reply->token != lease_token_))
+            throw std::runtime_error("Arm ownership rejected: " + reply->message);
+        if (operation != Lease::Request::RELEASE) {
+            if (!reply->token || reply->expires_steady_ns <= steadyNs()) throw std::runtime_error("Arm lease already expired");
+            lease_token_ = reply->token;
+            lease_expires_ns_ = reply->expires_steady_ns;
+            lease_renew_at_ = std::chrono::steady_clock::now() + 100ms;
+        }
+    }
+    void acquireLease() { leaseCall(Lease::Request::ACQUIRE); }
+    void renewLease() { leaseCall(Lease::Request::RENEW); }
+    void releaseLease() {
+        if (!lease_token_) return;
+        try { leaseCall(Lease::Request::RELEASE); }
+        catch (...) { lease_token_ = 0; throw; }
+        lease_token_ = 0;
+    }
+    rclcpp::Client<Lease>::SharedPtr lease_client_;
+    uint64_t lease_token_ = 0, lease_expires_ns_ = 0;
+    double lease_release_timeout_sec_ = 2.0;
+    std::chrono::steady_clock::time_point lease_renew_at_;
 
     robot_kinematics kin_; // 運動学クラスのインスタンス
     

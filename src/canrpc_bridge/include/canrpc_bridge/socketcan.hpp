@@ -31,7 +31,7 @@ public:
     CanBridge(
         const std::string &interface_name,
         SocketMode socket_mode,
-        int tx_retry_timeout_ms = 5);
+        int tx_retry_timeout_ms, bool brs);
     ~CanBridge();
     void send_bytes(int canid, const std::vector<uint8_t> &txdata_b);
     bool receive_data(RxData_struct &out);
@@ -42,5 +42,6 @@ private:
     const std::string ifname;
     const std::chrono::milliseconds tx_retry_timeout_;
     int sock;
+    const bool brs_;
     void send_frame(const canfd_frame &frame);
 };

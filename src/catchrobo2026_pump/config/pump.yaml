@@ -9,9 +9,6 @@ pump_controller_node:
     pump_on_level: false
     valve_on_level: false
 
-    # Startup state for every collector: release=-1, off=0, suction=1.
-    initial_state: 0
-
     # Pressure sensor array indices in L/C/R order; confirm the physical mapping.
     pressure_indices: [0, 1, 2]
     pressure_threshold: 300

@@ -26,6 +26,7 @@ namespace path_planner
 {
 struct RrtConnectConfig
 {
+  std::size_t active_axes{4};
   JointBounds bounds{{-kPi, -kPi, -kPi, -kPi}, {kPi, kPi, kPi, kPi}};
   State distance_weights{2.0, 1.0, 1.0, 1.0};
   double step_size{0.10};

@@ -1,93 +1,32 @@
-# 学祭のポンプ選択
+# ポンプ制御
 
-[config/festival.yaml](config/festival.yaml)の`selected_pump: 1..3`が、UI・Joy・sequence・pumpで共有する選択値です。すべてのlaunchで同じ`festival_config`を渡してください。既定`1`は変更可能な仮値で、実機の物理L/C/Rは未確定です。変更後は関係する全ノードの再起動が必要です。
+`set_pump_state`はCAN-RPCの`pump_set`を呼び、MCUの適用結果を待って応答します。`success=true`はremote resultがAPPLIEDかつ適用maskが要求と一致した場合だけです。吸着成功、配線、実電圧の保証ではありません。未応答、拒否、世代変更、結果不一致はfalseで、後続動作へ進めません。executorは待機中も圧力購読と他サービスを処理します。同時ポンプ要求はqueueせず拒否します。
 
-| 選択値 | PumpControlフィールド | 既定pump bit | 既定valve bit | 既定圧力配列index |
-| --- | --- | --- | --- | --- |
-| 1 | left | 0 | 3 | 0 |
-| 2 | center | 1 | 4 | 1 |
-| 3 | right | 2 | 5 | 2 |
+起動時の自動出力はありません。旧`initial_state`、100Hz `pump_state`指令配信は撤去しています。再起動や失敗時にもOFFを推測送信しません。
 
-表は[config/pump.yaml](config/pump.yaml)の論理スロット順です。`pump_bits`、`valve_bits`、`pressure_indices`で変更でき、実配線の確認結果ではありません。`pump_state`はポンプ3bit＋弁3bitの既存6bit形式を維持します。既定の極性では全OFF=63、選択1/2/3の吸引は62/61/59、開放は55/47/31です。ポンプ・弁の通電極性とMCUの解釈は既存設定を使います。
+使用ポンプは[festival.yaml](config/festival.yaml)の`selected_pump: 1..3`です。各PumpControl要求はleft/center/rightの3値（開放=-1、OFF=0、吸引=1）を検証し、選択チャネルだけを採用、非選択はOFFにした絶対maskを送ります。これらのROSスロットと物理L/C/Rの対応は未確認です。
 
-起動時も直接`set_pump_state`が3スロットを指定した場合も、非選択スロットは常にOFFを保持します。選択スロットの値だけを採用し、各値が-1/0/1以外の不正requestは全体を拒否します。`check_suction`は出力を変更しない既存診断APIとして残り、要求maskの圧力を読みます。
+[pump.yaml](config/pump.yaml)の`pump_bits`/`valve_bits`とON極性を保持します。既定の両ON極性falseでは全OFF=63、選択1/2/3の吸引=62/61/59、開放=55/47/31です。MCUは既存のactive-low GPIO規約で適用します。
 
-以下は既存6bit通信・吸引判定APIの説明です。複数スロットを指定する例でも、現在の出力は上記の選択1スロットに制限されます。
+| パラメータ | 既定 | 意味 |
+|---|---|---|
+| `canrpc_service` | `canrpc/call` | profileの`rpc.ros_service`へ接続 |
+| `pump_rpc_endpoint` | `pump_set` | bridgeで宛先/serviceを解決するendpoint名 |
+| `rpc_timeout_sec` | `1.5` | ROS側の応答待ち上限、単調時計 |
+| `selected_pump` | `1` | 使用スロット1..3 |
+| `pump_bits` / `valve_bits` | `[0,1,2]` / `[3,4,5]` | 6bit内の重複しない割当 |
+| `pump_on_level` / `valve_on_level` | `false` / `false` | 論理ONのCAN bit値 |
 
-# catchrobo2026_pump
+学祭・手動・pump launchは`canrpc_config`からservice名と待ち期限を伝播します。RPC応答期限+0.5秒をapp、+1秒をJoy/UI、最低3秒をsequenceに用います。直起動する場合は同等の値を明示してください。起動例は `ros2 launch catchrobo2026_pump pump.launch.py canrpc_config:=/absolute/profile.yaml` です。
 
-3つの回収機構のポンプ・電磁弁を操作するROS 2パッケージ。
-`pump_controller_node` がL/C/Rそれぞれの開放・オフ・吸引状態を保持し、マイコン向けの6bit指令へ変換します。
-
-## 起動
-
-ワークスペースをビルドして `source install/setup.bash` を実行した後、単独起動できます。
-
-```bash
-ros2 launch catchrobo2026_pump pump.launch.py
-```
-
-手動パッケージの `main.launch.py` と `handoperated.launch.py` からも、このノードが起動します。
-3つのlaunchは共通の [config/pump.yaml](config/pump.yaml) を読み込みます。
-実機調整用ファイルを指定する場合は、次のように起動します。
-
-```bash
-ros2 launch catchrobo2026_pump pump.launch.py pump_config:=/absolute/path/to/pump.yaml
-```
-
-`pump_config` は手動パッケージの両launchでも指定できます。
-設定は起動時に読み込むため、変更後はノードを再起動してください。
-ソース側のYAMLを編集した場合は再ビルドするか、そのファイルを `pump_config` に直接指定します。
-
-## 操作API
-
-サービス: `/set_pump_state`、型: `catchrobo2026_msgs/srv/PumpControl`。
-
-| フィールド | 意味 |
-|---|---|
-| `left` / `center` / `right` | L/C/Rそれぞれの状態を `int8` で指定 |
-| 応答 `success` | 状態更新を受理したか |
-
-| 値 | 定数 | 動作 | 内部のポンプ出力 | 内部の電磁弁出力 |
-|---|---|---|---|---|
-| `-1` | `RELEASE` | 開放 | OFF | ON |
-| `0` | `OFF` | オフ | OFF | OFF |
-| `1` | `SUCTION` | 吸引 | ON | OFF |
-
-1回の要求で3機構を全て更新します。**0はオフ指令であり、前の状態を保持する指定ではありません。**
-状態を変えない機構にも、維持したい値を送ってください。
-いずれかの値が `-1`・`0`・`1` 以外なら要求全体を拒否し、3機構とも元の状態を保持します。
-
-シーケンサは各ポンプ手順で、UIが選んだ機構に設定された開放・オフ・吸引の値を送り、非選択機構には必ずオフ（0）を送ります。現在の指令状態の読出しは行いません。
-
-Lを吸引、Cをオフ、Rを開放:
-
-```bash
-ros2 service call /set_pump_state catchrobo2026_msgs/srv/PumpControl \
-  '{left: 1, center: 0, right: -1}'
-```
-
-全機構をオフ:
-
-```bash
-ros2 service call /set_pump_state catchrobo2026_msgs/srv/PumpControl \
-  '{left: 0, center: 0, right: 0}'
-```
-
-旧 `command` および `collector_mask`・`pump_on`・`valve_on` のAPIは廃止しました。
-外部クライアントも新しい要求型へ更新し、再ビルドしてください。
-Joyの〇ボタンは、全3項目に同じ値を送り「開放 → オフ → 吸引」の順に操作します。
-YAMLを指定しない直接起動では起動時が吸引56で、ボタンを押すごとに `7 → 63 → 56` と巡回します。
-同梱 `pump.yaml` は実機調整により `valve_on_level: true`・`initial_state: 0` に変更されており、起動時はオフ7です。
-手動側の巡回位置はサービス成功時に進みます。別クライアントの操作やポンプノードの再起動とは同期しません。
-応答が1秒以内に届かなければ巡回位置を進めず、次のボタン操作で同じ要求を再試行します。
+`pump_state`は指令入力ではなく適用確認の状態出力（Int32MultiArray）です。MCU APPLIED後だけ`[mask]`を1回配信し、要求待ち/不明は空配列を配信します。確認済みの値をheartbeatで再配信しません。UIは「適用確認」「適用不明」「確認期限切れ」を区別し、静的出力でも確認サンプルが既定1秒を超えればstaleになります。継続した実GPIO監視ではありません。bridgeの旧pump PUBLISH TX routeは廃止しています。
 
 ## 空気圧による吸引判定
 
 サービス: `/check_suction`、型: `catchrobo2026_msgs/srv/CheckSuction`。
 このサービスは空気圧の監視だけを行い、ポンプ・電磁弁の出力を変更しません。
 吸引開始は従来どおり `/set_pump_state` へ指示します。
-監視中も100 Hzの出力配信とポンプ操作、圧力購読を継続します。
+監視中もRPCポンプ操作と圧力購読を継続します。周期出力指令は送信しません。
 
 CAN-RPC Subject `0x406`（Source Node 4）の3個のlittle-endian 32bit整数は、ブリッジで
 `pressure_sensor`（`std_msgs/msg/Int32MultiArray`）へ変換済みです。
@@ -139,86 +78,4 @@ CAN-RPC Subject `0x406`（Source Node 4）の3個のlittle-endian 32bit整数は
 ```bash
 ros2 service call /check_suction catchrobo2026_msgs/srv/CheckSuction \
   '{collector_mask: 7, timeout_sec: 2.0}'
-```
-
-## CAN指令と実機調整
-
-出力は `/pump_state`（`std_msgs/msg/Int32MultiArray`、要素1個）、100 Hz。
-`canrpc_bridge` がCAN-RPC Subject `0x401`、Source Node 1の4バイトlittle-endian整数として送ります。
-
-[PumpCommand](include/catchrobo2026_pump/pump_command.hpp) は `union` で32bit整数 `raw` と、
-MCU出力番号に対応する `pump1..3` / `valve1..3` のビットフィールドを表します。
-上位26bitは0です。L/C/Rの状態は起動設定に従って各フィールドへ割り当てます。
-トピックにはホスト順の整数を渡し、ブリッジの `canrpc_put_u32()` でlittle-endianへ変換します。
-たとえば吸引56の送信データは `38 00 00 00` です。
-
-ビットフィールドの配置は対象ABIに依存し、`union` の別メンバからの読出しには
-[GCCの拡張](https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html#index-fstrict-aliasing)を使用します。
-宣言順はホストのエンディアンで切り替え、サイズはコンパイル時に確認します。
-コンパイラやCPUを変更した場合は、6ビット全64通りの整数値との対応も確認してください。
-
-2026-09-06に確認したマイコンソース:
-`../supplementary/catchrobo2026_pump/Core/Src/main.c`（ワークスペースルートからの相対パス）。
-受信コールバックと `setPumpState()` / `setSolenoState()` の対応は以下です。
-
-| CANビット | マイコン機能 | GPIO |
-|---|---|---|
-| bit0 / bit1 / bit2 | Pump1 / Pump2 / Pump3 | PC7 / PC8 / PC9 |
-| bit3 / bit4 / bit5 | 電磁弁1 / 電磁弁2 / 電磁弁3 | PC10 / PC11 / PC12 |
-
-マイコンは受信bit=1をGPIO Low、bit=0をGPIO Highへ変換します。
-2026-09-06の指定により、GPIO Highでポンプ・電磁弁が通電する解釈を採用しています。
-実機のL/C/Rとの配線・配管対応や実動作は未検証です。
-
-| 起動パラメータ | ノード内既定値 | 調整内容 |
-|---|---|---|
-| `pump_bits` | `[0, 1, 2]` | L/C/Rの順に対応するポンプのCANビット番号 |
-| `valve_bits` | `[3, 4, 5]` | L/C/Rの順に対応する電磁弁のCANビット番号 |
-| `pump_on_level` | `false` | ポンプの論理ONをCAN bit=0（GPIO High）とする |
-| `valve_on_level` | `false` | 電磁弁の論理ONをCAN bit=0（GPIO High）とする |
-| `initial_state` | `1` | 全機構の起動時状態。開放 `-1`、オフ `0`、吸引 `1` |
-
-ビット割当は各3要素、全体で0〜5を重複なく指定します。
-たとえばLとRに割り当てるポンプのCANビットを入れ替えるなら `pump_bits: [2, 1, 0]` に変更できます。
-極性設定はCANビットの値を指し、GPIOのHigh/Lowを直接指定するものではありません。
-旧 `initial_pump_on` / `initial_valve_on` は `initial_state` へ置き換えています。
-
-ノード内既定設定での起動状態は全機構吸引、指令は56（`0b111000`）です。
-同梱YAMLの設定はこれと異なり、`valve_on_level=true`・`initial_state=0` により全機構オフの7を送ります。
-一方、確認したマイコンは起動時に全6出力をstate=1（GPIO Low、`0b111111`相当）に設定します。
-ROSノードが起動する前の状態は、このYAMLでは変更できません。
-
-`/pump_state` は指令値であり、`set_pump_state` の成功は実機動作や吸着の成功確認ではありません。
-空気圧による吸引成功の確認は上記の `check_suction` を使います。
-通信断時の実機出力変更・保持・停止動作は、この監視サービスでは扱いません。
-
-## main側の旧ポンプ実装との対応
-
-2026-09-06に確認した `main`（`1b2c19d`）は、旧APIの `command=1/2/3` を
-それぞれ生指令 `63/56/7` に変換します。起動値は56で、Joyの巡回は `56→7→63→56` です。
-このパッケージではL/C/Rの3状態APIを使い、ノード内既定の生指令を当時のmainに合わせています。
-
-既定ビット割当での設定と生指令の関係は以下です。
-
-| 論理状態 | 両ON極性 `true` | 両ON極性 `false`（ノード内既定） |
-|---|---|---|
-| オフ `0` | 0 | 63 |
-| 吸引 `1` | 7 | 56 |
-| 開放 `-1` | 56 | 7 |
-
-両ON極性を `false`、`initial_state: 1`、Joyの初回要求を開放に設定し、
-mainの起動値56と操作順 `56→7→63→56` に対応します。
-YAMLを指定せず直接ノードを起動した場合は、この既定設定になります。
-この対応は採用した制御仕様であり、実機での通電・吸着・開放の検証結果ではありません。
-
-## 検証
-
-`test/test_check_suction.py` は隔離ROS domainと専用namespaceで実ポンプノードへ模擬圧力を送ります。
-未受信・過去サンプル・閾値境界・部分成功・対応index・不正要求とフレーム・同時要求上限、
-監視中の配信と操作継続、ROS時刻停止中の期限、終了時の保留要求を確認します。
-CANや実機のセンサー・吸着動作を検証する試験ではありません。
-
-```bash
-colcon test --packages-select catchrobo2026_pump \
-  --ctest-args -R test_check_suction --output-on-failure
 ```

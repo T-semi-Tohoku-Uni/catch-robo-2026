@@ -6,6 +6,7 @@ from launch.substitutions import (
     FindExecutable,
     LaunchConfiguration,
     PathJoinSubstitution,
+    PythonExpression,
 )
 from launch_ros.actions import Node, PushRosNamespace, SetRemap
 from launch_ros.parameter_descriptions import ParameterValue
@@ -22,6 +23,9 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('config_mode', default_value='demo', choices=['demo', 'yaml']),
+        DeclareLaunchArgument('dynamics_config', default_value=''),
+        DeclareLaunchArgument('pipeline_config', default_value=''),
         DeclareLaunchArgument(
             'namespace', default_value='gakusai_preview',
             description='Namespace for preview topics and TF transport.'),
@@ -58,7 +62,9 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 'enable_demo_obstacle',
-                default_value='true',
+                default_value=PythonExpression([
+                    "'true' if '", LaunchConfiguration('config_mode'),
+                    "' == 'demo' else 'false'"]),
                 description='Place a spherical obstacle in the middle of the swing path.',
             ),
             DeclareLaunchArgument(
@@ -73,7 +79,9 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 'payload_mass',
-                default_value='0.40',
+                default_value=PythonExpression([
+                    "'0.40' if '", LaunchConfiguration('config_mode'),
+                    "' == 'demo' else '0.0'"]),
                 description='Payload mass at flange [kg].',
             ),
             DeclareLaunchArgument(
@@ -104,6 +112,9 @@ def generate_launch_description():
                 executable='trajectory_node',
                 name='trajectory_pipeline',
                 parameters=[{
+                    'config_mode': LaunchConfiguration('config_mode'),
+                    'dynamics_config': LaunchConfiguration('dynamics_config'),
+                    'pipeline_config': LaunchConfiguration('pipeline_config'),
                     'start_angles': LaunchConfiguration('start_angles'),
                     'goal_angles': LaunchConfiguration('goal_angles'),
                     'enable_demo_obstacle': LaunchConfiguration('enable_demo_obstacle'),

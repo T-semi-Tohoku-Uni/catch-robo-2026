@@ -305,10 +305,48 @@ void testStartupFailureWhenHardwareEnabledWithUnsetDynamics()
   EXPECT_EQ(hw_ready.operationMode(), OperationMode::kHardwareReady);
   EXPECT_TRUE(hw_ready.isHardwareOutputAllowed());
 }
+void testThreeAxisExecutionValidation()
+{
+  auto cfg=makeTestPipelineConfig();cfg.active_axes=3;
+  cfg.joint_bounds.lower[3]=cfg.joint_bounds.upper[3]=0;cfg.distance_weights[3]=0;
+  auto pipeline=std::make_shared<TrajectoryPipeline>(cfg,makeTestDynamicsConfig());
+  State start{.2,.3,.4,0},goal{.25,.3,.4,0};
+  const auto result=pipeline->execute(start,goal,42);
+  if(!result) std::cerr<<"fixed-axis pipeline: "<<result.message<<std::endl;
+  EXPECT_TRUE(result);
+  for(const auto &point:result.trajectory.points) {
+    EXPECT_EQ(point.position[3],0);EXPECT_EQ(point.velocity[3],0);
+    EXPECT_EQ(point.acceleration[3],0);EXPECT_EQ(point.jerk[3],0);
+  }
+  auto badgoal=goal;badgoal[3]=.01;EXPECT_FALSE(pipeline->execute(start,badgoal,42));
+  if(!result) return;
+  TrajectoryNode node(pipeline);node.follower()->updateCurrentJoints(start,1.0);
+  FollowTrajectoryGoalRequest direct;direct.start=true;
+  for(const auto &point:result.trajectory.points) {
+    JointTrajectoryPointMsg message;message.positions=point.position;message.velocities=point.velocity;
+    message.accelerations=point.acceleration;message.effort=point.torque;message.time_from_start_sec=point.time;
+    direct.trajectory.points.push_back(message);
+  }
+  FollowTrajectoryActionResult rejection;
+  EXPECT_TRUE(node.acceptFollowTrajectoryGoal(direct,1.0,&rejection));
+  pipeline->updateCollisionScene({});EXPECT_TRUE(node.stepFollowTrajectory(1.01).aborted);
+  node.follower()->updateCurrentJoints(start,2.0);
+  auto invalid=direct;invalid.trajectory.points.back().positions[3]=.01;
+  EXPECT_FALSE(node.acceptFollowTrajectoryGoal(invalid,2.0,&rejection));
+  invalid=direct;invalid.trajectory.points[1].time_from_start_sec=0;
+  EXPECT_FALSE(node.acceptFollowTrajectoryGoal(invalid,2.0,&rejection));
+  invalid=direct;invalid.trajectory.points.back().positions[0]=100;
+  EXPECT_FALSE(node.acceptFollowTrajectoryGoal(invalid,2.0,&rejection));
+  node.follower()->updateCurrentJoints(goal,3.0);
+  EXPECT_FALSE(node.acceptFollowTrajectoryGoal(direct,3.0,&rejection));
+  EXPECT_FALSE(node.acceptFollowTrajectoryGoal(direct,100.0,&rejection));
+}
+
 }  // namespace
 
 int main()
 {
+  testThreeAxisExecutionValidation();
   testStationaryAndSeedReproducibility();
   testFoldedTurnCandidateSelection();
   testLoweringTheta1TorqueLimitIncreasesDuration();

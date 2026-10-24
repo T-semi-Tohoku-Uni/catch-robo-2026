@@ -13,6 +13,7 @@
   <depend>rcl_interfaces</depend>
   <depend>std_msgs</depend>
   <depend>catchrobo2026_msgs</depend>
+  <depend>canrpc_bridge</depend>
 
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>
@@ -24,4 +25,5 @@
   <export>
     <build_type>ament_cmake</build_type>
   </export>
+  <test_depend>catchrobo2026_state_machine</test_depend>
 </package>

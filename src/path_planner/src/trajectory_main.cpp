@@ -223,20 +223,41 @@ public:
     const std::vector<double> default_goal{0.7582, 0.7605, 2.1702, -2.3290};
     const std::vector<double> default_obs_xyz{0.675, 0.490, 0.145};
 
+    const auto config_mode = declare_parameter<std::string>("config_mode", "demo");
     start_angles_ = this->declare_parameter<std::vector<double>>("start_angles", default_start);
     goal_angles_ = this->declare_parameter<std::vector<double>>("goal_angles", default_goal);
-    enable_demo_obstacle_ = this->declare_parameter<bool>("enable_demo_obstacle", true);
+    enable_demo_obstacle_ = this->declare_parameter<bool>("enable_demo_obstacle", config_mode == "demo");
     obstacle_xyz_ = this->declare_parameter<std::vector<double>>("obstacle_xyz", default_obs_xyz);
     obstacle_radius_ = this->declare_parameter<double>("obstacle_radius", 0.065);
-    payload_mass_ = this->declare_parameter<double>("payload_mass", 0.40);
+    payload_mass_ = this->declare_parameter<double>("payload_mass", config_mode == "demo" ? 0.40 : 0.0);
     loop_playback_ = this->declare_parameter<bool>("loop_playback", true);
     playback_speed_ = this->declare_parameter<double>("playback_speed", 1.0);
     pause_at_ends_sec_ = this->declare_parameter<double>("pause_at_ends_sec", 1.0);
     seed_ = static_cast<std::uint32_t>(this->declare_parameter<int>("seed", 42));
 
-    RCLCPP_WARN(get_logger(), "Preview only: using simulation_demo inertias and torque limits; no hardware output");
+    if (std::string(get_namespace()) == "/") {
+      throw std::invalid_argument("Preview requires a non-root namespace");
+    }
+    const auto dynamics_config = declare_parameter<std::string>("dynamics_config", "");
+    const auto pipeline_config = declare_parameter<std::string>("pipeline_config", "");
     auto pipe_cfg = makeDemoPipelineConfig();
     auto dyn_cfg = makeDemoDynamicsConfig();
+    if (config_mode == "yaml") {
+      if (dynamics_config.empty() || pipeline_config.empty()) {
+        throw std::invalid_argument("yaml config_mode requires dynamics_config and pipeline_config");
+      }
+      dyn_cfg = path_planner::loadRobotDynamicsConfig(path_planner::parseYamlFile(dynamics_config));
+      pipe_cfg = path_planner::loadTrajectoryPipelineConfig(
+        path_planner::parseYamlFile(pipeline_config), dyn_cfg.chain);
+      if (pipe_cfg.hardware_output_enabled) {
+        throw std::invalid_argument("Preview YAML must disable hardware output");
+      }
+      RCLCPP_WARN(get_logger(), "Preview only: loaded YAML dynamics and trajectory settings");
+    } else if (config_mode == "demo") {
+      RCLCPP_WARN(get_logger(), "Preview only: simulation_demo inertias and limits, no YAML loaded");
+    } else {
+      throw std::invalid_argument("config_mode must be demo or yaml");
+    }
     pipeline_ = std::make_shared<path_planner::TrajectoryPipeline>(pipe_cfg, dyn_cfg);
 
     if (payload_mass_ > 0.0) {

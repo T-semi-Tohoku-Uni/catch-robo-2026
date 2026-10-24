@@ -14,10 +14,11 @@
 #include "std_msgs/msg/int32_multi_array.hpp"
 #include "catchrobo2026_msgs/srv/pump_control.hpp"
 #include "catchrobo2026_msgs/srv/check_suction.hpp"
-#include "catchrobo2026_pump/pump_command.hpp"
+#include "canrpc_bridge/srv/call.hpp"
 
 using namespace std::chrono_literals;
 using PumpControl = catchrobo2026_msgs::srv::PumpControl;
+using RpcCall = canrpc_bridge::srv::Call;
 using CheckSuction = catchrobo2026_msgs::srv::CheckSuction;
 
 class PumpControllerNode : public rclcpp::Node {
@@ -32,18 +33,10 @@ public:
             "valve_bits", {3, 4, 5}, descriptor);
         pump_on_level_ = this->declare_parameter<bool>("pump_on_level", false, descriptor);
         valve_on_level_ = this->declare_parameter<bool>("valve_on_level", false, descriptor);
-        const auto initial_state = this->declare_parameter<int64_t>(
-            "initial_state", PumpControl::Request::SUCTION, descriptor);
-        if (initial_state < PumpControl::Request::RELEASE ||
-            initial_state > PumpControl::Request::SUCTION) {
-            throw std::invalid_argument("initial_state must be -1, 0 or 1");
-        }
         selected_pump_ = declare_parameter<int>("selected_pump", 1, descriptor);
         if (selected_pump_ < 1 || selected_pump_ > 3) {
             throw std::invalid_argument("selected_pump must be 1, 2 or 3");
         }
-        collector_states_.fill(PumpControl::Request::OFF);
-        collector_states_[selected_pump_ - 1] = static_cast<int8_t>(initial_state);
 
         if (pump_bits_.size() != 3 || valve_bits_.size() != 3) {
             throw std::invalid_argument("pump_bits and valve_bits must each contain 3 entries (L/C/R)");
@@ -92,12 +85,24 @@ public:
         pending_suction_checks_.reserve(max_pending_suction_checks_);
 
         pump_pub_ = this->create_publisher<std_msgs::msg::Int32MultiArray>("pump_state", 10);
-        service_server_ = this->create_service<PumpControl>(
-            "set_pump_state",
-            std::bind(&PumpControllerNode::handle_service, this,
-                      std::placeholders::_1, std::placeholders::_2));
-        timer_ = this->create_wall_timer(
-            10ms, std::bind(&PumpControllerNode::timer_callback, this));
+        const auto rpc_service = declare_parameter<std::string>("canrpc_service", "canrpc/call", descriptor);
+        rpc_endpoint_ = declare_parameter<std::string>("pump_rpc_endpoint", "pump_set", descriptor);
+        rpc_timeout_sec_ = declare_parameter<double>("rpc_timeout_sec", 1.5, descriptor);
+        if (!std::isfinite(rpc_timeout_sec_) || rpc_timeout_sec_ <= 0.0) {
+            throw std::invalid_argument("rpc_timeout_sec must be finite and positive");
+        }
+        rpc_ = create_client<RpcCall>(rpc_service);
+        service_server_ = this->create_service<PumpControl>("set_pump_state",
+            [this](const std::shared_ptr<rmw_request_id_t> header,
+                   const std::shared_ptr<PumpControl::Request> request) {
+                handle_service(header, request);
+            });
+        rpc_timer_ = create_wall_timer(10ms, [this]() {
+            if (pending_ && SteadyClock::now() >= pending_deadline_) {
+                rpc_->remove_pending_request(pending_rpc_id_);
+                complete_pump(pending_token_, false, "pump RPC timed out; applied state unknown");
+            }
+        });
 
         // Defer responses without blocking the executor or creating worker threads.
         suction_service_ = this->create_service<CheckSuction>(
@@ -219,54 +224,95 @@ private:
         }
     }
 
-    void handle_service(
-        const std::shared_ptr<PumpControl::Request> request,
-        std::shared_ptr<PumpControl::Response> response)
-    {
-        const std::array<int8_t, 3> states = {request->left, request->center, request->right};
-        // Validate every state before updating any collector.
-        for (const auto state : states) {
-            if (state < PumpControl::Request::RELEASE || state > PumpControl::Request::SUCTION) {
-                response->success = false;
-                RCLCPP_WARN(this->get_logger(), "left, center and right must each be -1, 0 or 1.");
-                return;
-            }
-        }
-        collector_states_.fill(PumpControl::Request::OFF);
-        collector_states_[selected_pump_ - 1] = states[selected_pump_ - 1];
-        response->success = true;
-        RCLCPP_INFO(this->get_logger(), "Collectors: L=%d, C=%d, R=%d",
-                    request->left, request->center, request->right);
+    static uint32_t read_u32(const std::vector<uint8_t> &data, size_t offset) {
+        return uint32_t(data[offset]) | uint32_t(data[offset + 1]) << 8 |
+            uint32_t(data[offset + 2]) << 16 | uint32_t(data[offset + 3]) << 24;
     }
 
-    void timer_callback() {
-        // Map logical states to CAN bit levels; the MCU inverts them at the GPIO.
-        std::array<bool, 6> levels{};
-        for (size_t i = 0; i < collector_states_.size(); ++i) {
-            // Suction enables the pump; release enables the valve.
-            const bool pump_on = collector_states_[i] == PumpControl::Request::SUCTION;
-            const bool valve_on = collector_states_[i] == PumpControl::Request::RELEASE;
-            levels[pump_bits_[i]] = pump_on == pump_on_level_;
-            levels[valve_bits_[i]] = valve_on == valve_on_level_;
+    uint32_t command_mask(const std::array<int8_t, 3> &states) const {
+        uint32_t mask = 0;
+        for (size_t i = 0; i < states.size(); ++i) {
+            const bool pump_on = states[i] == PumpControl::Request::SUCTION;
+            const bool valve_on = states[i] == PumpControl::Request::RELEASE;
+            if (pump_on == pump_on_level_) mask |= 1u << pump_bits_[i];
+            if (valve_on == valve_on_level_) mask |= 1u << valve_bits_[i];
         }
+        return mask;
+    }
 
-        PumpCommand command{};
-        command.bits.pump1 = levels[0];
-        command.bits.pump2 = levels[1];
-        command.bits.pump3 = levels[2];
-        command.bits.valve1 = levels[3];
-        command.bits.valve2 = levels[4];
-        command.bits.valve3 = levels[5];
+    void publish_pump_status(bool confirmed, uint32_t mask = 0) {
+        std_msgs::msg::Int32MultiArray message;
+        if (confirmed) message.data = {static_cast<int32_t>(mask)};
+        // Empty means pending/unknown, never a guessed physical output.
+        pump_pub_->publish(message);
+    }
 
-        // Publish host order; CAN-RPC encodes little-endian.
-        std_msgs::msg::Int32MultiArray msg;
-        msg.data = {static_cast<int32_t>(command.raw)};
-        pump_pub_->publish(msg);
+    void complete_pump(uint64_t token, bool success, const std::string &reason) {
+        if (!pending_ || token != pending_token_) return;
+        success = success && SteadyClock::now() < pending_deadline_;
+        auto header = pending_header_;
+        pending_ = false;
+        publish_pump_status(success, pending_mask_);
+        PumpControl::Response response;
+        response.success = success;
+        if (!success) RCLCPP_WARN(get_logger(), "%s", reason.c_str());
+        try { service_server_->send_response(*header, response); }
+        catch (const std::exception &error) {
+            RCLCPP_WARN(get_logger(), "PumpControl response failed: %s", error.what());
+        }
+    }
+
+    void handle_service(const std::shared_ptr<rmw_request_id_t> &header,
+                        const std::shared_ptr<PumpControl::Request> &request) {
+        const std::array<int8_t, 3> requested = {request->left, request->center, request->right};
+        bool valid = true;
+        for (auto state : requested) valid = valid && state >= PumpControl::Request::RELEASE &&
+            state <= PumpControl::Request::SUCTION;
+        if (!valid || pending_ || !rpc_->service_is_ready()) {
+            PumpControl::Response response;
+            response.success = false;
+            service_server_->send_response(*header, response);
+            return;
+        }
+        std::array<int8_t, 3> selected{};
+        selected[selected_pump_ - 1] = requested[selected_pump_ - 1];
+        const uint32_t mask = command_mask(selected);
+        auto call = std::make_shared<RpcCall::Request>();
+        call->endpoint = rpc_endpoint_;
+        call->data = {uint8_t(mask), uint8_t(mask >> 8), uint8_t(mask >> 16), uint8_t(mask >> 24)};
+        pending_ = true;
+        const uint64_t token = ++pending_token_;
+        pending_header_ = header;
+        pending_mask_ = mask;
+        pending_deadline_ = SteadyClock::now() + std::chrono::duration_cast<SteadyClock::duration>(
+            std::chrono::duration<double>(rpc_timeout_sec_));
+        publish_pump_status(false);
+        try {
+            pending_rpc_id_ = rpc_->async_send_request(call,
+                [this, token, mask](rclcpp::Client<RpcCall>::SharedFuture future) {
+                    if (!pending_ || pending_token_ != token) return;
+                    try {
+                        const auto reply = future.get();
+                        const bool applied = reply->outcome == 0 && reply->data.size() == 8 &&
+                            read_u32(reply->data, 0) == 0 && read_u32(reply->data, 4) == mask;
+                        complete_pump(token, applied, "pump not confirmed: " + reply->message);
+                    } catch (const std::exception &error) { complete_pump(token, false, error.what()); }
+                }).request_id;
+        } catch (const std::exception &error) { complete_pump(token, false, error.what()); }
     }
 
     rclcpp::Publisher<std_msgs::msg::Int32MultiArray>::SharedPtr pump_pub_;
     rclcpp::Service<PumpControl>::SharedPtr service_server_;
-    rclcpp::TimerBase::SharedPtr timer_;
+    rclcpp::Client<RpcCall>::SharedPtr rpc_;
+    rclcpp::TimerBase::SharedPtr rpc_timer_;
+    std::string rpc_endpoint_;
+    double rpc_timeout_sec_ = 1.5;
+    bool pending_ = false;
+    uint64_t pending_token_ = 0;
+    int64_t pending_rpc_id_ = 0;
+    uint32_t pending_mask_ = 0;
+    SteadyClock::time_point pending_deadline_;
+    std::shared_ptr<rmw_request_id_t> pending_header_;
     rclcpp::Service<CheckSuction>::SharedPtr suction_service_;
     rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr pressure_sub_;
     rclcpp::TimerBase::SharedPtr suction_timer_;
@@ -278,7 +324,6 @@ private:
     std::vector<PendingSuctionCheck> pending_suction_checks_;
 
     int selected_pump_{1};
-    std::array<int8_t, 3> collector_states_;
     std::vector<int64_t> pump_bits_;
     std::vector<int64_t> valve_bits_;
     bool pump_on_level_;

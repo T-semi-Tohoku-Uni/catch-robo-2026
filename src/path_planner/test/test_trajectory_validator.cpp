@@ -209,10 +209,49 @@ void testJerkLimiterAndValidatorEachFailureCode()
     EXPECT_EQ(rep.failure, FailureCode::kThermalLimitViolation);
   }
 }
+class FiniteStateValidator : public StateValidator {
+public:
+  bool isStateValid(const State &q) const override {return isFiniteState(q);}
+  bool isMotionValid(const State &a,const State &b) const override {return isFiniteState(a)&&isFiniteState(b);}
+  double clearance(const State &) const override {return 1;}
+};
+void testPositionSamplesCannotForgeDerivatives() {
+  ValidatorConfig cfg;cfg.require_dynamics=false;
+  auto state=std::make_shared<FiniteStateValidator>();
+  TimedTrajectory forged;
+  for(double position:{0.0,.1,0.0}) {
+    DynamicState p;p.position={position,0,0,0};p.velocity=p.acceleration=p.jerk=State(kDof,0);
+    p.time=forged.points.size()*.1;forged.points.push_back(p);
+  }
+  const auto acceleration=TrajectoryValidator(cfg,state).validate(forged,forged.points.front().position,forged.points.back().position);
+  EXPECT_FALSE(acceleration);EXPECT_TRUE(acceleration.message.find("Position slopes")!=std::string::npos);
+  // Boundary ghost samples must reject rapid two-point commands with forged zero rates.
+  forged.points.clear();
+  for(double position:{0.0,.1}) {
+    DynamicState p;p.position={position,0,0,0};p.velocity=p.acceleration=p.jerk=State(kDof,0);
+    p.time=forged.points.size()*.05;forged.points.push_back(p);
+  }
+  cfg.max_velocity=State(kDof,2);cfg.max_acceleration=State(kDof,5);cfg.max_jerk=State(kDof,100);
+  EXPECT_FALSE(TrajectoryValidator(cfg,state).validate(forged,forged.points.front().position,forged.points.back().position));
+  cfg.max_acceleration=State(kDof,100);cfg.max_jerk=State(kDof,100);
+  EXPECT_FALSE(TrajectoryValidator(cfg,state).validate(forged,forged.points.front().position,forged.points.back().position));
+  cfg.max_acceleration=State(kDof,5);
+  forged.points.back().time=2.0;
+  EXPECT_TRUE(TrajectoryValidator(cfg,state).validate(forged,forged.points.front().position,forged.points.back().position));
+  cfg.max_acceleration=State(kDof,100);cfg.max_jerk=State(kDof,1);forged.points.clear();
+  for(double position:{0.0,.01,.02,.05}) {
+    DynamicState p;p.position={position,0,0,0};p.velocity=p.acceleration=p.jerk=State(kDof,0);
+    p.time=forged.points.size()*.1;forged.points.push_back(p);
+  }
+  const auto jerk=TrajectoryValidator(cfg,state).validate(forged,forged.points.front().position,forged.points.back().position);
+  EXPECT_FALSE(jerk);EXPECT_TRUE(jerk.message.find("Position slopes violate jerk")!=std::string::npos);
+}
+
 }  // namespace
 
 int main()
 {
+  testPositionSamplesCannotForgeDerivatives();
   testRmsTorqueAnalyticalComparison();
   testJerkLimiterAndValidatorEachFailureCode();
 

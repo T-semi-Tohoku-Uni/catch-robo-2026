@@ -152,3 +152,14 @@ def test_cancel_during_xyz_route_waits_for_follower_terminal(rig):
     outcome = rig.resolve(result)
     assert outcome.status == GoalStatus.STATUS_CANCELED and not outcome.result.success
     assert not rig.pumps
+
+
+def test_unconfirmed_pump_never_advances_to_motion_or_next_output(rig):
+    rig.pump_success = False
+    rig.launch([{'pump': 'suction'}, {'move': {'absolute': [675, 400, 300, 0]}},
+                {'pump': 'release'}])
+    _, result = rig.start()
+    outcome = rig.resolve(result)
+    assert not outcome.result.success
+    assert rig.pumps == [(1, 0, 0)]
+    assert not rig.routes and not rig.follow_goals

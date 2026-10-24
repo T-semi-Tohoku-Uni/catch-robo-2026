@@ -9,9 +9,9 @@ import time
 import unittest
 
 from ament_index_python.packages import get_package_prefix
+from catchrobo2026_msgs.srv import EndeffectorControl, WristControl
 import rclpy
 from sensor_msgs.msg import Joy
-from catchrobo2026_msgs.srv import EndeffectorControl, WristControl
 from std_msgs.msg import Float32MultiArray
 from visualization_msgs.msg import MarkerArray
 

@@ -38,6 +38,7 @@ const char * toString(OperationMode mode);
 struct TrajectoryPipelineConfig
 {
   bool hardware_output_enabled{false};
+  std::size_t active_axes{4};
   std::size_t candidate_count{8};
   std::uint32_t base_seed{42};
   double planning_time_limit{1.0};
@@ -128,6 +129,7 @@ public:
     const State & current_position,
     std::string * reason = nullptr) const;
 
+  PipelineResult validateForExecution(const TimedTrajectory &trajectory, const State &current_position) const;
   std::uint64_t currentDynamicsVersion() const;
   std::uint64_t currentSceneVersion() const;
   const TrajectoryPipelineConfig & config() const {return config_;}

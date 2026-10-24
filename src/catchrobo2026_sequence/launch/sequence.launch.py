@@ -18,10 +18,13 @@ def generate_launch_description():
             get_package_share_directory('catchrobo2026_pump'),
             'config', 'festival.yaml'])),
         DeclareLaunchArgument('debug', default_value='false'),
+        DeclareLaunchArgument('service_timeout_sec', default_value='3.0'),
         Node(
             package='catchrobo2026_sequence', executable='sequence_node',
             output='screen', parameters=[LaunchConfiguration('festival_config'), {
                 'team': LaunchConfiguration('team'),
+                'service_timeout_sec': ParameterValue(
+                    LaunchConfiguration('service_timeout_sec'), value_type=float),
                 'sequence_file': LaunchConfiguration('sequence_file'),
                 'debug': ParameterValue(LaunchConfiguration('debug'), value_type=bool),
             }]),

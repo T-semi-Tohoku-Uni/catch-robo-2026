@@ -61,8 +61,14 @@ def generate_launch_description():
         DeclareLaunchArgument('debug', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('listen', default_value='0.0.0.0:8000'),
         DeclareLaunchArgument('ipc_socket', default_value='/tmp/catchrobo2026-control.sock'),
-        DeclareLaunchArgument('non_blocking', default_value='true', choices=['true', 'false']),
-        DeclareLaunchArgument('startup_timeout_sec', default_value='30.0'),
+        DeclareLaunchArgument('startup_timeout_sec', default_value='0.0'),
+        DeclareLaunchArgument('trajectory_dynamics_config', default_value=str(
+            Path(get_package_share_directory('path_planner')) / 'config' / 'robot_dynamics.yaml')),
+        DeclareLaunchArgument('trajectory_pipeline_config', default_value=str(
+            Path(get_package_share_directory('path_planner')) /
+            'config' / 'gakusai_trajectory.yaml')),
+        DeclareLaunchArgument('canrpc_config', default_value=str(
+            Path(get_package_share_directory('canrpc_bridge')) / 'config' / 'gakusai.yaml')),
     ]
     automatic = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(str(
@@ -71,7 +77,8 @@ def generate_launch_description():
         launch_arguments={name: LaunchConfiguration(name) for name in (
             'team', 'sequence_file', 'pump_config', 'joint_feedback_config',
             'debug', 'listen', 'ipc_socket', 'manual_config', 'joy_source',
-            'manual_velocity_config', 'festival_config',
+            'manual_velocity_config', 'festival_config', 'canrpc_config',
+            'trajectory_dynamics_config', 'trajectory_pipeline_config',
         )}.items(),
     )
     vision = IncludeLaunchDescription(
@@ -87,9 +94,10 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(str(
             Path(get_package_share_directory('canrpc_bridge')) /
             'launch/raspi_can.launch.py')),
-        launch_arguments={'non_blocking': LaunchConfiguration('non_blocking'),
+        launch_arguments={'config_file': LaunchConfiguration('canrpc_config'),
                           'reset_on_startup': 'true',
-                          'startup_timeout_sec': LaunchConfiguration('startup_timeout_sec')}.items(),
+                          'startup_timeout_sec': LaunchConfiguration(
+                              'startup_timeout_sec')}.items(),
     )
     return LaunchDescription(arguments + [
         # Register before launching the bridge so its first activation is observed.
@@ -98,7 +106,8 @@ def generate_launch_description():
                 isinstance(event, StateTransition) and
                 is_can_bridge(event.action) and event.goal_state == 'active'
             ),
-            entities=[LogInfo(msg='MCU initialization complete; starting automatic control'), automatic],
+            entities=[LogInfo(msg='MCU initialization complete; starting automatic control'),
+                      automatic],
             handle_once=True,
         )),
         RegisterEventHandler(OnProcessExit(on_exit=stop_on_bridge_exit)),

@@ -15,7 +15,7 @@ from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import SingleThreadedExecutor
 from catchrobo2026_msgs.action import ExecuteSequence, FollowRoute
-from catchrobo2026_msgs.srv import GenerateRoute, PlanRotationGroup, Waypoint
+from catchrobo2026_msgs.srv import ArmCommandLease, GenerateRoute, PlanRotationGroup, Waypoint
 from geometry_msgs.msg import Pose, PoseStamped
 from nav_msgs.msg import Path as RosPath
 from std_srvs.srv import Trigger
@@ -66,6 +66,14 @@ class Harness:
             node.create_subscription(PoseStamped, 'target_pose', self.targets.append, 10),
             node.create_subscription(RosPath, 'route', self.routes.append, 10),
         ]
+        self.lease_token = 0
+        self.lease_counter = 0
+        self.lease_events = []
+        self.lease_callbacks = ReentrantCallbackGroup()
+        self.rebase = node.create_client(Trigger, 'joy/rebase', callback_group=self.lease_callbacks)
+        self.lease = node.create_service(
+            ArmCommandLease, 'arm_target/route_lease', self.route_lease,
+            callback_group=self.lease_callbacks)
         self.route_pub = node.create_publisher(RosPath, 'follower_route', 10)
         self.trigger = node.create_service(Trigger, 'request_initialization', self.initialize)
         self.sequence = ActionClient(node, ExecuteSequence, 'execute_sequence')
@@ -77,6 +85,37 @@ class Harness:
         self.joint_feedback = []
         self.subscriptions.append(node.create_subscription(
             Float32MultiArray, 'target_joint_angles', self.joint_commands.append, 100))
+
+    async def route_lease(self, request, response):
+        now = time.monotonic_ns()
+        self.lease_events.append(request.operation)
+        if request.deadline_steady_ns <= now:
+            response.message = 'fixture lease deadline expired'
+            return response
+        if request.operation == ArmCommandLease.Request.ACQUIRE:
+            if self.lease_token or request.token:
+                response.message = 'fixture owner busy'
+                return response
+            self.lease_counter += 1
+            self.lease_token = self.lease_counter
+        elif request.operation in (ArmCommandLease.Request.RENEW, ArmCommandLease.Request.RELEASE):
+            if not self.lease_token or request.token != self.lease_token:
+                response.message = 'fixture stale lease token'
+                return response
+            if request.operation == ArmCommandLease.Request.RELEASE:
+                self.lease_token = 0
+                if self.rebase.service_is_ready():
+                    rebased = await self.rebase.call_async(Trigger.Request())
+                    if not rebased.success:
+                        response.message = 'fixture Joy rebase failed: ' + rebased.message
+                        return response
+        else:
+            response.message = 'fixture invalid lease operation'
+            return response
+        response.success = True
+        response.token = self.lease_token
+        response.expires_steady_ns = time.monotonic_ns() + 500_000_000
+        return response
 
     def observe_group_routes(self):
         self.group_observer = True
@@ -279,6 +318,8 @@ def test_lifecycle_route_handoff(rig, tmp_path):
     # A subsequent move must be accepted after cancellation has terminated.
     rig.execute(ExecuteSequence.Goal.END)
     assert_at(rig.poses[-1], ending)
+    assert rig.lease_token == 0
+    assert rig.lease_events.count(ArmCommandLease.Request.ACQUIRE) == rig.lease_events.count(ArmCommandLease.Request.RELEASE)
 
 
 def test_sequence_waypoints_share_one_route(rig, tmp_path):

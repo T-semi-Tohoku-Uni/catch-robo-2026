@@ -54,6 +54,7 @@ bool TrajectoryPipelineConfig::hasValidKinematicLimits(std::string * reason) con
       }
       return false;
     };
+  if(active_axes!=3 && active_axes!=4) return fail("active_axes must be 3 or 4");
   if (max_velocity.size() != kDof || max_acceleration.size() != kDof || max_jerk.size() != kDof) {
     return fail("max_velocity/max_acceleration/max_jerk must have 4 elements");
   }
@@ -150,6 +151,7 @@ TrajectoryPipelineConfig loadTrajectoryPipelineConfig(
   if (node.has("planning_time_limit")) {
     cfg.planning_time_limit = node.at("planning_time_limit").asDouble();
   }
+  if(node.has("active_axes")) cfg.active_axes=static_cast<size_t>(node.at("active_axes").asInt());
   if (node.has("distance_weights")) {
     cfg.distance_weights = node.at("distance_weights").asDoubleList();
   }
@@ -251,6 +253,11 @@ TrajectoryPipeline::TrajectoryPipeline(
   }
 
   std::string kin_reason;
+  if(config_.active_axes!=3 && config_.active_axes!=4) throw std::invalid_argument("active_axes must be 3 or 4");
+  if(config_.active_axes==3 && (config_.joint_bounds.lower.size()!=kDof || config_.joint_bounds.upper.size()!=kDof ||
+      config_.distance_weights.size()!=kDof || config_.joint_bounds.lower[3]!=0.0 ||
+      config_.joint_bounds.upper[3]!=0.0 || config_.distance_weights[3]!=0.0))
+    throw std::invalid_argument("Three-axis planning requires fixed zero fourth bounds and weight");
   const bool kin_ok = config_.hasValidKinematicLimits(&kin_reason);
   std::string dyn_reason;
   const bool hw_dyn_ok = dynamics_config.isCompleteForHardware(&dyn_reason);
@@ -323,6 +330,29 @@ std::shared_ptr<const CollisionScene> TrajectoryPipeline::collisionScene() const
 {
   std::lock_guard<std::mutex> lock(mutex_);
   return scene_;
+}
+
+PipelineResult TrajectoryPipeline::validateForExecution(const TimedTrajectory &trajectory,const State &current_position) const {
+  PipelineResult result;result.trajectory=trajectory;
+  std::shared_ptr<const RneaDynamicsModel> dyn;std::shared_ptr<const CollisionScene> scene;
+  {std::lock_guard<std::mutex> lock(mutex_);dyn=dynamics_;scene=scene_;}
+  result.dynamics_version=dyn->version();result.scene_version=scene->version;
+  const auto fail=[&](FailureCode code,const std::string &message){result.failure=code;result.message=message;return result;};
+  std::string reason;
+  if(!config_.hasValidKinematicLimits(&reason)) return fail(FailureCode::kInvalidInput,reason);
+  if(!dyn->config().hasValidDynamics(&reason)) return fail(FailureCode::kMissingDynamics,reason);
+  if(!isFiniteState(current_position) || trajectory.points.size()<2) return fail(FailureCode::kInvalidInput,"Invalid current state or trajectory");
+  auto checker=std::make_shared<CollisionChecker>(dyn->config().chain,config_.collision_model,scene,config_.collision_margin);
+  auto state_validator=std::make_shared<ConfigurationValidator>(config_.joint_bounds,checker,config_.collision_check_resolution);
+  ValidatorConfig cfg;cfg.active_axes=config_.active_axes;cfg.bounds=config_.joint_bounds;
+  cfg.max_velocity=config_.max_velocity;cfg.max_acceleration=config_.max_acceleration;cfg.max_jerk=config_.max_jerk;
+  cfg.validation_dt=config_.validation_dt;cfg.cycle_period=config_.cycle_period;
+  cfg.start_velocity_zero=config_.start_velocity_zero;cfg.goal_velocity_zero=config_.goal_velocity_zero;
+  const auto report=TrajectoryValidator(cfg,state_validator,dyn).validate(trajectory,trajectory.points.front().position,trajectory.points.back().position);
+  if(!report) return fail(report.failure,report.message);
+  result.torque_verified=true;
+  if(!isTrajectoryValidForExecution(result,current_position,&reason)) return fail(FailureCode::kInvalidInput,reason);
+  return result;
 }
 
 bool TrajectoryPipeline::isTrajectoryValidForExecution(
@@ -423,6 +453,7 @@ PipelineResult TrajectoryPipeline::execute(
   const std::uint32_t base_seed = (seed == 0) ? config_.base_seed : seed;
 
   RrtConnectConfig rrt_cfg;
+  rrt_cfg.active_axes=config_.active_axes;
   rrt_cfg.bounds = config_.joint_bounds;
   rrt_cfg.distance_weights = config_.distance_weights;
   rrt_cfg.step_size = config_.rrt_step_size;
@@ -622,6 +653,7 @@ PipelineResult TrajectoryPipeline::parameterizeAndValidate(
   JerkLimiter jerk_limiter(jerk_cfg, dyn_snapshot, config_.joint_names);
 
   ValidatorConfig val_cfg;
+  val_cfg.active_axes=config_.active_axes;
   val_cfg.bounds = config_.joint_bounds;
   val_cfg.max_velocity = config_.max_velocity;
   val_cfg.max_acceleration = config_.max_acceleration;

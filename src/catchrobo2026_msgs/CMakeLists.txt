@@ -15,8 +15,15 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(action_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(trajectory_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "srv/ArmTargetGate.srv"
+  "srv/ArmCommandLease.srv"
+  "msg/Payload.msg"
+  "srv/GenerateTrajectory.srv"
+  "action/FollowTrajectory.action"
   "srv/SetSequenceManual.srv"
   "msg/RotationGroupRoute.msg"
   "msg/PhiTravelInterval.msg"
@@ -31,7 +38,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/CheckSuction.srv"
   "srv/EndeffectorControl.srv"
   "srv/StateControl.srv"
-  DEPENDENCIES action_msgs nav_msgs geometry_msgs
+  DEPENDENCIES action_msgs nav_msgs geometry_msgs sensor_msgs trajectory_msgs
 )
 
 if(BUILD_TESTING)

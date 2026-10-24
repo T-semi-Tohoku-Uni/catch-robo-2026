@@ -1,169 +1,109 @@
-from launch import LaunchDescription
-from launch_ros.actions import LifecycleNode
-from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_directory
-import os
+"""Load a portable project profile before configuring a SocketCAN interface."""
+from pathlib import Path
+import importlib.util
 import re
+import shutil
 import subprocess
 
-from launch.actions import EmitEvent, RegisterEventHandler
-from launch.actions import OpaqueFunction
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
-from launch_ros.parameter_descriptions import ParameterValue
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, EmitEvent, OpaqueFunction, RegisterEventHandler
 from launch.event_handlers import OnProcessStart
+from launch.events import matches_action
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import LifecycleNode
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
-import lifecycle_msgs.msg
-import launch
+from lifecycle_msgs.msg import Transition
 
-def _require_can0(context, *args, **kwargs):
-    # Check interface availability.
+
+def load_profile(path):
+    validator = Path(__file__).resolve().parent.parent / 'tools' / 'canrpc_profile.py'
+    spec = importlib.util.spec_from_file_location('canrpc_profile', validator)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.validate_profile(path)
+
+
+def configure_interface(bus):
+    if not bus['configure']:
+        return
+    interface = bus['interface']
+    ip = shutil.which('ip')
+    if not ip:
+        raise RuntimeError('ip command not found')
     try:
-        subprocess.check_output(["/usr/sbin/ip", "link", "show", "can0"], stderr=subprocess.STDOUT, text=True)
-        return []
-    except subprocess.CalledProcessError as e:
-        # Stop if the interface is unavailable.
-        msg = f"can0 が見つかりません。launch を停止します。\n(ip output: {e.output.strip()})"
-        launch.logging.get_logger(__name__).error(msg)
-        raise RuntimeError("can0 not found") from e
-    except FileNotFoundError:
-        # Stop if ip is unavailable.
-        msg = "ip コマンドが見つかりません。launch を停止します。"
-        launch.logging.get_logger(__name__).error(msg)
-        raise RuntimeError("ip command not found")
-
-def _run_cmd(cmd):
-    try:
-        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True)
-        return True, out
-    except subprocess.CalledProcessError as e:
-        return False, e.output
-
-def _ensure_can0_up(context, *args, **kwargs):
-    # Read the current interface configuration.
-    try:
-        out = subprocess.check_output(["/usr/sbin/ip", "-details", "link", "show", "can0"], text=True)
-    except Exception as error:
-        raise RuntimeError("Cannot read can0 configuration") from error
-
-    # ip reports CAN FD as a controller flag, not as "fd on".
-    link_flags = re.search(r"^\d+:\s+can0(?:@\S+)?:\s+<([^>]*)>", out, re.MULTILINE)
-    can_flags = re.search(r"^\s+can\s+<([^>]*)>", out, re.MULTILINE)
-    desired_ok = (
-        can_flags is not None
-        and "FD" in can_flags.group(1).split(",")
-        and re.search(r"^\s+bitrate\s+1000000(?:\s|$)", out, re.MULTILINE)
-        and re.search(r"^\s+dbitrate\s+2000000(?:\s|$)", out, re.MULTILINE)
-    )
-    if link_flags and "UP" in link_flags.group(1).split(",") and desired_ok:
-        return []
-
-    # Configure a down or mismatched interface with the existing commands.
-    cmds = [
-        ["sudo", "-n", "/usr/sbin/ip", "link", "set", "can0", "down"],
-        [
-            "sudo", "-n", "/usr/sbin/ip", "link", "set", "can0", "up",
-            "type", "can",
-            "bitrate", "1000000",
-            "dbitrate", "2000000",
-            "fd", "on",
-        ],
+        output = subprocess.check_output([ip, '-details', 'link', 'show', interface],
+                                         stderr=subprocess.STDOUT, text=True)
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(f'Cannot read CAN interface {interface}') from error
+    link = re.search(r'^\d+:\s+' + re.escape(interface) + r'(?:@\S+)?:\s+<([^>]*)>', output, re.MULTILINE)
+    flags = re.search(r'^\s+can\s+<([^>]*)>', output, re.MULTILINE)
+    nominal = str(bus['nominal_bitrate'])
+    data = str(bus['data_bitrate'])
+    ready = (link and 'UP' in link.group(1).split(',') and flags and
+             'FD' in flags.group(1).split(',') and
+             re.search(r'^\s+bitrate\s+' + nominal + r'(?:\s|$)', output, re.MULTILINE) and
+             re.search(r'^\s+dbitrate\s+' + data + r'(?:\s|$)', output, re.MULTILINE))
+    if ready:
+        return
+    commands = [
+        ['sudo', '-n', ip, 'link', 'set', interface, 'down'],
+        ['sudo', '-n', ip, 'link', 'set', interface, 'up', 'type', 'can',
+         'bitrate', nominal, 'dbitrate', data, 'fd', 'on'],
     ]
-    for cmd in cmds:
-        ok, out = _run_cmd(cmd)
-        if not ok:
-            launch.logging.get_logger(__name__).error(
-                "can0 設定に失敗しました。cmd: %s\n(output: %s)"
-                % (" ".join(cmd), out.strip())
-            )
-            raise RuntimeError("can0 setup failed")
-    return []
+    for command in commands:
+        try:
+            subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise RuntimeError(f'CAN interface setup failed: {interface}') from error
 
-def _initialization_failed(context):
-    raise RuntimeError("CAN-RPC initialization failed; automatic control was not started")
+
+def initialization_failed(context):
+    raise RuntimeError('CAN-RPC initialization failed; automatic control was not started')
+
+
+def start_bridge(context):
+    path = LaunchConfiguration('config_file').perform(context)
+    profile = load_profile(path)
+    reset = LaunchConfiguration('reset_on_startup').perform(context)
+    timeout = float(LaunchConfiguration('startup_timeout_sec').perform(context))
+    if reset not in ('true', 'false'):
+        raise RuntimeError('reset_on_startup must be true or false')
+    if timeout < 0 or not timeout < 2147483647 / 1000:
+        raise RuntimeError('invalid startup_timeout_sec override')
+    if reset == 'true' and not profile['reset']['targets']:
+        raise RuntimeError('reset_on_startup requires reset.targets')
+    # Validate the complete profile before touching the interface.
+    configure_interface(profile['bus'])
+    node = LifecycleNode(package='canrpc_bridge', executable='canrpc_bridge',
+                         name='canrpc_bridge', namespace='', output='screen', emulate_tty=True,
+                         parameters=[{'config_file': path, 'reset_on_startup': reset == 'true',
+                                      'startup_timeout_sec': timeout}])
+    handlers = [
+        RegisterEventHandler(OnProcessStart(target_action=node, on_start=[EmitEvent(
+            event=ChangeState(lifecycle_node_matcher=matches_action(node),
+                              transition_id=Transition.TRANSITION_CONFIGURE))])),
+        RegisterEventHandler(OnStateTransition(target_lifecycle_node=node,
+            start_state='configuring', goal_state='inactive', entities=[EmitEvent(
+                event=ChangeState(lifecycle_node_matcher=matches_action(node),
+                                  transition_id=Transition.TRANSITION_ACTIVATE))])),
+    ]
+    for start, goal in [('activating', 'inactive'), ('configuring', 'unconfigured')]:
+        handlers.append(RegisterEventHandler(OnStateTransition(
+            target_lifecycle_node=node, start_state=start, goal_state=goal,
+            entities=[OpaqueFunction(function=initialization_failed)])))
+    handlers.append(RegisterEventHandler(OnStateTransition(target_lifecycle_node=node,
+        goal_state='errorprocessing', entities=[OpaqueFunction(function=initialization_failed)])))
+    return [*handlers, node]
 
 
 def generate_launch_description():
-    pkg_share = get_package_share_directory('canrpc_bridge')
-    canid_file = os.path.join(pkg_share, 'config', 'raspi_canbridge.yml')
-    non_blocking = LaunchConfiguration('non_blocking')
-    reset_on_startup = LaunchConfiguration('reset_on_startup')
-    startup_timeout_sec = LaunchConfiguration('startup_timeout_sec')
-
-    name_space = ''
-    ld = LaunchDescription()
-    ld.add_action(
-        DeclareLaunchArgument(
-            'non_blocking',
-            default_value='true',
-            choices=['true', 'false'],
-            description='Use non-blocking SocketCAN transmission',
-        )
-    )
-    ld.add_action(DeclareLaunchArgument('reset_on_startup',default_value='false',choices=['true','false']))
-    ld.add_action(DeclareLaunchArgument('startup_timeout_sec',default_value='30.0'))
-    ld.add_action(OpaqueFunction(function=_require_can0))
-    ld.add_action(OpaqueFunction(function=_ensure_can0_up))
-
-    # Create the lifecycle bridge.
-    canbridgenode = LifecycleNode(
-        package='canrpc_bridge',
-        executable='canrpc_bridge',
-        name='canrpc_bridge',
-        namespace=name_space,
-        parameters=[
-            canid_file,
-            {'non_blocking': ParameterValue(non_blocking, value_type=bool),
-             'reset_on_startup': ParameterValue(reset_on_startup, value_type=bool),
-             'startup_timeout_sec': ParameterValue(startup_timeout_sec, value_type=float)},
-        ],
-        output='screen',
-        emulate_tty=True,
-    )
-
-    ld.add_action(canbridgenode)
-
-    canbridge_configure_event_handler = RegisterEventHandler(
-        OnProcessStart(
-            target_action=canbridgenode,
-            on_start=[
-                EmitEvent(
-                    event=ChangeState(
-                        lifecycle_node_matcher=launch.events.matches_action(canbridgenode),
-                        transition_id=lifecycle_msgs.msg.Transition.TRANSITION_CONFIGURE,
-                    )
-                )
-            ]
-        )
-    )
-
-    canbridge_activate_event_handler = RegisterEventHandler(
-        OnStateTransition(
-            target_lifecycle_node=canbridgenode,
-            start_state='configuring',
-            goal_state='inactive',
-            entities=[
-                EmitEvent(
-                    event=ChangeState(
-                        lifecycle_node_matcher=launch.events.matches_action(canbridgenode),
-                        transition_id=lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
-                    )
-                )
-            ]
-        )
-    )
-
-    ld.add_action(canbridge_configure_event_handler)
-    ld.add_action(canbridge_activate_event_handler)
-
-    for start, goal in [('activating','inactive'), ('configuring','unconfigured')]:
-        ld.add_action(RegisterEventHandler(OnStateTransition(
-            target_lifecycle_node=canbridgenode, start_state=start, goal_state=goal,
-            entities=[OpaqueFunction(function=_initialization_failed)],
-        )))
-    ld.add_action(RegisterEventHandler(OnStateTransition(
-        target_lifecycle_node=canbridgenode, goal_state='errorprocessing',
-        entities=[OpaqueFunction(function=_initialization_failed)],
-    )))
-    return ld
+    profile = str(Path(get_package_share_directory('canrpc_bridge')) / 'config' / 'gakusai.yaml')
+    return LaunchDescription([
+        DeclareLaunchArgument('config_file', default_value=profile),
+        DeclareLaunchArgument('reset_on_startup', default_value='false', choices=['true', 'false']),
+        DeclareLaunchArgument('startup_timeout_sec', default_value='0.0',
+                              description='0 uses the profile timeout; positive values override it'),
+        OpaqueFunction(function=start_bridge),
+    ])

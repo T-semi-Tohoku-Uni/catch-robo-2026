@@ -43,9 +43,9 @@ git submodule update --init --recursive
 
 ROSの選択順は `ROBOT_ROS_DISTRO`、現在の `ROS_DISTRO`、`/opt/ros` にある唯一の環境です。明示する場合は `ROBOT_ROS_DISTRO=humble ./run_production.sh team:=red` のように指定します。`sh run_production.sh ...` でも実行できます。スクリプト内部でBashへ切り替え、既存のROS検索パスをクリアしてROS本体と `install/local_setup.bash` を読み込みます。`ROS_DOMAIN_ID` や `RMW_IMPLEMENTATION` などの通信設定は引き継ぎます。
 
-本番launchは `canrpc_bridge/raspi_can.launch.py` でCANを設定し、全3MCUへ世代条件付きSYSTEM_RESETを送ります。新しいBoot IDとREADYを全台で確認してからブリッジをactiveにし、自動操縦launch（UI・シーケンサ・経路生成／追従・Joy・ポンプ）を1回起動します。既定30秒以内に完了しなければ全体を終了し、自動操縦は起動しません。待機時間は `startup_timeout_sec:=60.0` などで変更できます。CAN設定はこのlaunchの1箇所だけで行い、`can0`、1 Mbps／CAN FD 2 Mbpsです。設定変更が必要な場合は `sudo -n ip ...` が実行できる権限が必要です。旧標準IDのcansendと旧nhk2026_bridgeは撤去しました。
+本番launchは `canrpc_bridge/raspi_can.launch.py` でCANを設定し、全3MCUへ世代条件付きSYSTEM_RESETを送ります。新しいBoot IDとREADYを全台で確認してからブリッジをactiveにし、自動操縦launch（UI・シーケンサ・経路生成／追従・Joy・ポンプ）を1回起動します。学祭profileの既定30秒以内に完了しなければ全体を終了し、自動操縦は起動しません。待機時間は `startup_timeout_sec:=60.0` などで変更できます。CANRPCのNode／Subject／トピック／型／時間／バス設定は `src/canrpc_bridge/config/gakusai.yaml` に集約し、`canrpc_config:=/absolute/project.yaml` で差し替えます。[通信仕様と再利用手順](src/canrpc_bridge/README.md) を参照してください。CAN設定はこのlaunchの1箇所だけで行い、学祭profileの既定は `can0`、1 Mbps／CAN FD 2 Mbpsです。設定変更が必要な場合は `sudo -n ip ...` が実行できる権限が必要です。旧標準IDのcansendと旧nhk2026_bridgeは撤去しました。
 
-既定のシーケンス・ポンプ・関節フィードバック・手動操作設定は、このチェックアウトの `src/` 内のYAMLです。`sequence_file:=...`、`pump_config:=...`、`joint_feedback_config:=...`、`manual_config:=...`、`manual_velocity_config:=...`、`festival_config:=...`、`joy_source:=web`、`listen:=...`、`ipc_socket:=...`、`non_blocking:=...` を変更できます。引数一覧は`ros2 launch launch/production.launch.py --show-args`で確認します。起動後は `/current_joints` の実測値が届くことを確認してからUIで操作します。CANのactiveは関節角の受信確認ではありません。
+既定のシーケンス・ポンプ・関節フィードバック・手動操作設定は、このチェックアウトの `src/` 内のYAMLです。`sequence_file:=...`、`pump_config:=...`、`joint_feedback_config:=...`、`manual_config:=...`、`manual_velocity_config:=...`、`festival_config:=...`、`joy_source:=web`、`listen:=...`、`ipc_socket:=...` を変更できます。CAN送信モードはCANRPC profileの `bus.non_blocking` で変更します。引数一覧は`ros2 launch launch/production.launch.py --show-args`で確認します。起動後は `/current_joints` の実測値が届くことを確認してからUIで操作します。CANのactiveは関節角の受信確認ではありません。
 
 学祭用の本番・automatic launchは`joy_source:=web`のみを許可します。USBコントローラーをPCへ接続してWeb UIで機器・割当を選び、送信を有効にします。`joy_source:=local`はUIのSTOP状態を迂回するため起動時に拒否します。単独の手動launchでは従来のローカルJoyを利用できます。Webゲームパッドと並進ジョグの操作は[学祭UIの説明](src/catchrobo2026_ui/README.md)を参照してください。シーケンス内の`manual`待ちは学祭UIに完了操作がないため拒否します。ジョグ距離は [manual.yaml](src/catchrobo2026_ui/config/manual.yaml) の `manual_step_cm` で設定します。
 
@@ -113,7 +113,9 @@ ros2 launch catchrobo2026_hand_operated handoperated.launch.py \
 
 `gakusai2026` ブランチでは、`supplementary/grafen1202/catchrobo_ros` の
 `main` / `350721d`（2026-10-21）から次の3パッケージを取り込みました。
-既存の実機用経路生成・追従への接続は今後の作業です。
+その後 `deda3ac` の更新を選別移植し、公開3軸のGenerateTrajectory/FollowTrajectoryを
+[arm_target_client](src/catchrobo2026_state_machine/README.md) へ接続しました。
+通常FollowRouteは従来nav/Joy経路を維持します。未計測dynamicsの既定設定では時間軌道を実行できません。
 
 | パッケージ | 内容 |
 | --- | --- |
@@ -134,7 +136,8 @@ ros2 launch path_planner visualize_trajectory.launch.py
 ```
 
 この表示は仮の質量・慣性・トルク上限を使った `simulation_demo` です。
-YAMLの実測値を読み込む実機制御器ではなく、生成軌道のオープンループ再生です。
+既定は生成軌道の表示再生です。明示 `config_mode:=yaml` は指定YAMLを読みますが、
+previewはhardware出力を拒否し、実測による到達確認とは区別します。
 ポンプ・CANブリッジ・Joy・既存シーケンサは起動せず、`target_joint_angles` へも送信しません。
 ハンド形状の既定幅492 mmなどは取込元の近似を維持しており、吸引1個の実寸ではありません。
 `path_planner` の `model` 引数は表示用URDFだけを変更し、内部の計画・衝突・動力学モデルは変更しません。
@@ -159,3 +162,7 @@ ros2 launch path_planning preview.launch.py
 将来のカメラ入力、実測関節角からの計画、既存追従器への変換・取消・停止処理は未接続です。
 妨害機構はMCU側で扱うため、ROS側での削除・追加対応は不要です。
 学祭の吸引1個選択は共通`festival.yaml`へ反映しました。物理チャンネル対応と1吸引ハンドの実寸は未確認です。
+
+離散ポンプ出力は通常CAN-RPC要求応答へ移行しています。PumpControlはMCUのAPPLIEDと適用mask一致を確認し、UI初期化はarm_readyの実結果を待ちます。UI起動/再準備はROS状態操作で、原点復帰や旧20回の終了信号を送信しません。[ポンプ仕様](src/catchrobo2026_pump/README.md)。
+
+各軸の位置目標もarm_target RPCへ移行しています。起動時は送信停止し、明示初期化で準備確認後に新着目標だけをlatest1・設定周期で送ります。unknown/faultは自動再開せず、nativeFAULT時のMCU再起動は手動です。[アームの運用と診断](src/catchrobo2026_state_machine/README.md)。

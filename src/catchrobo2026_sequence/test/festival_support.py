@@ -84,6 +84,7 @@ class Harness:
         self.group_plans, self.wrist_operations, self.follow_goals = [], [], []
         self.check_replies, self.held = deque(), {}
         self.step_id = 0
+        self.pump_success = True
         self.hold_follow = False
         self.follow_waiter = None
         self.group = ReentrantCallbackGroup()
@@ -157,7 +158,7 @@ class Harness:
         states = (request.left, request.center, request.right)
         self.events.append(('pump', states))
         self.pumps.append(states)
-        response.success = True
+        response.success = self.pump_success
         return response
 
     def endeffector(self, request, response):
