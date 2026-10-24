@@ -1,14 +1,12 @@
 # Festival lifecycle only. Position: mm; phi is ignored at runtime.
-# Every MOVE preserves the latest measured phi at action start.
+# Three-axis moves use XYZ only.
 version: 1
 route_timeout_sec: 180.0
 before_initialization_sequence: before_initialization
 after_initialization_sequence: after_initialization
 start_sequence: startup
 end_sequence: ending
-values:
-  # Width command retained from the existing startup sequence.
-  startup_width_command: 1
+values: {}
 poses:
   lifecycle_pose: [675, -110, 220, 0]
 sequences:
@@ -17,8 +15,7 @@ sequences:
   after_initialization:
     steps: []
   startup:
-    steps:
-      - endeffector: '$startup_width_command'
+    steps: []
   ending:
     steps:
       - move: {absolute: [675, 400, 300, 0]}

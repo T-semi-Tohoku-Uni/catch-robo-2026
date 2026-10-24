@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>canrpc_bridge</name>
+  <version>0.1.0</version>
+  <description>Festival three-axis CAN-RPC bridge based on nhk2026_bridge SocketCAN transport.</description>
+  <maintainer email="robot@example.com">CatchRobo team</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>std_msgs</depend>
+  <depend>lifecycle_msgs</depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

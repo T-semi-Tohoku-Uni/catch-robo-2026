@@ -17,7 +17,7 @@ from launch_ros.events.lifecycle import StateTransition
 
 
 def is_can_bridge(action):
-    return isinstance(action, LifecycleNode) and action.node_name == '/nhk2026_canbridge'
+    return isinstance(action, LifecycleNode) and action.node_name == '/canrpc_bridge'
 
 
 def stop_on_bridge_exit(event, context):
@@ -84,7 +84,7 @@ def generate_launch_description():
     )
     bridge = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(str(
-            Path(get_package_share_directory('nhk2026_bridge')) /
+            Path(get_package_share_directory('canrpc_bridge')) /
             'launch/raspi_can.launch.py')),
         launch_arguments={'non_blocking': LaunchConfiguration('non_blocking')}.items(),
     )

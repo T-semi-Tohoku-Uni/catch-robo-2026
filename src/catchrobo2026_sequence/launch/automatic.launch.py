@@ -71,8 +71,6 @@ def generate_launch_description():
         Node(package='catchrobo2026_pump', executable='pump_controller_node',
              parameters=[LaunchConfiguration('pump_config'),
                          LaunchConfiguration('festival_config')], output='screen'),
-        Node(package='catchrobo2026_endeffector', executable='endeffector_state_node',
-             output='screen'),
 
         # ==================================
         # main.launch.py から追加したノード

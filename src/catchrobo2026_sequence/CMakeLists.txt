@@ -48,14 +48,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_festival_sequence test/test_festival_sequence.py TIMEOUT 120)
-  ament_add_pytest_test(test_rotation_group_navigation
-    test/test_rotation_group_navigation.py TIMEOUT 180)
-  ament_add_pytest_test(test_route_handoff test/test_route_handoff.py TIMEOUT 120)
-  ament_add_pytest_test(test_follower_arrival test/test_follower_arrival.py TIMEOUT 90)
-  ament_add_pytest_test(test_follower_feedback test/test_follower_feedback.py TIMEOUT 90)
-  ament_add_pytest_test(test_wrist_feedback_tolerance_joy
-    test/test_wrist_feedback_tolerance_joy.py TIMEOUT 120)
-  ament_add_pytest_test(test_follower_joy_arrival test/test_follower_joy_arrival.py TIMEOUT 90)
+  ament_add_pytest_test(test_three_axis_navigation
+    test/test_three_axis_navigation.py TIMEOUT 120)
   ament_add_pytest_test(test_check_sequence_config test/test_check_sequence_config.py
     TIMEOUT 120
     ENV CHECK_SEQUENCE_CONFIG_EXECUTABLE=$<TARGET_FILE:check_sequence_config>)

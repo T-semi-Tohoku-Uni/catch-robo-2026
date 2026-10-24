@@ -11,8 +11,7 @@ before_initialization_sequence: before_initialization
 after_initialization_sequence: after_initialization
 start_sequence: startup
 end_sequence: ending
-values:
-  startup_width_command: 1
+values: {}
 poses:
   lifecycle_pose: [675, -110, 220, 0]
 sequences:
@@ -21,8 +20,7 @@ sequences:
   after_initialization:
     steps: []
   startup:
-    steps:
-      - endeffector: '$startup_width_command'
+    steps: []
   ending:
     steps:
       - move: {absolute: [675, 400, 300, 0]}
@@ -34,7 +32,7 @@ bindings:
 
 `poses`、`sequences`、`bindings`は必須です。互換文法のため空のred/blue・pick/placeマップを保持しますが、公開actionはSTART=4、INITIALIZE=5、END=6だけを許可します。`control_epoch`と`step_id`は非ゼロ、`collector_mask`は1..7が必要で、実ポンプの選択は共通`selected_pump`が優先されます。
 
-MOVEを含む動作は開始時の実測`current_joints`から`phi = q0 + q3`を固定し、すべてのMOVE・waypointのphi欄を置き換えます。4要素すべてが有限で1秒以内の実測が必要です。開始時に条件を満たさなければ手順全体を実行しません。回転グループ、sequenceグループ、phi区間は学祭運用では拒否されます。4軸のIK/FKと内部関節角出力は維持されます。実行時には各経路を連続関節角の内部グループに変換し、phi移動量0を強制します。公開YAMLの回転グループを有効にする変更ではありません。固定phiで到達できない場合は拒否し、2π回転へ切り替えません。
+MOVEはXYZのみを使い、通常の経路生成・追従を実行します。公開実測・指令は3要素で、経路生成・追従で有限性と1秒以内の鮮度を確認します。回転グループ、phi区間、幅指令は学祭運用では操作前に拒否します。運動学ライブラリの4軸API境界だけで第4軸へ0を補完します。
 
 基本手順には次を指定できます。各ステップは操作を1種類だけ持ちます。
 
@@ -46,14 +44,13 @@ steps:
   - wait: 0.5
   - pump: release
   - pump: off
-  - endeffector: 1
 ```
 
-相対座標は直近のabsoluteを固定基準にし、前のrelativeから積算しません。`waypoint: {absolute: ...}`は次の通常MOVEまでを1経路にまとめ、通常MOVE終点で到達を待ちます。手順末尾の未接続waypointは初期化・START・ENDで使用できません。`move.waypoints: [[x, y, z, phi], ...]`も使用でき、経由点のphiも開始時実測値へ置き換えます。
+相対座標は直近のabsoluteを固定基準にし、前のrelativeから積算しません。`waypoint: {absolute: ...}`は次の通常MOVEまでを1経路にまとめ、通常MOVE終点で到達を待ちます。手順末尾の未接続waypointは初期化・START・ENDで使用できません。`move.waypoints: [[x, y, z, phi], ...]`も使用でき、経由点もXYZのみを使います。
 
 `pump`の値は`suction`／`release`／`off`です。選択は[festival.yaml](../catchrobo2026_pump/config/festival.yaml)の`selected_pump: 1..3`で統一します。1/2/3は既存PumpControlのleft/center/rightというROSスロットであり、物理配置を意味しません。非選択スロットはOFFです。シーケンス内の`check_suction`も同じ選択スロット1bitだけを要求します。
 
-`endeffector`は幅機構の既存0/1指令です。同梱STARTは従来の1を保持し、広い／狭いの実機対応をここで推測しません。サービスの受理応答で次へ進み、機構の物理完了通知は待ちません。
+`endeffector`文法は互換の設定ライブラリに残りますが、学祭の公開actionは操作前に拒否します。幅機構のノード・サービスクライアントは撤去済みです。
 
 `call: sequence_name`は別手順を展開し、`extends`は継承元の後へ手順を追加します。`'$name'`は`values`内の数値を参照し、計算式は使えません。`manual: true`などの手動待ちステップは、学祭UIに完了操作がないため手順全体の最初の操作前に拒否します。
 

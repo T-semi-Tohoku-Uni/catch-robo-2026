@@ -11,6 +11,7 @@ import unittest
 from ament_index_python.packages import get_package_prefix
 import rclpy
 from sensor_msgs.msg import Joy
+from catchrobo2026_msgs.srv import EndeffectorControl, WristControl
 from std_msgs.msg import Float32MultiArray
 from visualization_msgs.msg import MarkerArray
 
@@ -41,6 +42,7 @@ class ManualVelocityReloadTest(unittest.TestCase):
         self.log = None
         self.samples = []
         self.joint_samples = []
+        self.joint_arrays = []
 
     def tearDown(self):
         if self.child is not None and self.child.poll() is None:
@@ -74,7 +76,10 @@ class ManualVelocityReloadTest(unittest.TestCase):
         self.node.create_subscription(
             Float32MultiArray, 'target_joint_angles',
             lambda message: self.joint_samples.append(
-                message.data[0] + message.data[3]), 100)
+                message.data[0]), 100)
+        self.node.create_subscription(
+            Float32MultiArray, 'target_joint_angles',
+            lambda message: self.joint_arrays.append(list(message.data)), 100)
         self.joy_pub = self.node.create_publisher(Joy, 'joy', 10)
         self.log = tempfile.TemporaryFile(mode='w+')
         self.child = subprocess.Popen(
@@ -230,6 +235,27 @@ class ManualVelocityReloadTest(unittest.TestCase):
         self.assert_neutral_motion()
         self.neutral()
         self.assert_linear_speed(22.0)
+
+    def test_three_joint_contract_has_no_wrist_or_width_operation(self):
+        self.start_node(debug=False)
+        widths = []
+
+        def width(request, response):
+            widths.append(request.command)
+            response.success = True
+            return response
+
+        self.node.create_service(EndeffectorControl, 'set_endeffector_state', width)
+        wrist = self.node.create_client(WristControl, 'wrist_control')
+        self.neutral()
+        message = self.joy()
+        message.buttons[2] = 1
+        self.publish_and_spin(message, 0.15)
+        self.neutral()
+        self.assertFalse(wrist.service_is_ready())
+        self.assertFalse(widths)
+        self.assertTrue(self.joint_arrays)
+        self.assertTrue(all(len(values) == 3 for values in self.joint_arrays))
 
 
 if __name__ == '__main__':

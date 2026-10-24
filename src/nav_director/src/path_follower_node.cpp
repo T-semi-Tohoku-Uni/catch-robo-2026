@@ -22,12 +22,9 @@
 // 提供された運動学ライブラリと独自メッセージ
 #include "ros2_inverse_kinematics/robot_kinematics.h"
 #include "catchrobo2026_msgs/action/follow_route.hpp"
-#include "catchrobo2026_msgs/srv/wrist_control.hpp"
-#include "rotation_constraints.hpp"
 
 using FollowRoute = catchrobo2026_msgs::action::FollowRoute;
 using GoalHandleFollowRoute = rclcpp_action::ServerGoalHandle<FollowRoute>;
-using WristControl = catchrobo2026_msgs::srv::WristControl;
 
 class PathFollowerNode : public rclcpp::Node {
 public:
@@ -44,19 +41,9 @@ public:
             throw std::invalid_argument("Joint goal tolerances must be finite and nonnegative");
         }
         rotation_joint_timeout_sec_ = declare_parameter("rotation_joint_timeout_sec", 1.0);
-        const double wrist_feedback_tolerance_deg =
-            declare_parameter("wrist_feedback_tolerance_deg", 6.0);
-        if (!std::isfinite(wrist_feedback_tolerance_deg) ||
-            wrist_feedback_tolerance_deg < 0.0 || wrist_feedback_tolerance_deg >= 180.0) {
-            throw std::invalid_argument("wrist_feedback_tolerance_deg must be finite in [0, 180)");
+        if (!std::isfinite(rotation_joint_timeout_sec_) || rotation_joint_timeout_sec_ <= 0.0) {
+            throw std::invalid_argument("Joint feedback timeout must be finite and positive");
         }
-        wrist_feedback_tolerance_rad_ = wrist_feedback_tolerance_deg * M_PI / 180.0;
-        rotation_speed_rad_sec_ = declare_parameter("rotation_speed_rad_sec", 1.0);
-        if (!std::isfinite(rotation_joint_timeout_sec_) || rotation_joint_timeout_sec_ <= 0.0 ||
-            !std::isfinite(rotation_speed_rad_sec_) || rotation_speed_rad_sec_ <= 0.0) {
-            throw std::invalid_argument("Invalid rotation group parameters");
-        }
-        wrist_client_ = create_client<WristControl>("wrist_control");
         if (!std::isfinite(lookahead_near_mm_) || !std::isfinite(lookahead_far_mm_) ||
             !std::isfinite(goal_distance_near_mm_) || !std::isfinite(goal_distance_far_mm_) ||
             !std::isfinite(lookahead_smoothing_sec_) || lookahead_near_mm_ <= 0.0 ||
@@ -107,11 +94,11 @@ private:
         latest_joint_sample_.fill(std::numeric_limits<float>::quiet_NaN());
         std::copy_n(msg->data.begin(), std::min(msg->data.size(), latest_joint_sample_.size()),
             latest_joint_sample_.begin());
-        joints_valid_ = msg->data.size() >= 4 &&
-            std::all_of(msg->data.begin(), msg->data.begin() + 4,
+        joints_valid_ = msg->data.size() == 3 &&
+            std::all_of(msg->data.begin(), msg->data.begin() + 3,
                 [](float value) { return std::isfinite(value); });
         if (joints_valid_) {
-            for (int i = 0; i < 4; ++i) {
+            for (int i = 0; i < 3; ++i) {
                 current_joint_angles_[i] = msg->data[i];
             }
             joints_received_at_ = std::chrono::steady_clock::now();
@@ -124,39 +111,8 @@ private:
         if (!goal->start || busy_ || stopping_) {
             return rclcpp_action::GoalResponse::REJECT;
         }
-        const bool constrained = goal->rotation_group_id != 0;
-        if (constrained) {
-            if (goal->path.poses.empty() || goal->wrist_angles.size() != goal->path.poses.size() ||
-                goal->wrist_direction < -1 || goal->wrist_direction > 1 ||
-                (!goal->phi_angles.empty() &&
-                 goal->phi_angles.size() != goal->path.poses.size())) {
-                return rclcpp_action::GoalResponse::REJECT;
-            }
-            if (!std::all_of(goal->phi_angles.begin(), goal->phi_angles.end(),
-                    [](double value) { return std::isfinite(value); })) {
-                return rclcpp_action::GoalResponse::REJECT;
-            }
-            for (size_t i = 0; i < goal->wrist_angles.size(); ++i) {
-                if (!rotation_constraints::legal(goal->wrist_angles[i]) ||
-                    (i > 0 && goal->wrist_direction *
-                        (goal->wrist_angles[i] - goal->wrist_angles[i - 1]) <
-                            -rotation_constraints::kTolerance)) {
-                    return rclcpp_action::GoalResponse::REJECT;
-                }
-            }
-            std::lock_guard<std::mutex> lock(joint_mutex_);
-            if (!freshJoints()) {
-                RCLCPP_WARN(get_logger(), "current_joints rejected at sequence group start: %s",
-                    jointFeedbackDiagnostic().c_str());
-                return rclcpp_action::GoalResponse::REJECT;
-            }
-            // Compare the bounded planning start after validating the raw measurement.
-            if (std::abs(rotation_constraints::clamp(current_joint_angles_[3]) -
-                    goal->wrist_angles.front()) > 0.05) {
-                return rclcpp_action::GoalResponse::REJECT;
-            }
-        } else if (!goal->wrist_angles.empty() || !goal->phi_angles.empty() ||
-                   goal->wrist_direction != 0) {
+        if (goal->rotation_group_id != 0 || !goal->wrist_angles.empty() ||
+            !goal->phi_angles.empty() || goal->wrist_direction != 0) {
             return rclcpp_action::GoalResponse::REJECT;
         }
         // Empty goals retain the manual API, using a snapshot at acceptance.
@@ -177,35 +133,6 @@ private:
                 return rclcpp_action::GoalResponse::REJECT;
             }
         }
-        if (!goal->phi_angles.empty()) {
-            try {
-                for (size_t i = 0; i < path.poses.size(); ++i) {
-                    const double base = baseAt(path, i);
-                    tf2::Quaternion orientation;
-                    tf2::fromMsg(path.poses[i].pose.orientation, orientation);
-                    orientation.normalize();
-                    const auto y_axis = tf2::Matrix3x3(orientation).getColumn(1);
-                    const double pose_phi = std::atan2(-y_axis.x(), y_axis.y());
-                    if (std::hypot(y_axis.x(), y_axis.y()) < 1e-6 ||
-                        std::abs(std::remainder(goal->phi_angles[i] - pose_phi, 2.0 * M_PI)) >
-                            1e-4 ||
-                        std::abs(goal->phi_angles[i] - base - goal->wrist_angles[i]) > 1e-4) {
-                        return rclcpp_action::GoalResponse::REJECT;
-                    }
-                    const auto &a = path.poses[i == 0 ? i : i - 1].pose.position;
-                    const auto &b = path.poses[i].pose.position;
-                    if (!rotation_constraints::legal_phi_segment(
-                            a.x * 1000.0 - robot_pos[0], a.y * 1000.0 - robot_pos[1],
-                            b.x * 1000.0 - robot_pos[0], b.y * 1000.0 - robot_pos[1],
-                            goal->phi_angles[i == 0 ? i : i - 1], goal->phi_angles[i],
-                            goal->wrist_direction)) {
-                        return rclcpp_action::GoalResponse::REJECT;
-                    }
-                }
-            } catch (const std::exception &) {
-                return rclcpp_action::GoalResponse::REJECT;
-            }
-        }
         accepted_path_ = std::move(path);
         busy_ = true;
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
@@ -213,8 +140,7 @@ private:
 
     // The caller holds joint_mutex_.
     bool freshJoints() const {
-        return joints_valid_ && rotation_constraints::legal_feedback(
-            current_joint_angles_[3], wrist_feedback_tolerance_rad_) &&
+        return joints_valid_ &&
             std::chrono::duration<double>(std::chrono::steady_clock::now() -
                 joints_received_at_).count() <= rotation_joint_timeout_sec_;
     }
@@ -225,10 +151,8 @@ private:
         const auto now = std::chrono::steady_clock::now();
         const double valid_age = std::chrono::duration<double>(now - joints_received_at_).count();
         const char *reason = !joint_sample_received_ ? "not_received" :
-            joint_sample_size_ < 4 ? "too_few_values" :
+            joint_sample_size_ != 3 ? "wrong_value_count" :
             !joints_valid_ ? "non_finite" :
-            !rotation_constraints::legal_feedback(current_joint_angles_[3],
-                wrist_feedback_tolerance_rad_) ? "wrist_out_of_range" :
             valid_age > rotation_joint_timeout_sec_ ? "stale" : "ok";
         std::ostringstream detail;
         detail << std::fixed << std::setprecision(6)
@@ -251,117 +175,8 @@ private:
                 detail << "missing";
             }
         }
-        detail << "], wrist_range=[" << -rotation_constraints::kTurn << ",0]"
-               << ", wrist_tolerance_rad=" << rotation_constraints::kTolerance
-               << ", wrist_feedback_tolerance_deg=" << wrist_feedback_tolerance_rad_ * 180.0 / M_PI
-               << ", wrist_feedback_range=["
-               << -rotation_constraints::kTurn - wrist_feedback_tolerance_rad_ << ','
-               << wrist_feedback_tolerance_rad_ << ']';
+        detail << "]";
         return detail.str();
-    }
-
-    static double angleAt(const std::vector<double> &angles, double progress) {
-        if (angles.size() == 1) return angles.front();
-        const size_t index = std::min(static_cast<size_t>(progress), angles.size() - 2);
-        return angles[index] + (angles[index + 1] - angles[index]) * (progress - index);
-    }
-
-    static double wristAt(const std::vector<double> &angles, double progress) {
-        return rotation_constraints::clamp(angleAt(angles, progress));
-    }
-
-    static geometry_msgs::msg::Pose poseAt(const nav_msgs::msg::Path &path, double progress) {
-        if (path.poses.size() == 1) return path.poses.front().pose;
-        const size_t index = std::min(static_cast<size_t>(progress), path.poses.size() - 2);
-        const double t = progress - index;
-        const auto &a = path.poses[index].pose;
-        const auto &b = path.poses[index + 1].pose;
-        auto pose = a;
-        pose.position.x += t * (b.position.x - a.position.x);
-        pose.position.y += t * (b.position.y - a.position.y);
-        pose.position.z += t * (b.position.z - a.position.z);
-        tf2::Quaternion qa, qb;
-        tf2::fromMsg(a.orientation, qa);
-        tf2::fromMsg(b.orientation, qb);
-        qa.normalize();
-        qb.normalize();
-        pose.orientation = tf2::toMsg(qa.slerp(qb, t));
-        return pose;
-    }
-
-    double baseAt(const nav_msgs::msg::Path &path, double progress) {
-        const auto pose = poseAt(path, progress);
-        float position[6] = {static_cast<float>(pose.position.x * 1000.0),
-            static_cast<float>(pose.position.y * 1000.0),
-            static_cast<float>(pose.position.z * 1000.0), 0.0F,
-            static_cast<float>(-M_PI / 2.0), 0.0F};
-        float joints[4];
-        kin_.inverse_kinematics(position, joints);
-        if (!std::all_of(joints, joints + 4,
-                [](float value) { return std::isfinite(value); })) {
-            throw std::runtime_error("Constrained route target is unreachable");
-        }
-        return joints[0];
-    }
-
-    double limitedProgress(const FollowRoute::Goal &goal, const nav_msgs::msg::Path &path,
-                           double start, double desired, double budget) {
-        const bool interpolate_phi = !goal.phi_angles.empty();
-        double progress = start;
-        while (progress < desired) {
-            const double end = std::min(desired, std::floor(progress) + 1.0);
-            const auto cost = [&](double target) {
-                if (!interpolate_phi) {
-                    return std::abs(wristAt(goal.wrist_angles, target) -
-                        wristAt(goal.wrist_angles, progress));
-                }
-                // On each valid XY segment, base angle is monotonic.
-                return std::abs(angleAt(goal.phi_angles, target) -
-                    angleAt(goal.phi_angles, progress)) +
-                    std::abs(baseAt(path, target) - baseAt(path, progress));
-            };
-            const double segment_cost = cost(end);
-            if (segment_cost > budget) {
-                double low = progress;
-                double high = end;
-                for (int iteration = 0; iteration < 50; ++iteration) {
-                    const double middle = (low + high) / 2.0;
-                    if (cost(middle) <= budget) low = middle;
-                    else high = middle;
-                }
-                return low;
-            }
-            budget -= segment_cost;
-            progress = end;
-        }
-        return progress;
-    }
-
-    bool sendWristTarget(const std::shared_ptr<GoalHandleFollowRoute> &goal_handle,
-                         const geometry_msgs::msg::PoseStamped &target, double wrist) {
-        if (goal_handle->is_canceling() || stopping_ || !wrist_client_->service_is_ready()) {
-            return false;
-        }
-        auto request = std::make_shared<WristControl::Request>();
-        request->operation = WristControl::Request::TARGET;
-        request->group_id = goal_handle->get_goal()->rotation_group_id;
-        request->direction = goal_handle->get_goal()->wrist_direction;
-        request->wrist_angle = wrist;
-        request->target = target;
-        auto pending = wrist_client_->async_send_request(request);
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-        while (rclcpp::ok() && !stopping_ && !goal_handle->is_canceling()) {
-            if (pending.wait_for(std::chrono::milliseconds(10)) == std::future_status::ready) {
-                const auto response = pending.get();
-                if (!response->success) {
-                    RCLCPP_ERROR(get_logger(), "Wrist target rejected: %s", response->message.c_str());
-                }
-                return response->success;
-            }
-            if (std::chrono::steady_clock::now() >= deadline) break;
-        }
-        wrist_client_->remove_pending_request(pending);
-        return false;
     }
 
     rclcpp_action::CancelResponse handleCancel(const std::shared_ptr<GoalHandleFollowRoute> goal_handle) {
@@ -391,11 +206,10 @@ private:
     }
 
     std::array<float, 4> finalTargetJoints(
-        const geometry_msgs::msg::Pose &target, bool constrained, double wrist) {
+        const geometry_msgs::msg::Pose &target) {
         // Decode the transmitted pose using the same conventions as Joy.
         tf2::Quaternion orientation;
         tf2::fromMsg(target.orientation, orientation);
-        if (constrained) orientation.normalize();
         const auto y_axis = tf2::Matrix3x3(orientation).getColumn(1);
         float pose[6] = {
             static_cast<float>(target.position.x * 1000.0),
@@ -409,17 +223,7 @@ private:
                 [](float value) { return std::isfinite(value); })) {
             throw std::runtime_error("Final route target is unreachable");
         }
-        if (constrained) {
-            // Preserve the planned physical wrist turn.
-            joints[3] = static_cast<float>(rotation_constraints::clamp(wrist));
-        } else {
-            // Match Joy's Float32 normalization, including both limit endpoints.
-            const float full_turn = 2.0f * static_cast<float>(M_PI);
-            if (joints[3] > 0.0f || joints[3] < -full_turn) {
-                joints[3] = std::fmod(joints[3], full_turn);
-                if (joints[3] > 0.0f) joints[3] -= full_turn;
-            }
-        }
+        joints[3] = 0.0f;
         return joints;
     }
 
@@ -429,10 +233,6 @@ private:
         rclcpp::Rate loop_rate(20); // 20Hzで実行
         auto feedback = std::make_shared<FollowRoute::Feedback>();
         auto result = std::make_shared<FollowRoute::Result>();
-        const auto goal = goal_handle->get_goal();
-        const bool constrained = goal->rotation_group_id != 0;
-        const auto &wrist_angles = goal->wrist_angles;
-        double commanded_progress = 0.0;
 
         bool final_target_sent = false;
         std::array<float, 4> final_target_joints{};
@@ -451,7 +251,6 @@ private:
 
             float current_posrot[6] = {0.0};
             float target_posrot[6] = {0.0};
-            float target_joints[4] = {0.0};
             
             float local_joints[4];
             bool joint_goal_reached = false;
@@ -459,15 +258,15 @@ private:
             // データの排他制御コピー
             {
                 std::lock_guard<std::mutex> lock_j(joint_mutex_);
-                if (constrained && !freshJoints()) {
-                    throw std::runtime_error("current_joints rejected during sequence group: " +
+                if (!freshJoints()) {
+                    throw std::runtime_error("current_joints rejected during XYZ route: " +
                         jointFeedbackDiagnostic());
                 }
                 for(int i=0; i<4; i++) local_joints[i] = current_joint_angles_[i];
                 // Compare feedback with the fixed endpoint, never a repeated old command.
                 joint_goal_reached = joints_valid_ && final_target_sent &&
                     joints_received_at_ >= final_target_sent_at;
-                for (int i = 0; i < 4 && joint_goal_reached; ++i) {
+                for (int i = 0; i < 3 && joint_goal_reached; ++i) {
                     const double tolerance = i == 0 ? goal_joint_tolerance_first_rad_ :
                         goal_joint_tolerance_remaining_rad_;
                     // Physical turns remain distinct even when the pose is identical.
@@ -498,8 +297,6 @@ private:
             const double desired_lookahead = lookahead_near_mm_ +
                 blend * (lookahead_far_mm_ - lookahead_near_mm_);
             const auto now = std::chrono::steady_clock::now();
-            const double rotation_dt = std::max(0.0, std::min(0.05,
-                std::chrono::duration<double>(now - last_update).count()));
             if (!lookahead_initialized) {
                 lookahead_initialized = true;
                 smoothed_lookahead = desired_lookahead;
@@ -538,7 +335,6 @@ private:
             // 経路に沿って先読み距離だけ進み、線分内の位置・姿勢を補間する。
             auto target_pose = final_pose;
             bool targeting_final = true;
-            double target_progress = local_path.poses.size() - 1;
             double remaining = smoothed_lookahead;
             for (size_t i = current_path_index; i + 1 < local_path.poses.size(); ++i) {
                 const auto& a = local_path.poses[i].pose;
@@ -557,24 +353,10 @@ private:
                     tf2::fromMsg(a.orientation, qa);
                     tf2::fromMsg(b.orientation, qb);
                     target_pose.orientation = tf2::toMsg(qa.slerp(qb, t));
-                    target_progress = i + t;
                     targeting_final = false;
                     break;
                 }
                 remaining -= available;
-            }
-
-            double target_wrist = 0.0;
-            if (constrained) {
-                // Keep XYZ and wrist on the same monotonically advancing path parameter.
-                target_progress = std::max(commanded_progress, target_progress);
-                const double max_step = rotation_speed_rad_sec_ * rotation_dt;
-                target_progress = limitedProgress(*goal, local_path,
-                    commanded_progress, target_progress, max_step);
-                target_wrist = goal->phi_angles.empty() ? wristAt(wrist_angles, target_progress) :
-                    angleAt(goal->phi_angles, target_progress) - baseAt(local_path, target_progress);
-                target_pose = poseAt(local_path, target_progress);
-                targeting_final = target_progress >= local_path.poses.size() - 1 - 1e-9;
             }
 
             target_posrot[0] = target_pose.position.x * 1000.0;
@@ -591,27 +373,15 @@ private:
             target_posrot[3] = static_cast<float>(target_yaw);
             target_posrot[4] = -M_PI / 2.0F;
             target_posrot[5] = 0.0F;
-            if (constrained) {
-                kin_.inverse_kinematics(target_posrot, target_joints);
-                if (!std::all_of(target_joints, target_joints + 4,
-                        [](float value) { return std::isfinite(value); })) {
-                    throw std::runtime_error("Constrained route target is unreachable");
-                }
-                target_yaw = target_joints[0] + target_wrist;
-                target_posrot[3] = static_cast<float>(target_yaw);
-            }
-
             // 2PI の整数倍だけ異なる角度を同一視した最短の符号付き角度差。
             const double err_yaw = std::atan2(
                 std::sin(target_yaw - current_posrot[3]),
                 std::cos(target_yaw - current_posrot[3]));
-            if (targeting_final && joint_goal_reached && goal_distance <= 30.0 && std::abs(err_yaw) <= 0.05 &&
-                (!constrained || (commanded_progress >= local_path.poses.size() - 1 - 1e-9 &&
-                    std::abs(local_joints[3] - wrist_angles.back()) <= 0.05))) {
+            if (targeting_final && joint_goal_reached && goal_distance <= 30.0) {
                 result->success = true;
                 busy_ = false;
                 goal_handle->succeed(result);
-                RCLCPP_INFO(this->get_logger(), "Reached the end of the path with correct position, orientation and joint angles.");
+                RCLCPP_INFO(this->get_logger(), "Reached the end of the path with correct XYZ position and three joint angles.");
                 return;
             }
 
@@ -654,24 +424,10 @@ private:
             if (!targeting_final) {
                 final_target_sent = false;
             } else if (!final_target_sent) {
-                final_target_joints = finalTargetJoints(target_pose_msg.pose, constrained,
-                    constrained ? wrist_angles.back() : 0.0);
+                final_target_joints = finalTargetJoints(target_pose_msg.pose);
             }
 
-            if (constrained) {
-                if (!sendWristTarget(goal_handle, target_pose_msg, target_wrist)) {
-                    if (goal_handle->is_canceling()) {
-                        result->success = false;
-                        busy_ = false;
-                        goal_handle->canceled(result);
-                        return;
-                    }
-                    throw std::runtime_error("Wrist target was rejected or timed out");
-                }
-                commanded_progress = target_progress;
-            } else {
-                pub_target_pose_->publish(target_pose_msg);
-            }
+            pub_target_pose_->publish(target_pose_msg);
             if (targeting_final && !final_target_sent) {
                 // Require feedback received after this command was sent or accepted.
                 final_target_sent_at = std::chrono::steady_clock::now();
@@ -711,7 +467,6 @@ private:
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr sub_path_;
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr sub_current_joints_;
     rclcpp_action::Server<FollowRoute>::SharedPtr action_server_;
-    rclcpp::Client<WristControl>::SharedPtr wrist_client_;
 
     std::mutex path_mutex_;
     std::mutex joint_mutex_;
@@ -722,7 +477,7 @@ private:
     bool joint_sample_received_ = false;
     bool valid_joint_sample_received_ = false;
     std::size_t joint_sample_size_ = 0;
-    std::array<float, 4> latest_joint_sample_{};
+    std::array<float, 3> latest_joint_sample_{};
     std::chrono::steady_clock::time_point joint_sample_received_at_;
     nav_msgs::msg::Path accepted_path_;
     std::atomic<bool> busy_{false};
@@ -736,8 +491,6 @@ private:
     double goal_joint_tolerance_first_rad_;
     double goal_joint_tolerance_remaining_rad_;
     double rotation_joint_timeout_sec_;
-    double wrist_feedback_tolerance_rad_;
-    double rotation_speed_rad_sec_;
 };
 
 int main(int argc, char** argv) {

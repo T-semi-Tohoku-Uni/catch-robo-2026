@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cmath>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
@@ -26,12 +28,13 @@ public:
 
 private:
     void jointCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
-        if (msg->data.size() < 4) {
-            RCLCPP_WARN(this->get_logger(), "Expected at least 4 joint angles.");
+        if (msg->data.size() != 3 || !std::all_of(msg->data.begin(), msg->data.end(),
+                [](float value) { return std::isfinite(value); })) {
+            RCLCPP_WARN(this->get_logger(), "Expected exactly 3 joint angles.");
             return;
         }
 
-        float joint_angle[4] = {msg->data[0], msg->data[1], msg->data[2], msg->data[3]};
+        float joint_angle[4] = {msg->data[0], msg->data[1], msg->data[2], 0.0f};
         
         // 追加: 順運動学の計算とパブリッシュ
         float posrot[6] = {0.0f};

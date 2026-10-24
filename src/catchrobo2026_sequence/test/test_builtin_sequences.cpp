@@ -4,16 +4,14 @@
 
 namespace catchrobo2026_sequence
 {
-TEST(BuiltinSequences, FestivalRetainsInitializationAndStartupWidth)
+TEST(BuiltinSequences, FestivalRetainsInitializationWithoutServo)
 {
   const auto config = SequenceConfig::load(SEQUENCE_CONFIG_PATH);
   const auto init = config.compile_initialization();
   ASSERT_EQ(init.size(), 1u);
   EXPECT_EQ(init[0].type, StepType::INITIALIZE);
   const auto startup = config.compile_start();
-  ASSERT_EQ(startup.size(), 1u);
-  EXPECT_EQ(startup[0].type, StepType::ENDEFFECTOR);
-  EXPECT_EQ(startup[0].command, 1);
+  EXPECT_TRUE(startup.empty());
 }
 
 TEST(BuiltinSequences, EndingRetainsPositionsWithoutRotationSteps)

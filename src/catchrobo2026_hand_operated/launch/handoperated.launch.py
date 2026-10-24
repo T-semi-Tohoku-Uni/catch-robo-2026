@@ -103,13 +103,6 @@ def generate_launch_description():
             output='screen'
         ),
 
-        # 4. エンドエフェクタ制御ノード
-        Node(
-            package='catchrobo2026_endeffector',
-            executable='endeffector_state_node',
-            name='endeffector_state_node',
-            output='screen'
-        ),
 
         # 5. 現在のジョイント角度(current_joints)から順運動学を計算し、RViz用のマーカーをパブリッシュするノード
         Node(

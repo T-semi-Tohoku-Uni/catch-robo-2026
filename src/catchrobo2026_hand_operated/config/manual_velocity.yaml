@@ -22,7 +22,6 @@
     gamepad_z_down_button: 4
     gamepad_initialize_button: 2
     gamepad_pump_button: 3
-    gamepad_endeffector_button: 1
     gamepad_deadzone: 0.12
     gamepad_gain: 1.0
     gamepad_preset_ids: [default]

@@ -21,7 +21,6 @@
 #include "catchrobo2026_msgs/action/execute_sequence.hpp"
 #include "catchrobo2026_msgs/action/follow_route.hpp"
 #include "catchrobo2026_msgs/srv/check_suction.hpp"
-#include "catchrobo2026_msgs/srv/endeffector_control.hpp"
 #include "catchrobo2026_msgs/srv/generate_route.hpp"
 #include "catchrobo2026_msgs/srv/plan_rotation_group.hpp"
 #include "catchrobo2026_msgs/srv/set_sequence_manual.hpp"
@@ -38,7 +37,6 @@ using SetSequenceManual = catchrobo2026_msgs::srv::SetSequenceManual;
 using WristControl = catchrobo2026_msgs::srv::WristControl;
 using PumpControl = catchrobo2026_msgs::srv::PumpControl;
 using CheckSuction = catchrobo2026_msgs::srv::CheckSuction;
-using EndeffectorControl = catchrobo2026_msgs::srv::EndeffectorControl;
 using SequenceGoal = rclcpp_action::ServerGoalHandle<ExecuteSequence>;
 using RouteGoal = rclcpp_action::ClientGoalHandle<FollowRoute>;
 using Clock = std::chrono::steady_clock;
@@ -88,17 +86,6 @@ public:
         if (selected_pump_ < 1 || selected_pump_ > 3) {
             throw std::invalid_argument("selected_pump must be 1, 2 or 3");
         }
-        joints_sub_ = create_subscription<std_msgs::msg::Float32MultiArray>(
-            "current_joints", 10, [this](std_msgs::msg::Float32MultiArray::ConstSharedPtr msg) {
-                if (msg->data.size() != 4 || !std::all_of(msg->data.begin(), msg->data.end(),
-                        [](float value) { return std::isfinite(value); })) {
-                    have_phi_ = false;
-                    return;
-                }
-                current_phi_ = static_cast<double>(msg->data[0]) + msg->data[3];
-                phi_received_ = Clock::now();
-                have_phi_ = true;
-            });
         debug_ = declare_parameter<bool>("debug", false, descriptor);
         service_timeout_ = declare_parameter<double>("service_timeout_sec", 3.0, descriptor);
         route_timeout_ = declare_parameter<double>("route_timeout_sec", 30.0, descriptor);
@@ -119,7 +106,6 @@ public:
         wrist_controller_ = create_client<WristControl>("wrist_control");
         pump_writer_ = create_client<PumpControl>("set_pump_state");
         suction_checker_ = create_client<CheckSuction>("check_suction");
-        endeffector_ = create_client<EndeffectorControl>("set_endeffector_state");
         follower_ = rclcpp_action::create_client<FollowRoute>(this, "follow_route");
         manual_control_ = create_service<SetSequenceManual>("set_sequence_manual",
             [this](SetSequenceManual::Request::SharedPtr request,
@@ -165,10 +151,6 @@ public:
 
 private:
     int selected_pump_{1};
-    double current_phi_{0.0};
-    bool have_phi_{false};
-    Clock::time_point phi_received_;
-    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr joints_sub_;
     enum class Phase {
         READY, WAIT_PLAN, PLAN, WAIT_FOLLOW, FOLLOW_GOAL, FOLLOWING,
         WAIT_GROUP_PLAN, GROUP_PLAN, WAIT_WRIST_BEGIN, WRIST_BEGIN,
@@ -313,12 +295,10 @@ private:
             default:
                 throw std::runtime_error("festival mode accepts lifecycle actions only");
             }
-            const bool has_moves = std::any_of(steps_.begin(), steps_.end(),
-                [](const Step &step) { return step.type == StepType::MOVE; });
-            if (has_moves && (!have_phi_ || Clock::now() - phi_received_ > std::chrono::seconds(1))) {
-                throw std::runtime_error("fresh current_joints required to preserve phi");
-            }
             for (auto &step : steps_) {
+                if (step.type == StepType::ENDEFFECTOR) {
+                    throw std::runtime_error("endeffector is removed for festival operation");
+                }
                 if (step.type == StepType::MANUAL) {
                     throw std::runtime_error("manual sequence waits are disabled for festival operation");
                 }
@@ -328,8 +308,8 @@ private:
                 }
                 step.manual_allowed_controls &= ~catchrobo2026_sequence::MANUAL_CONTROL_PHI;
                 if (step.type == StepType::MOVE) {
-                    step.pose[3] = current_phi_;
-                    for (auto &point : step.waypoints) { point[3] = current_phi_; }
+                    step.pose[3] = 0.0;
+                    for (auto &point : step.waypoints) { point[3] = 0.0; }
                 }
             }
             if (steps_.empty() && !lifecycle) {
@@ -337,7 +317,7 @@ private:
             }
             auto prepared = catchrobo2026_sequence::prepare_sequence(
                 std::move(steps_), pending_waypoints_);
-            steps_ = preserve_phi_routes(std::move(prepared.steps));
+            steps_ = std::move(prepared.steps);
             staged_waypoints_ = std::move(prepared.deferred_waypoints);
             clear_pending_waypoints();
             if (prepared.consumed_pending_waypoints != 0 || !staged_waypoints_.empty()) {
@@ -353,43 +333,6 @@ private:
         } catch (const std::exception &error) {
             finish(false, std::string("configuration: ") + error.what());
         }
-    }
-
-    static std::vector<Step> preserve_phi_routes(std::vector<Step> original)
-    {
-        std::vector<Step> result;
-        std::vector<size_t> remap(original.size() + 1);
-        for (size_t i = 0; i < original.size();) {
-            remap[i] = result.size();
-            if (original[i].type != StepType::MOVE) {
-                result.push_back(std::move(original[i++]));
-                continue;
-            }
-            // Keep each complete route in the existing unwrapped joint runner.
-            Step begin;
-            begin.type = StepType::SEQUENCE_START;
-            begin.max_phi_travel = 0.0;
-            result.push_back(begin);
-            while (true) {
-                const bool waypoint = original[i].waypoint;
-                result.push_back(std::move(original[i++]));
-                if (!waypoint) {
-                    break;
-                }
-                // Validated waypoint chains cannot be entered by a branch.
-                remap[i] = result.size();
-            }
-            Step end;
-            end.type = StepType::SEQUENCE_END;
-            result.push_back(end);
-        }
-        remap[original.size()] = result.size();
-        for (auto &step : result) {
-            if (step.type == StepType::IF_SUCTION || step.type == StepType::JUMP) {
-                step.jump_index = remap.at(step.jump_index);
-            }
-        }
-        return result;
     }
 
     void begin_stop(const std::string &message)
@@ -683,15 +626,7 @@ private:
             }
             break;
         case Phase::WAIT_END:
-            if (endeffector_->service_is_ready()) {
-                auto value = std::make_shared<EndeffectorControl::Request>();
-                value->command = steps_[index_].command;
-                transition(Phase::END, "setting endeffector", service_timeout_);
-                request<EndeffectorControl>(endeffector_, value,
-                    [this](EndeffectorControl::Response::SharedPtr reply) {
-                        command_done(reply->success, "endeffector command rejected");
-                    });
-            }
+            finish(false, "endeffector is unavailable on the three-axis arm");
             break;
         case Phase::WAIT_INITIALIZE:
             if (initialization_->service_is_ready()) {
@@ -1137,7 +1072,6 @@ private:
     rclcpp::Client<WristControl>::SharedPtr wrist_controller_;
     rclcpp::Client<PumpControl>::SharedPtr pump_writer_;
     rclcpp::Client<CheckSuction>::SharedPtr suction_checker_;
-    rclcpp::Client<EndeffectorControl>::SharedPtr endeffector_;
     rclcpp_action::Client<FollowRoute>::SharedPtr follower_;
     rclcpp_action::Server<ExecuteSequence>::SharedPtr server_;
     rclcpp::Service<SetSequenceManual>::SharedPtr manual_control_;

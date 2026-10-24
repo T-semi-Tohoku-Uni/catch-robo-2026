@@ -67,7 +67,7 @@ source "$robot_ros_setup"
 # Avoid stale underlay paths recorded in install/setup.bash at build time.
 source "$robot_local_setup"
 
-for robot_package in catchrobo2026_sequence catchrobo2026_ui nav_director nhk2026_bridge; do
+for robot_package in catchrobo2026_sequence catchrobo2026_ui nav_director canrpc_bridge; do
     robot_prefix=$(ros2 pkg prefix "$robot_package") || fail "$robot_package が見つかりません。colcon buildを実行してください。"
     if [[ "$robot_prefix" != "$robot_workspace/install" &&
           "$robot_prefix" != "$robot_workspace/install/"* ]]; then

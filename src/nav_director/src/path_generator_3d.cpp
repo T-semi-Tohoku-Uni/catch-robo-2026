@@ -31,14 +31,6 @@ public:
         if (!std::isfinite(rotation_joint_timeout_sec_) || rotation_joint_timeout_sec_ <= 0.0) {
             throw std::invalid_argument("Invalid rotation_joint_timeout_sec");
         }
-        const double wrist_feedback_tolerance_deg =
-            declare_parameter("wrist_feedback_tolerance_deg", 6.0);
-        if (!std::isfinite(wrist_feedback_tolerance_deg) || wrist_feedback_tolerance_deg < 0.0 ||
-            wrist_feedback_tolerance_deg >= 180.0) {
-            throw std::invalid_argument("wrist_feedback_tolerance_deg must be within [0, 180)");
-        }
-        wrist_feedback_tolerance_rad_ = wrist_feedback_tolerance_deg *
-            rotation_constraints::kTurn / 360.0;
         // パブリッシャーの初期化
         pub_path_ = this->create_publisher<nav_msgs::msg::Path>("route", 10);
         pub_marker_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("path_orientations", 10);
@@ -65,14 +57,14 @@ public:
 private:
     // 変更: ジョイント値から順運動学を用いて現在地を計算するコールバック
     void jointCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
-        if (msg->data.size() < 4) {
+        if (msg->data.size() != 3) {
             joints_valid_ = false;
-            RCLCPP_WARN(this->get_logger(), "Received joint data size is less than 4.");
+            RCLCPP_WARN(this->get_logger(), "Expected exactly 3 joint angles.");
             return;
         }
 
-        float joint_angles[4];
-        for (int i = 0; i < 4; ++i) {
+        float joint_angles[4] = {0.0f};
+        for (int i = 0; i < 3; ++i) {
             if (!std::isfinite(msg->data[i])) {
                 joints_valid_ = false;
                 return;
@@ -96,25 +88,9 @@ private:
 
     void planRotationGroup(const std::shared_ptr<PlanRotationGroup::Request> req,
                            std::shared_ptr<PlanRotationGroup::Response> res) {
+        (void)req;
         res->success = false;
-        if (req->limit_phi_travel && (!std::isfinite(req->max_phi_travel) ||
-            req->max_phi_travel < 0.0)) {
-            res->message = "Phi travel limit must be finite and nonnegative";
-            return;
-        }
-        if (!joints_valid_ || !rotation_constraints::legal_feedback(
-                current_wrist_, wrist_feedback_tolerance_rad_) ||
-            std::chrono::duration<double>(std::chrono::steady_clock::now() -
-                joints_received_at_).count() > rotation_joint_timeout_sec_) {
-            res->message = "Fresh finite current_joints within the wrist feedback tolerance are required";
-            return;
-        }
-        *res = planner_.planGroup({cur_pose_, current_base_, current_wrist_}, *req,
-            wrist_feedback_tolerance_rad_);
-        for (auto &route : res->routes) {
-            route.path.header.stamp = now();
-            for (auto &pose : route.path.poses) pose.header = route.path.header;
-        }
+        res->message = "Rotation groups are unavailable on the three-axis arm";
     }
 
     void waypointCallback(const std::shared_ptr<WaypointSrv::Request> req,
@@ -127,6 +103,13 @@ private:
 
     void genRouteCallback(const std::shared_ptr<GenRouteSrv::Request> req,
                           std::shared_ptr<GenRouteSrv::Response> res) {
+        if (!joints_valid_ || std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - joints_received_at_).count() >
+                rotation_joint_timeout_sec_) {
+            res->success = false;
+            RCLCPP_WARN(get_logger(), "Fresh finite three-axis current_joints are required.");
+            return;
+        }
         // Build locally so rejected requests cannot alter the legacy queue.
         res->success = false;
         std::vector<Point3D> route_points;

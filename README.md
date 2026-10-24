@@ -51,7 +51,7 @@ ROSの選択順は `ROBOT_ROS_DISTRO`、現在の `ROS_DISTRO`、`/opt/ros` に�
 
 同梱RVizでは、手動操作の指令姿勢を `/target_arm_markers`（Target Arm）、`/current_joints`から求めた実測姿勢を `/current_robot_markers`（Current Arm）で区別して表示します。`automatic.launch.py`だけを起動し実測入力がない場合、Current Armは表示されません。別PCのRVizで見る場合は`ROS_DOMAIN_ID`を合わせ、`ROS_LOCALHOST_ONLY=1`を解除してLAN上のDDS通信を有効にしてください。
 
-手首の実測角の許容幅は [joint_feedback.yaml](src/nav_director/config/joint_feedback.yaml) の `wrist_feedback_tolerance_deg` で指定します。単位は度で、既定の `6.0` は実測値を −366°〜+6°まで受け付けます。有限の `0` 以上 `180` 未満を指定でき、`0` は数値誤差の許容だけを残します。この設定は経路生成・追従・Joyで共有し、指令角の範囲 −360°〜0°、到達判定の許容値、timeoutは変更しません。
+実測関節角は3値です。[joint_feedback.yaml](src/nav_director/config/joint_feedback.yaml) の `rotation_joint_timeout_sec`（既定1秒）を経路生成・追従で共有します。第4軸の角度範囲や回転制約は運転に使用しません。
 
 設定は起動時に読み込むため、編集後は3ノードを再起動してください。`debug:=true` による動作ごとの再読込は対象外です。本番launchは上記ソースYAML、`automatic.launch.py`・手動launch・navのテストlaunchはインストール済みYAMLを既定で使用します。後者でソース編集を反映する場合は再ビルドするか、`joint_feedback_config:="$PWD/src/nav_director/config/joint_feedback.yaml"` を指定して起動します。
 
@@ -59,11 +59,11 @@ ROSの選択順は `ROBOT_ROS_DISTRO`、現在の `ROS_DISTRO`、`/opt/ros` に�
 
 ## 学祭の手動取得
 
-UIでは初期化後にSTARTし、任意の1箇所へ並進操作で移動してワークを手動取得します。競技用PICK／PLACEのキュー・座標・運用シーケンスは削除しました。公開sequence actionもPICK／PLACEを拒否します。START・STOP・停止解除・ENDを使い、幅切替機構は保持します。
+UIでは初期化後にSTARTし、任意の1箇所へ並進操作で移動してワークを手動取得します。競技用PICK／PLACEのキュー・座標・運用シーケンスは削除しました。公開sequence actionもPICK／PLACEを拒否します。START・STOP・停止解除・ENDを使い、第4軸と幅切替機構は撤去しています。
 
 [共通festival.yaml](src/catchrobo2026_pump/config/festival.yaml)の`selected_pump: 1..3`で、使用する吸引を1つ選びます。UI・Joy・sequence・pumpが同じ`festival_config`を読み込みます。1/2/3は既存ROSのPumpControl.left/center/rightというスロット順で、物理L/C/Rの確定値ではありません。既定1は変更可能な仮値です。非選択スロットは起動時と直接service呼出しでもOFFを保持します。変更後は関係する全ノードを再起動してください。
 
-[sequences.yaml](src/catchrobo2026_sequence/config/sequences.yaml)は初期化前後が空、STARTが既存の幅指令1、ENDが`[675,400,300]`→`[675,-110,220]` mmの2移動です。ENDの旧回転・phi区間は削除し、各MOVE・経由点のphiは動作開始時の実測`q0+q3`に固定します。MOVEを含む動作では1秒以内の有限な4関節値が必要です。実機での位置・経路・停止性能は別途確認が必要です。[シーケンス説明](src/catchrobo2026_sequence/README.md)と[設定仕様](src/catchrobo2026_sequence/CONFIG.md)を参照してください。
+[sequences.yaml](src/catchrobo2026_sequence/config/sequences.yaml)は初期化前後とSTARTが空、ENDが`[675,400,300]`→`[675,-110,220]` mmの2移動です。XYZのみを使い、3要素の有限な実測関節値を1秒以内に受信して経路生成・追従します。起動位置X=670 mmとENDのX=675 mmは維持します。実機での位置・経路・停止性能は未確認です。[シーケンス説明](src/catchrobo2026_sequence/README.md)と[設定仕様](src/catchrobo2026_sequence/CONFIG.md)を参照してください。
 
 ```bash
 source /opt/ros/jazzy/setup.bash
