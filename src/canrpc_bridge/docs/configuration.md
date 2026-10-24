@@ -1,6 +1,6 @@
 # 設定と再利用
 
-`config/gakusai.yaml` が学祭構成の設定正本です。ROS nodeは `config_file` をconfigure時に読み、launchとMCU生成ツールは同じprofileを検証します。設定変更は各ROS process・必要なMCUを再起動して反映します。`config_file`、`reset_on_startup`、`startup_timeout_sec` は起動時だけ指定できるread-only ROS parameterです。
+`config/gakusai.yaml` が学祭構成の設定正本です。ROS nodeは `config_file` をconfigure時に読み、launchとMCU生成ツールは同じprofileを検証します。設定変更は各ROS process・必要なMCUを再起動して反映します。bridgeの同じconfig_file内容は明示cleanup→configureでも再読込できますが、その後は明示activateが必要です。`config_file`、`reset_on_startup`、`startup_timeout_sec` は起動時だけ指定できるread-only ROS parameterです。
 
 ## 起動
 
@@ -152,9 +152,9 @@ ROS callbackは最終状態まで応答を保留し、executorを待機でblock�
 
 `rpc_endpoints` は `{name, destination, service, request_bytes, response_bytes, require_ready?, startup_diagnostic?}` のlist。nameとdestination＋serviceの組を一意にし、destinationは宣言済みremote Node、serviceは0〜31、各論理長は0〜64。require_readyの既定はtrue。falseでもpeer Bootが既知でfreshである必要があります。長さ・padding不一致のRESPONSEは無視し、別操作の応答を当てません。
 
-学祭profileはpump_setを絶対mask設定、arm_readyを非作動の準備状態確認として使います。旧pump_stateの100Hz PUBLISHを併用してRPC結果を上書きすることはありません。INIT／BOOTの上位状態遷移は、ROS serviceの受付だけでなく返却されたapplication resultとflagsで判断します。
+学祭profileはpump_setを絶対mask設定、arm_readyを非作動の準備状態確認、arm_initializeを明示的なモーター初期化開始として使います。通信BOOTのREADYはモーターREADYではありません。旧pump_stateの100Hz PUBLISHを併用してRPC結果を上書きすることはありません。INIT／BOOTの上位状態遷移は、ROS serviceの受付だけでなく返却されたapplication resultとflagsで判断します。
 
-`application.motor_initialization` は学祭STM32アプリのbounded boot手順用で、step_timeout_ms／homing_timeout_ms／feedback_timeout_ms／feedback_max_age_ms／inter_command_ms／home_settle_msを定義します。汎用ROS bridgeやportable coreがモータ制御を行う設定ではありません。
+`application.motor_initialization` は学祭STM32アプリのbounded boot手順用で、initialization_timeout_ms（総期限、既定20000）／step_timeout_ms／homing_timeout_ms／feedback_timeout_ms／feedback_max_age_ms／inter_command_ms／home_settle_msを定義します。STM32生成時に総期限が`27*step_timeout_ms + homing_timeout_ms + feedback_timeout_ms + 26*inter_command_ms + home_settle_ms + 29*10ms`以上であることを検証します（既定17050ms）。最後の290msはmain pollの余白です。launchは総期限＋target／initialize／readyの各RPC期限＋1秒をstateの全phase待機予算へ伝え、UI／Joy／sequenceはさらに0.5秒、Webはstate予算＋1秒を待ちます。通常targetの100ms期限は変更しません。汎用ROS bridgeやportable coreがモータ制御を行う設定ではありません。
 
 ## 共通coreとMCU生成
 
@@ -201,7 +201,7 @@ void receive_reset(const uint8_t own_boot[16], const uint8_t request[48],
 
 この例ではcontrollerのBOOTを `canrpc_peer_announce` へ渡し、返信IDに `canrpc_id(3, CANRPC_CONTROL, 17, CANRPC_RESET_STATUS, 42, tag)` を使います。乱数生成、受信source／destinationの照合、時刻、送受信、安全化、MCU resetはプラットフォーム実装が担当します。特定のrole名やROSを必要としません。
 
-`startup_diagnostic`は既定false。trueはrequest_bytes=0かつrequire_ready=falseに限定し、起動失敗時にも非作動の診断だけを有限時間で照会します。学祭arm_readyの応答は48byte/version1で、形式は[protocol](protocol.md#arm-readiness-diagnostic-version-1)を参照してください。
+`startup_diagnostic`は既定false。trueはrequest_bytes=0かつrequire_ready=falseに限定し、起動失敗時にも非作動の診断だけを有限時間で照会します。学祭の診断許可endpointはarm_readyだけです。arm_initializeは通常の作動要求としてDEGRADED中は拒否します。両endpointの応答は64byte/version2で、形式は[protocol](protocol.md#arm-readiness-diagnostic-version-2)を参照してください。
 
 Nodeごとに`nodes.<role>.rpc`へ8つのpolicy値（ROS service名以外）をすべて指定すると、global rpcをそのpeerだけ上書きします。Tagは同じpeerの全serviceで共有するためendpoint別policyにはしません。cache_capacity上限は32。学祭armはresponse 100ms、retry interval 10ms/window 20ms、query 10ms、retention 120ms、guard 240ms、max frame age 20ms、cache 32です。pumpは既定1000ms/guard5000ms/cache8を維持します。
 
@@ -210,3 +210,8 @@ Nodeごとに`nodes.<role>.rpc`へ8つのpolicy値（ROS service名以外）を�
 明示INITではROS専用`ArmTargetGate`で目標送信をpauseし、既存inflightが終端した後にarm_readyを照会します。READYのときだけ同じgate tokenと全体deadlineでresumeします。失敗時はpauseを維持します。deadlineは同一hostのCLOCK_MONOTONIC nsであり、古いresume/期限超過はadapterが拒否します。resumeは物理停止や再homeを意味しません。
 
 startup diagnosticは同じdestinationに1endpointまでです。resumeの応答喪失・期限超過で成功を確認できない場合は、stateが新しい期限を付けたbest-effort PAUSEを送ります。これは元の失敗を変更せず、PAUSE受信・物理停止の確認も意味しません。期限内resumeが適用済みで応答だけ失われた場合はUNKNOWNとして扱い、後の明示INITで再確認します。
+
+
+bridgeのread-only ROS parameter `status_topic`（既定canrpc/status）は型付きBridgeStatusの宛先です。本番launchは`canrpc_status_topic`をbridge/targetへ共通伝播し、`bridge_status_timeout_sec`（既定2.5秒）をtarget側監視に渡します。status READY/commands_enabled/socket_openと新sessionを受信しても、targetの初期PAUSED・明示INIT規約は解除しません。
+
+運用中のCAN/RESET失敗はプロセス終了ではなくDEGRADEDで診断を続けます。初期化中のCallは未準備、DEGRADEDのstartup_diagnosticは実data付きUNAVAILABLE、一般指令は拒否です。明示deactivate→activateで再試行し、単なる電源/BOOT復帰では運動許可へ戻りません。profile不正は設定修正が必要です。

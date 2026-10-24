@@ -49,11 +49,13 @@ rpc:
   cache_capacity: 8
 rpc_endpoints:
   - {name: pump_set, destination: 3, service: 0, request_bytes: 4, response_bytes: 8, require_ready: true}
-  - {name: arm_ready, destination: 2, service: 0, request_bytes: 0, response_bytes: 48, require_ready: false, startup_diagnostic: true}
+  - {name: arm_ready, destination: 2, service: 0, request_bytes: 0, response_bytes: 64, require_ready: false, startup_diagnostic: true}
+  - {name: arm_initialize, destination: 2, service: 2, request_bytes: 0, response_bytes: 64, require_ready: true}
   - {name: arm_target, destination: 2, service: 1, request_bytes: 12, response_bytes: 20, require_ready: true}
 application:
   arm_control: {native_ack_timeout_ms: 40, target_period_ms: 10}
   motor_initialization:
+    initialization_timeout_ms: 20000
     step_timeout_ms: 200
     homing_timeout_ms: 10000
     feedback_timeout_ms: 1000

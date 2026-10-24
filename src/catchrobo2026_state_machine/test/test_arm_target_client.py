@@ -7,12 +7,14 @@ import subprocess
 import time
 
 from ament_index_python.packages import get_package_prefix
+from canrpc_bridge.msg import BridgeStatus
 from canrpc_bridge.srv import Call
 from catchrobo2026_msgs.srv import ArmTargetGate
 import pytest
 import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import SingleThreadedExecutor
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.task import Future
 from std_msgs.msg import Float32MultiArray
 from std_srvs.srv import Trigger
@@ -20,9 +22,9 @@ from std_srvs.srv import Trigger
 
 @pytest.fixture
 def rig(tmp_path, monkeypatch, request):
-    monkeypatch.setenv('ROS_DOMAIN_ID', '207')
+    monkeypatch.setenv('ROS_DOMAIN_ID', '210')
     monkeypatch.setenv('ROS_AUTOMATIC_DISCOVERY_RANGE', 'LOCALHOST')
-    monkeypatch.delenv('ROS_LOCALHOST_ONLY', raising=False)
+    monkeypatch.setenv('ROS_LOCALHOST_ONLY', '1')
     rclpy.init()
     node = rclpy.create_node(
         'target_test', namespace=f'/target_{os.getpid()}_{time.monotonic_ns()}')
@@ -67,9 +69,11 @@ def rig(tmp_path, monkeypatch, request):
         extra = ['-p', f'trajectory_dynamics_config:={dynamics}',
                  '-p', f'trajectory_pipeline_config:={pipeline}',
                  '-p', 'trajectory_timeout_sec:=3.0']
+    status_timeout = options.get('status_timeout', 2.5)
     child = subprocess.Popen([str(binary), '--ros-args', '-r', f'__ns:={node.get_namespace()}',
                               '-p', 'canrpc_service:=fake/call', '-p', 'rpc_timeout_sec:=0.15',
-                              '-p', f'target_period_ms:={options.get("period_ms", 10)}'] + extra,
+                              '-p', f'target_period_ms:={options.get("period_ms", 10)}',
+                              '-p', f'bridge_status_timeout_sec:={status_timeout}'] + extra,
                              stdout=log, stderr=log, start_new_session=True)
 
     class Rig:
@@ -80,6 +84,11 @@ def rig(tmp_path, monkeypatch, request):
         follow = False
         feedback_enabled = True
         rebase_ok = True
+        rebase_hold = False
+        rebase_waiters = []
+        status_enabled = True
+        status_ready = True
+        status_session = '0123456789abcdef' * 2
 
         def spin(self, seconds=0.05):
             deadline = time.monotonic() + seconds
@@ -118,6 +127,7 @@ def rig(tmp_path, monkeypatch, request):
                 if not future.done():
                     future.set_result(True)
     harness = Rig()
+    harness.status_enabled = options.get('status_enabled', True)
     group = ReentrantCallbackGroup()
 
     async def call(request, response):
@@ -141,16 +151,29 @@ def rig(tmp_path, monkeypatch, request):
         return response
     node.create_service(Call, 'fake/call', call, callback_group=group)
 
-    def rebase(_request, response):
+    async def rebase(_request, response):
+        if harness.rebase_hold:
+            future = Future(executor=executor)
+            harness.rebase_waiters.append(future)
+            await future
         response.success = harness.rebase_ok
         return response
 
-    node.create_service(Trigger, 'joy/rebase', rebase)
+    node.create_service(Trigger, 'joy/rebase', rebase, callback_group=group)
 
+    harness.child = child
     harness.node = node
     harness.current = node.create_publisher(Float32MultiArray, 'current_joints', 1)
+    status = node.create_publisher(BridgeStatus, 'canrpc/status', QoSProfile(
+        depth=1, reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.TRANSIENT_LOCAL))
 
     def feedback():
+        if harness.status_enabled:
+            status.publish(BridgeStatus(
+                state=BridgeStatus.READY if harness.status_ready else BridgeStatus.DEGRADED,
+                commands_enabled=harness.status_ready, socket_open=harness.status_ready,
+                session_id=harness.status_session, reason='host transport mock'))
         if harness.feedback_enabled:
             harness.current.publish(Float32MultiArray(data=harness.actual))
 
@@ -164,6 +187,9 @@ def rig(tmp_path, monkeypatch, request):
         yield harness
     finally:
         harness.release()
+        for pending in harness.rebase_waiters:
+            if not pending.done():
+                pending.set_result(True)
         if child.poll() is None:
             os.killpg(child.pid, signal.SIGINT)
         try:
@@ -312,3 +338,106 @@ def test_configured_period_reduces_send_rate_without_changing_input_rate(rig):
     assert 2 <= len(rig.records) <= 13
     assert all(second[0] - first[0] >= 0.020
                for first, second in zip(rig.records, rig.records[1:]))
+
+
+def test_idle_bridge_fault_closes_open_gate_until_explicit_init(rig):
+    rig.resume()
+    rig.status_ready = False
+    rig.spin(0.05)
+    rig.status_ready = True
+    rig.spin(0.05)
+    rig.send([1., 2., 3.])
+    rig.spin(0.05)
+    assert not rig.records
+    rig.resume()
+    rig.spin(0.05)
+    assert not rig.records
+    rig.send([0.2, 0.3, 0.4])
+    rig.until(lambda: len(rig.records) == 1)
+
+
+def test_ready_session_change_closes_idle_gate_without_replaying(rig):
+    rig.resume()
+    rig.status_session = 'fedcba9876543210' * 2
+    rig.spin(0.05)
+    rig.send([1., 2., 3.])
+    rig.spin(0.05)
+    assert not rig.records
+    rig.resume()
+    rig.spin(0.05)
+    assert not rig.records
+    rig.send([0.2, 0.3, 0.4])
+    rig.until(lambda: len(rig.records) == 1)
+
+
+@pytest.mark.parametrize('rig', [{'status_timeout': 1.1}], indirect=True)
+def test_expired_status_rejects_resume_and_ready_does_not_reopen(rig):
+    rig.resume()
+    rig.status_enabled = False
+    rig.spin(1.25)
+    paused = rig.resolve(rig.gate())
+    rejected = rig.resolve(rig.gate(False, paused.token))
+    assert not rejected.success and 'heartbeat expired' in rejected.message
+    rig.status_enabled = True
+    rig.spin(0.05)
+    rig.send([1., 2., 3.])
+    rig.spin(0.05)
+    assert not rig.records
+    rig.resume()
+    rig.send([0.2, 0.3, 0.4])
+    rig.until(lambda: len(rig.records) == 1)
+
+
+def test_status_failure_invalidates_pending_resume_and_late_rebase(rig):
+    paused = rig.resolve(rig.gate())
+    rig.rebase_hold = True
+    resumed = rig.gate(False, paused.token)
+    rig.until(lambda: bool(rig.rebase_waiters))
+    rig.status_ready = False
+    assert not rig.resolve(resumed).success
+    rig.rebase_waiters.pop().set_result(True)
+    rig.rebase_hold = False
+    rig.status_ready = True
+    rig.spin(0.05)
+    assert not rig.resolve(rig.gate(False, paused.token)).success
+    rig.send([1., 2., 3.])
+    rig.spin(0.05)
+    assert not rig.records
+    rig.resume()
+    rig.send([0.2, 0.3, 0.4])
+    rig.until(lambda: len(rig.records) == 1)
+
+
+@pytest.mark.parametrize('rig', [{'status_enabled': False}], indirect=True)
+def test_missing_status_cannot_open_gate_and_first_ready_needs_init(rig):
+    paused = rig.resolve(rig.gate())
+    rejected = rig.resolve(rig.gate(False, paused.token))
+    assert not rejected.success and 'status not received' in rejected.message
+    rig.send([1., 2., 3.])
+    rig.spin(0.05)
+    assert not rig.records
+    rig.status_enabled = True
+    rig.spin(0.05)
+    rig.send([1., 2., 3.])
+    rig.spin(0.05)
+    assert not rig.records
+    rig.resume()
+    rig.send([0.2, 0.3, 0.4])
+    rig.until(lambda: len(rig.records) == 1)
+
+
+@pytest.mark.parametrize('rig', [{'status_timeout': 1.1}], indirect=True)
+def test_same_ready_after_executor_gap_cannot_hide_expired_status(rig):
+    rig.resume()
+    os.kill(rig.child.pid, signal.SIGSTOP)
+    try:
+        rig.spin(1.25)
+    finally:
+        os.kill(rig.child.pid, signal.SIGCONT)
+    rig.spin(0.1)
+    rig.send([1., 2., 3.])
+    rig.spin(0.05)
+    assert not rig.records
+    rig.resume()
+    rig.send([0.2, 0.3, 0.4])
+    rig.until(lambda: len(rig.records) == 1)

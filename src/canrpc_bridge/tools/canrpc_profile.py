@@ -238,19 +238,25 @@ def _mcu_headers(p):
     if 'rpc' not in p:
         raise ValueError('STM32 application requires ordinary RPC settings')
     endpoints = {e['name']:e for e in p['rpc_endpoints']}
-    for name,role,req,resp in [('pump_set','pump',4,8),('arm_ready','arm',0,48),('arm_target','arm',12,20)]:
+    for name,role,req,resp in [('pump_set','pump',4,8),('arm_ready','arm',0,64),('arm_initialize','arm',0,64),('arm_target','arm',12,20)]:
         e=endpoints.get(name,{})
         if (e.get('destination'),e.get('request_bytes'),e.get('response_bytes')) != (p['nodes'][role]['id'],req,resp):
             raise ValueError('STM32 application RPC endpoint mismatch: '+name)
         if e.get('require_ready',True) != (name!='arm_ready'):
             raise ValueError('STM32 endpoint readiness policy mismatch: '+name)
-    motor_keys=['step_timeout_ms','homing_timeout_ms','feedback_timeout_ms','feedback_max_age_ms','inter_command_ms','home_settle_ms']
+    motor_keys=['initialization_timeout_ms','step_timeout_ms','homing_timeout_ms','feedback_timeout_ms','feedback_max_age_ms','inter_command_ms','home_settle_ms']
     motor=p.get('application',{}).get('motor_initialization',{})
     _mapping(motor,'application.motor_initialization',motor_keys,motor_keys)
     for key in motor_keys:
         _integer(motor[key],1,2147483647,'motor_initialization.'+key)
     if motor['step_timeout_ms']<=10 or motor['feedback_timeout_ms']<=10 or motor['feedback_max_age_ms']>100:
         raise ValueError('STM32 motor timing must allow main polling and respect existing ADRC 100ms freshness')
+    # Bound every native command, homing, final feedback and 10 ms poll latency.
+    minimum = (27 * motor['step_timeout_ms'] + motor['homing_timeout_ms'] +
+               motor['feedback_timeout_ms'] + 26 * motor['inter_command_ms'] +
+               motor['home_settle_ms'] + 29 * 10)
+    if motor['initialization_timeout_ms'] < minimum:
+        raise ValueError('motor initialization_timeout_ms must cover bounded FSM: ' + str(minimum))
     control=p.get('application',{}).get('arm_control',{})
     _mapping(control,'application.arm_control',['native_ack_timeout_ms','target_period_ms'],['native_ack_timeout_ms'])
     if 'target_period_ms' in control:
@@ -295,7 +301,7 @@ def _mcu_headers(p):
         self_endpoints=[e for e in p['rpc_endpoints'] if e['destination']==p['nodes'][role]['id']]
         values['CANRPC_PROJECT_RPC_ENDPOINT_COUNT']=len(self_endpoints)
         values['CANRPC_PROJECT_NATIVE_ACK_TIMEOUT_MS']=control['native_ack_timeout_ms']
-        for name in ['arm_ready','arm_target','pump_set']:
+        for name in ['arm_ready','arm_initialize','arm_target','pump_set']:
             if name in endpoints:
                 values['CANRPC_PROJECT_'+name.upper()+'_SERVICE']=endpoints[name]['service']
         for key,value in motor.items():
@@ -317,21 +323,15 @@ def sync_mcu(profile_path, mcu_root, check=False):
     package = Path(__file__).resolve().parents[1]
     core = (package/'core/include/canrpc_core.h').read_bytes()
     adapter = (package/'adapters/stm32g4/canrpc_stm32.h').read_bytes()
+    guard = (package/'adapters/stm32g4/canrpc_board.h').read_bytes()
+    debug = (package/'adapters/stm32g4/canrpc_debug.h').read_bytes()
+    checker = (package/'tools/check_canrpc.py').read_bytes()
     wrapper = b'#ifndef CANRPC_APPLICATION_H\n#define CANRPC_APPLICATION_H\n#include "canrpc_core.h"\n#include "canrpc_project.h"\n#endif\n'
     mismatches = []
     all_outputs = {}
     for role, repo_name in [('arm','catch2026_robstride'),('pump','catchrobo2026_pump'),('pressure','catch2026_pressure')]:
         repo = Path(mcu_root)/repo_name
-        init_source = repo/'Core/Src/fdcan.c' if role == 'pressure' else repo/'Core/Src/main.c'
-        init_text = init_source.read_text()
-        expected_init = {'NominalPrescaler':'CANRPC_PROJECT_NOMINAL_PRESCALER',
-                         'DataPrescaler':'CANRPC_PROJECT_DATA_PRESCALER',
-                         'NominalTimeSeg1':'15', 'NominalTimeSeg2':'4',
-                         'DataTimeSeg1':'15', 'DataTimeSeg2':'4'}
-        for field, value in expected_init.items():
-            if not re.search(r'hfdcan1\.Init\.'+field+r'\s*=\s*'+value+r'\s*;',init_text):
-                raise ValueError(str(init_source) + ': unexpected FDCAN1.' + field)
-        outputs = {repo/'Core/Inc/canrpc_core.h':core, repo/'Core/Inc/canrpc_stm32.h':adapter, repo/'Core/Inc/canrpc_project.h':headers[role].encode(), repo/'Core/Inc/canrpc.h':wrapper}
+        outputs = {repo/'Core/Inc/canrpc_debug.h':debug, repo/'Core/Inc/canrpc_board.h':guard, repo/'tools/check_canrpc.py':checker, repo/'Core/Inc/canrpc_core.h':core, repo/'Core/Inc/canrpc_stm32.h':adapter, repo/'Core/Inc/canrpc_project.h':headers[role].encode(), repo/'Core/Inc/canrpc.h':wrapper}
         for ioc in repo.glob('*.ioc'):
             text = ioc.read_text()
             if not re.search(r'^RCC.FDCANFreq_Value=80000000$',text,re.M):
@@ -340,14 +340,22 @@ def sync_mcu(profile_path, mcu_root, check=False):
                 text,n = re.subn(r'^FDCAN1\.'+key+r'=.*$',f'FDCAN1.{key}={value}',text,flags=re.M)
                 if n != 1:
                     raise ValueError(f'{ioc}: missing FDCAN1.{key}')
+            for key,value in [('CalculateBaudRateNominal',p['bus']['nominal_bitrate']),
+                              ('CalculateTimeQuantumNominal',f'{prescalers[0]*1e9/80000000:.1f}')]:
+                text = re.sub(r'^FDCAN1\.'+key+r'=.*$',f'FDCAN1.{key}={value}',text,flags=re.M)
             outputs[ioc] = text.encode()
         all_outputs.update(outputs)
     for path, content in all_outputs.items():
         if not path.exists() or path.read_bytes() != content:
             mismatches.append(str(path))
+    if check:
+        from check_canrpc import check_repo
+        for role, repo_name in [('arm','catch2026_robstride'),('pump','catchrobo2026_pump'),('pressure','catch2026_pressure')]:
+            check_repo(Path(mcu_root)/repo_name,role)
     if not check:
         for path, content in all_outputs.items():
             if str(path) in mismatches:
+                path.parent.mkdir(parents=True,exist_ok=True)
                 path.write_bytes(content)
     if check and mismatches:
         raise ValueError('outdated MCU vendors/config: ' + ', '.join(mismatches))

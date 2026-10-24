@@ -3,26 +3,23 @@ from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
-    DeclareLaunchArgument, EmitEvent, IncludeLaunchDescription, LogInfo,
+    DeclareLaunchArgument, IncludeLaunchDescription, LogInfo,
     RegisterEventHandler,
 )
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
-from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode
-from launch_ros.event_handlers import OnStateTransition
-from launch_ros.events.lifecycle import StateTransition
 
 
 def is_can_bridge(action):
     return isinstance(action, LifecycleNode) and action.node_name == '/canrpc_bridge'
 
 
-def stop_on_bridge_exit(event, context):
+def report_bridge_exit(event, context):
     if not context.is_shutdown and is_can_bridge(event.action):
-        return [EmitEvent(event=Shutdown(reason='CAN bridge exited'))]
+        return [LogInfo(msg='ERROR: CAN bridge exited; UI and diagnostics remain alive. Recovery requires an explicit restart.')]
     return []
 
 
@@ -62,6 +59,8 @@ def generate_launch_description():
         DeclareLaunchArgument('listen', default_value='0.0.0.0:8000'),
         DeclareLaunchArgument('ipc_socket', default_value='/tmp/catchrobo2026-control.sock'),
         DeclareLaunchArgument('startup_timeout_sec', default_value='0.0'),
+        DeclareLaunchArgument('canrpc_status_topic', default_value='canrpc/status'),
+        DeclareLaunchArgument('bridge_status_timeout_sec', default_value='2.5'),
         DeclareLaunchArgument('trajectory_dynamics_config', default_value=str(
             Path(get_package_share_directory('path_planner')) / 'config' / 'robot_dynamics.yaml')),
         DeclareLaunchArgument('trajectory_pipeline_config', default_value=str(
@@ -79,6 +78,7 @@ def generate_launch_description():
             'debug', 'listen', 'ipc_socket', 'manual_config', 'joy_source',
             'manual_velocity_config', 'festival_config', 'canrpc_config',
             'trajectory_dynamics_config', 'trajectory_pipeline_config',
+            'canrpc_status_topic', 'bridge_status_timeout_sec',
         )}.items(),
     )
     vision = IncludeLaunchDescription(
@@ -96,22 +96,14 @@ def generate_launch_description():
             'launch/raspi_can.launch.py')),
         launch_arguments={'config_file': LaunchConfiguration('canrpc_config'),
                           'reset_on_startup': 'true',
+                          'status_topic': LaunchConfiguration('canrpc_status_topic'),
                           'startup_timeout_sec': LaunchConfiguration(
                               'startup_timeout_sec')}.items(),
     )
     return LaunchDescription(arguments + [
-        # Register before launching the bridge so its first activation is observed.
-        RegisterEventHandler(OnStateTransition(
-            matcher=lambda event: (
-                isinstance(event, StateTransition) and
-                is_can_bridge(event.action) and event.goal_state == 'active'
-            ),
-            entities=[LogInfo(msg='MCU initialization complete; starting automatic control'),
-                      automatic],
-            handle_once=True,
-        )),
-        RegisterEventHandler(OnProcessExit(on_exit=stop_on_bridge_exit)),
-        LogInfo(msg='Starting CAN bridge; waiting for its active state'),
+        RegisterEventHandler(OnProcessExit(on_exit=report_bridge_exit)),
+        LogInfo(msg='Starting UI/control independently; CAN-RPC status controls command availability'),
+        automatic,
         vision,
         bridge,
     ])

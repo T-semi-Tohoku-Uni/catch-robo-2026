@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -25,7 +27,12 @@ public:
     descriptor.read_only = true;
     const auto service = declare_parameter<std::string>("canrpc_service", "canrpc/call", descriptor);
     endpoint_ = declare_parameter<std::string>("arm_ready_endpoint", "arm_ready", descriptor);
-    timeout_ = declare_parameter<double>("rpc_timeout_sec", 1.5, descriptor);
+    initialize_endpoint_ = declare_parameter<std::string>("arm_initialize_endpoint", "arm_initialize", descriptor);
+    poll_period_ = declare_parameter<double>("readiness_poll_period_sec", 0.1, descriptor);
+    if (!std::isfinite(poll_period_) || poll_period_ <= 0.0) {
+      throw std::invalid_argument("readiness_poll_period_sec must be finite and positive");
+    }
+    timeout_ = declare_parameter<double>("rpc_timeout_sec", 21.3, descriptor);
     if (!std::isfinite(timeout_) || timeout_ <= 0.0) {
       throw std::invalid_argument("rpc_timeout_sec must be finite and positive");
     }
@@ -36,11 +43,13 @@ public:
              const std::shared_ptr<Trigger::Request>) {
         if (pending_ || !rpc_->service_is_ready()) {
           Trigger::Response response;
-          response.message = pending_ ? "arm readiness query busy" : "CAN-RPC unavailable";
+          response.message = pending_ ? "arm initialization busy" : "CAN-RPC unavailable";
           service_->send_response(*header, response);
           return;
         }
         pending_ = true;
+        last_detail_.clear();
+        boot_.fill(0);
         header_ = header;
         const auto token = ++token_;
         deadline_ = Clock::now() + std::chrono::duration_cast<Clock::duration>(
@@ -54,23 +63,26 @@ public:
               if(!result->success) {complete(token,false,"target pause failed: "+result->message);return;}
               if(Clock::now()>=deadline_) {complete(token,false,"arm readiness query timed out; outcome unknown");return;}
               gate_token_=result->token;
-              query(token);
+              query(token, true);
             } catch(const std::exception &error) {complete(token,false,error.what());}
           }).request_id;
         } catch(const std::exception &error) {complete(token,false,error.what());}
       });
     timer_ = create_wall_timer(10ms, [this]() {
-      if (pending_ && Clock::now() >= deadline_) {
-        if(phase_==Phase::Readiness) rpc_->remove_pending_request(request_id_);
-        else gate_->remove_pending_request(request_id_);
-        complete(token_, false, "arm readiness query timed out; outcome unknown");
+      if (!pending_) return;
+      if (Clock::now() >= deadline_) {
+        if (phase_ == Phase::Initialize || phase_ == Phase::Readiness || phase_ == Phase::FailureDiagnostic) rpc_->remove_pending_request(request_id_);
+        else if (phase_ != Phase::PollWait) gate_->remove_pending_request(request_id_);
+        complete(token_, false, "arm initialization timed out; outcome unknown");
+      } else if (phase_ == Phase::PollWait && Clock::now() >= poll_due_) {
+        query(token_, false);
       }
     });
-    RCLCPP_INFO(get_logger(), "Arm readiness query service started; no rehoming is requested");
+    RCLCPP_INFO(get_logger(), "Arm initialization service started; explicit start then same-boot readiness polling");
   }
 private:
   using Clock = std::chrono::steady_clock;
-  enum class Phase {Pause,Readiness,Resume};
+  enum class Phase {Pause,Initialize,Readiness,FailureDiagnostic,PollWait,Resume};
   Phase phase_=Phase::Pause;
   std::shared_ptr<Gate::Request> gate_request(bool pause) const {
     auto request=std::make_shared<Gate::Request>();
@@ -79,36 +91,112 @@ private:
       deadline_.time_since_epoch()).count());
     return request;
   }
-  void query(uint64_t token) {
-        phase_=Phase::Readiness;
-        auto request = std::make_shared<Call::Request>();
-        request->endpoint = endpoint_;
+  static bool valid_diagnostic(const std::vector<uint8_t> &data) {
+    return data.size() == 64 && data[11] == 2 &&
+      std::any_of(data.begin() + 48, data.end(), [](uint8_t value) { return value != 0; });
+  }
+  std::string diagnostic_detail(const Call::Response &reply) {
+    const bool valid = valid_diagnostic(reply.data);
+    if (valid) RCLCPP_INFO(get_logger(), "%s outcome=%u reason=%s raw=%s",
+      describe(reply.data).c_str(), unsigned(reply.outcome), reply.message.c_str(), hex(reply.data).c_str());
+    auto detail = valid ? describe(reply.data) :
+      "arm diagnostic invalid: " + reply.message + " raw=" + hex(reply.data);
+    if (valid && reply.outcome != Call::Response::OK) {
+      const auto reason = reply.message.size() > 64 ? reply.message.substr(0, 61) + "..." : reply.message;
+      detail = "CANRPC[" + std::to_string(reply.outcome) + "] " + reason + "; " + detail;
+    }
+    if (valid) last_detail_ = detail;
+    return detail;
+  }
+  void query(uint64_t token, bool initialize) {
+    if (!pending_ || token != token_ || Clock::now() >= deadline_) {
+      complete(token, false, "arm initialization timed out; outcome unknown");
+      return;
+    }
+    phase_ = initialize ? Phase::Initialize : Phase::Readiness;
+    const auto expected_phase = phase_;
+    auto request = std::make_shared<Call::Request>();
+    request->endpoint = initialize ? initialize_endpoint_ : endpoint_;
+    try {
+      request_id_ = rpc_->async_send_request(request,
+        [this, token, initialize, expected_phase](rclcpp::Client<Call>::SharedFuture future) {
+          if (!pending_ || token != token_ || phase_ != expected_phase) return;
+          try {
+            const auto reply = future.get();
+            const auto detail = diagnostic_detail(*reply);
+            if (Clock::now() >= deadline_) {complete(token, false, detail); return;}
+            if (reply->outcome != Call::Response::OK || !valid_diagnostic(reply->data)) {
+              if (initialize) failure_diagnostic(token, detail);
+              else complete(token, false, detail);
+              return;
+            }
+            if (initialize) std::copy_n(reply->data.begin() + 48, boot_.size(), boot_.begin());
+            else if (!std::equal(boot_.begin(), boot_.end(), reply->data.begin() + 48)) {
+              complete(token, false, "arm boot changed; " + detail); return;
+            }
+            const auto result = read_u32(reply->data, 0);
+            if (result > 1 || reply->data[8] == 31) {
+              complete(token, false, detail); return;
+            }
+            if (initialize) {
+              // A lost start response is terminal; never issue another start automatically.
+              query(token, false);
+              return;
+            }
+            const bool ready = result == 0 && (read_u32(reply->data, 4) & 0x1f) == 0x1f;
+            if (!ready) {
+              phase_ = Phase::PollWait;
+              poll_due_ = Clock::now() + std::chrono::duration_cast<Clock::duration>(
+                std::chrono::duration<double>(poll_period_));
+              return;
+            }
+            resume(token, detail);
+          } catch (const std::exception &error) {
+            if (initialize) failure_diagnostic(token, error.what());
+            else complete(token, false, error.what());
+          }
+        }).request_id;
+    } catch (const std::exception &error) {
+      if (initialize) failure_diagnostic(token, error.what());
+      else complete(token, false, error.what());
+    }
+  }
+  void failure_diagnostic(uint64_t token, const std::string &original) {
+    last_detail_ = original;
+    RCLCPP_ERROR(get_logger(), "Initialization start failed; no automatic restart: %s", original.c_str());
+    if (Clock::now() >= deadline_ || !rpc_->service_is_ready()) {complete(token, false, original); return;}
+    phase_ = Phase::FailureDiagnostic;
+    auto request = std::make_shared<Call::Request>();
+    request->endpoint = endpoint_;
+    try {
+      request_id_ = rpc_->async_send_request(request,
+        [this, token, original](rclcpp::Client<Call>::SharedFuture future) {
+          if (!pending_ || token != token_ || phase_ != Phase::FailureDiagnostic) return;
+          try {
+            const auto reply = future.get();
+            (void)diagnostic_detail(*reply);
+            if (valid_diagnostic(reply->data)) {
+              const auto reason = original.size() > 64 ? original.substr(0, 61) + "..." : original;
+              last_detail_ = "init: " + reason + "; " + describe(reply->data);
+              complete(token, false, last_detail_);
+            } else {last_detail_ = original; complete(token, false, original);}
+          } catch (...) {last_detail_ = original; complete(token, false, original);}
+        }).request_id;
+    } catch (...) {complete(token, false, original);}
+  }
+  void resume(uint64_t token, const std::string &detail) {
+    if (!gate_->service_is_ready()) {complete(token, false, detail + "; target resume unavailable"); return;}
+    if (Clock::now() >= deadline_) {complete(token, false, detail); return;}
+    phase_ = Phase::Resume;
+    request_id_ = gate_->async_send_request(gate_request(false),
+      [this, token, detail](rclcpp::Client<Gate>::SharedFuture answer) {
+        if (!pending_ || token != token_ || phase_ != Phase::Resume) return;
         try {
-          request_id_ = rpc_->async_send_request(request,
-            [this, token](rclcpp::Client<Call>::SharedFuture future) {
-              if (!pending_ || token != token_) return;
-              try {
-                const auto reply = future.get();
-                const bool valid = reply->outcome == 0 && reply->data.size() == 48 && reply->data[11] == 1;
-                const bool ready = valid && read_u32(reply->data, 0) == 0 &&
-                  (read_u32(reply->data, 4) & 0x1f) == 0x1f;
-                if (valid) RCLCPP_INFO(get_logger(), "%s raw=%s", describe(reply->data).c_str(), hex(reply->data).c_str());
-                const auto detail=valid ? describe(reply->data) :
-                  "arm readiness not confirmed: " + reply->message + " raw=" + hex(reply->data);
-                if (!ready) {complete(token, false, detail);return;}
-                if(Clock::now()>=deadline_) {complete(token,false,"arm readiness query timed out; outcome unknown");return;}
-                if (!gate_->service_is_ready()) {complete(token, false, detail+"; target resume unavailable");return;}
-                phase_=Phase::Resume;
-                request_id_=gate_->async_send_request(gate_request(false),
-                  [this,token,detail](rclcpp::Client<Gate>::SharedFuture answer) {
-                    if(!pending_ || token!=token_) return;
-                    try {const auto result=answer.get();complete(token,result->success && result->token==gate_token_,
-                      detail+"; target resume: "+result->message);}
-                    catch(const std::exception &error) {complete(token,false,error.what());}
-                  }).request_id;
-              } catch (const std::exception &error) { complete(token, false, error.what()); }
-            }).request_id;
-        } catch (const std::exception &error) { complete(token, false, error.what()); }
+          const auto result = answer.get();
+          complete(token, result->success && result->token == gate_token_,
+            detail + "; target resume: " + result->message);
+        } catch (const std::exception &error) {complete(token, false, error.what());}
+      }).request_id;
   }
   static uint32_t read_u32(const std::vector<uint8_t> &data, size_t at) {
     return uint32_t(data[at]) | uint32_t(data[at + 1]) << 8 |
@@ -127,7 +215,7 @@ private:
     out << "arm result=" << read_u32(data, 0) << " flags=" << read_u32(data, 4)
         << " stage=" << unsigned(data[8]) << " reason=" << name(data[9],
           {"NONE","TX_ENQUEUE_TIMEOUT","TX_COMPLETE_TIMEOUT","RESPONSE_TIMEOUT","MOTOR_FAULT",
-           "MODE_MISMATCH","HOME_TIMEOUT","FINAL_FEEDBACK_TIMEOUT","CONTROL_FAILURE"})
+           "MODE_MISMATCH","HOME_TIMEOUT","FINAL_FEEDBACK_TIMEOUT","CONTROL_FAILURE","INITIALIZATION_TIMEOUT"})
         << '(' << unsigned(data[9]) << ") failed_axis=" << unsigned(data[10]);
     out << " snapshot(age@failure)=" << ((data[14]|data[26]|data[38])&128 ? 1 : 0);
     for (size_t axis = 0; axis < 3; ++axis) {
@@ -163,7 +251,8 @@ private:
     pending_ = false;
     Trigger::Response response;
     response.success = ready;
-    response.message = expired ? "arm readiness query timed out; outcome unknown" : message;
+    response.message = expired ? (last_detail_.empty() ?
+      "arm initialization timed out; outcome unknown" : "init timeout; " + last_detail_) : message;
     if (!ready) RCLCPP_ERROR(get_logger(), "%s", response.message.c_str());
     try { service_->send_response(*header, response); }
     catch (const std::exception &error) {
@@ -175,8 +264,10 @@ private:
   uint64_t gate_token_=0;
   rclcpp::Service<Trigger>::SharedPtr service_;
   rclcpp::TimerBase::SharedPtr timer_;
-  std::string endpoint_;
-  double timeout_ = 1.5;
+  std::string endpoint_, initialize_endpoint_, last_detail_;
+  std::array<uint8_t, 16> boot_{};
+  double timeout_ = 21.3, poll_period_ = 0.1;
+  Clock::time_point poll_due_;
   bool pending_ = false;
   uint64_t token_ = 0;
   int64_t request_id_ = 0;

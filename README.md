@@ -43,7 +43,9 @@ git submodule update --init --recursive
 
 ROSの選択順は `ROBOT_ROS_DISTRO`、現在の `ROS_DISTRO`、`/opt/ros` にある唯一の環境です。明示する場合は `ROBOT_ROS_DISTRO=humble ./run_production.sh team:=red` のように指定します。`sh run_production.sh ...` でも実行できます。スクリプト内部でBashへ切り替え、既存のROS検索パスをクリアしてROS本体と `install/local_setup.bash` を読み込みます。`ROS_DOMAIN_ID` や `RMW_IMPLEMENTATION` などの通信設定は引き継ぎます。
 
-本番launchは `canrpc_bridge/raspi_can.launch.py` でCANを設定し、全3MCUへ世代条件付きSYSTEM_RESETを送ります。新しいBoot IDとREADYを全台で確認してからブリッジをactiveにし、自動操縦launch（UI・シーケンサ・経路生成／追従・Joy・ポンプ）を1回起動します。学祭profileの既定30秒以内に完了しなければ全体を終了し、自動操縦は起動しません。待機時間は `startup_timeout_sec:=60.0` などで変更できます。CANRPCのNode／Subject／トピック／型／時間／バス設定は `src/canrpc_bridge/config/gakusai.yaml` に集約し、`canrpc_config:=/absolute/project.yaml` で差し替えます。[通信仕様と再利用手順](src/canrpc_bridge/README.md) を参照してください。CAN設定はこのlaunchの1箇所だけで行い、学祭profileの既定は `can0`、1 Mbps／CAN FD 2 Mbpsです。設定変更が必要な場合は `sudo -n ip ...` が実行できる権限が必要です。旧標準IDのcansendと旧nhk2026_bridgeは撤去しました。
+本番はUI・自動制御プロセスをCANの成否と独立して起動します。CAN未接続や初期化失敗でも終了せず、`/canrpc/status`のSTARTING/DEGRADED/READYと理由を確認できます。全3MCUの新世代READY確認までは実機指令を拒否し、後から電源が戻っても自動再開しません。原因修正後の明示lifecycle再activateとUI INITが必要です。CAN設定正本は`src/canrpc_bridge/config/gakusai.yaml`、差替えは`canrpc_config:=/absolute/project.yaml`です。[診断と復旧手順](src/canrpc_bridge/README.md#can未接続駆動電源なしでの診断)を参照してください。
+
+MCUを先に起動し、駆動電源を入れてからUI INITを実行します。armは明示`arm_initialize`までモーター設定・STOP・原点復帰を送らず待機し、INITは同一Boot IDの完了診断を待ちます。初期化手順内・故障時のSTOPは維持します。総初期化期限はprofileの`application.motor_initialization.initialization_timeout_ms`（既定20秒）、個々の位置目標RPC期限は100msのままです。駆動電源を維持したMCU外部reset／電源断では、モーター側に前回指令が残り得ます。開始済みCANRPC resetのSTOP確認は外部resetの保証ではありません。FAULT後は駆動電源OFF→MCU reset→駆動電源ON→bridge明示復旧→UI INITを基本手順とします。UART printfは診断であり電源検出ではありません。
 
 既定のシーケンス・ポンプ・関節フィードバック・手動操作設定は、このチェックアウトの `src/` 内のYAMLです。`sequence_file:=...`、`pump_config:=...`、`joint_feedback_config:=...`、`manual_config:=...`、`manual_velocity_config:=...`、`festival_config:=...`、`joy_source:=web`、`listen:=...`、`ipc_socket:=...` を変更できます。CAN送信モードはCANRPC profileの `bus.non_blocking` で変更します。引数一覧は`ros2 launch launch/production.launch.py --show-args`で確認します。起動後は `/current_joints` の実測値が届くことを確認してからUIで操作します。CANのactiveは関節角の受信確認ではありません。
 
@@ -163,6 +165,6 @@ ros2 launch path_planning preview.launch.py
 妨害機構はMCU側で扱うため、ROS側での削除・追加対応は不要です。
 学祭の吸引1個選択は共通`festival.yaml`へ反映しました。物理チャンネル対応と1吸引ハンドの実寸は未確認です。
 
-離散ポンプ出力は通常CAN-RPC要求応答へ移行しています。PumpControlはMCUのAPPLIEDと適用mask一致を確認し、UI初期化はarm_readyの実結果を待ちます。UI起動/再準備はROS状態操作で、原点復帰や旧20回の終了信号を送信しません。[ポンプ仕様](src/catchrobo2026_pump/README.md)。
+離散ポンプ出力は通常CAN-RPC要求応答へ移行しています。PumpControlはMCUのAPPLIEDと適用mask一致を確認し、UI初期化はarm_initializeで1世代1回の初期化を明示開始し、同Boot IDのarm_ready実結果を待ちます。UI起動だけではモーター指令を送りません。ポンプは6出力OFFで起動し、旧20回の終了信号は送信しません。[ポンプ仕様](src/catchrobo2026_pump/README.md)。
 
 各軸の位置目標もarm_target RPCへ移行しています。起動時は送信停止し、明示初期化で準備確認後に新着目標だけをlatest1・設定周期で送ります。unknown/faultは自動再開せず、nativeFAULT時のMCU再起動は手動です。[アームの運用と診断](src/catchrobo2026_state_machine/README.md)。

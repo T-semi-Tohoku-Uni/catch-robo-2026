@@ -23,9 +23,12 @@ ROS環境とこのワークスペースのinstallを読み直し、CAN付き本�
 ROS選択順: ROBOT_ROS_DISTRO → ROS_DISTRO → /opt/ros内の唯一の環境。
 引数一覧: ros2 launch launch/production.launch.py --show-args
 ビルドは自動実行しません。
-CAN設定はlaunchに集約し、CAN-RPCで全3MCUを初期化して新世代READYを待ちます。
+CAN設定はlaunchに集約します。UIはCAN成否と独立して起動し、全3MCUの新READYまで指令を拒否します。
+CAN異常はDEGRADEDで診断を継続し、復旧には明示lifecycle再activateとUI INITが必要です。
 CANRPC設定は canrpc_config:=/absolute/project.yaml で差し替えます。
-初期化待機時間は設定ファイルを使い、startup_timeout_sec:=30.0 で明示上書きできます。
+通信RESET待機は設定ファイルを使い、startup_timeout_sec:=30.0 で明示上書きできます。
+モーター設定・原点復帰は駆動電源投入後の明示UI INITまで始まりません。
+INIT総期限はprofile application.motor_initialization.initialization_timeout_ms（既定20000）です。
 USAGE
     exit 0
 fi

@@ -5,6 +5,7 @@
 #include <endian.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <linux/can/error.h>
 #include <sstream>
 #include <thread>
 
@@ -65,6 +66,14 @@ CanBridge::CanBridge(
         this->sock = -1;
         throw std::runtime_error(
             std::string("failed to enable CAN FD frames: ") + std::strerror(error_number));
+    }
+
+    const can_err_mask_t errors = CAN_ERR_BUSOFF | CAN_ERR_CRTL | CAN_ERR_RESTARTED | CAN_ERR_TX_TIMEOUT;
+    if (setsockopt(this->sock, SOL_CAN_RAW, CAN_RAW_ERR_FILTER, &errors, sizeof(errors)) < 0)
+    {
+        const int error_number = errno;
+        close(this->sock);this->sock = -1;
+        throw std::runtime_error(std::string("failed to enable CAN error reporting: ") + std::strerror(error_number));
     }
 
     if (bind(this->sock, (sockaddr*)&addr, sizeof(addr)) < 0)
@@ -228,6 +237,12 @@ bool CanBridge::receive_data(RxData_struct &out)
                 return false;
             }
             throw std::runtime_error(std::string("failed to read: ") + std::strerror(errno));
+        }
+        if ((nbytes == static_cast<ssize_t>(sizeof(can_frame)) || nbytes == static_cast<ssize_t>(sizeof(canfd_frame))) &&
+            (frame.can_id & CAN_ERR_FLAG))
+        {
+            std::ostringstream reason;reason << "CAN controller error frame: 0x" << std::hex << (frame.can_id & CAN_ERR_MASK);
+            throw std::runtime_error(reason.str());
         }
         if (nbytes == static_cast<ssize_t>(sizeof(can_frame))) continue;
         if (nbytes != static_cast<ssize_t>(sizeof(canfd_frame)))

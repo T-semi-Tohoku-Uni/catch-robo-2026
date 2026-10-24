@@ -14,7 +14,7 @@ int main(int argc,char **argv) {
   assert(default_config.local_node==1 && default_config.routes.size()==2);
   assert(alternate.local_node==17 && alternate.reset_targets.size()==2 && alternate.routes.back().count==9);
   assert(default_config.nodes.at("arm").rpc.response_timeout_ms==100);
-  assert(default_config.rpc_endpoints[1].response_bytes==48 && default_config.rpc_endpoints[1].startup_diagnostic);
+  assert(default_config.rpc_endpoints[1].response_bytes==64 && default_config.rpc_endpoints[1].startup_diagnostic);
   // Retain a generic TX fixture for route validation independent of this project's RX-only profile.
   auto routes=YAML::Node(YAML::NodeType::Sequence);
   routes.push_back(YAML::Load("{name: target, direction: tx, topic: target_joint_angles, subject: 512, type: float32, count: 3, priority: 4, finite: true}"));

@@ -4,6 +4,7 @@
 #include <mutex>
 #include <thread>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -19,6 +20,7 @@
 #include "std_msgs/msg/float32_multi_array.hpp"
 #include "catchrobo2026_msgs/srv/arm_target_gate.hpp"
 #include "canrpc_bridge/srv/call.hpp"
+#include "canrpc_bridge/msg/bridge_status.hpp"
 #include "arm_trajectory_owner.hpp"
 
 using namespace std::chrono_literals;
@@ -41,12 +43,40 @@ public:
     if (period_ms_ < 10 || period_ms_ > 60000) {
       throw std::invalid_argument("target_period_ms must be in 10..60000 (at most 100 Hz)");
     }
+    bridge_status_timeout_sec_ = declare_parameter<double>("bridge_status_timeout_sec", 2.5, descriptor);
+    if (!std::isfinite(bridge_status_timeout_sec_) || bridge_status_timeout_sec_ <= 1.0) {
+      throw std::invalid_argument("bridge_status_timeout_sec must be finite and greater than 1 second");
+    }
     rpc_ = create_client<Call>(rpc_service);
     subscribe_targets();
     initialize_trajectory_owner();
     if (getrandom(&gate_token_, sizeof(gate_token_), 0) != sizeof(gate_token_) || gate_token_ == 0) {
       throw std::runtime_error("target gate random token source failed");
     }
+    const auto status_topic = declare_parameter<std::string>("canrpc_status_topic", "canrpc/status", descriptor);
+    bridge_status_ = create_subscription<canrpc_bridge::msg::BridgeStatus>(status_topic,
+      rclcpp::QoS(1).reliable().transient_local(),
+      [this](canrpc_bridge::msg::BridgeStatus::ConstSharedPtr status) {
+        const bool valid_session = status->session_id.size() == 32 &&
+          std::all_of(status->session_id.begin(), status->session_id.end(),
+            [](unsigned char c) { return std::isxdigit(c) != 0; });
+        const bool changed = valid_session && !bridge_session_.empty() && bridge_session_ != status->session_id;
+        const bool expired = bridge_status_received_ && Clock::now() - bridge_status_seen_ >=
+          std::chrono::duration<double>(bridge_status_timeout_sec_);
+        bridge_status_seen_ = Clock::now();
+        bridge_status_received_ = true;
+        bridge_status_reason_ = status->reason.substr(0, 64);
+        bridge_status_ready_ = valid_session && status->state == canrpc_bridge::msg::BridgeStatus::READY &&
+          status->commands_enabled && status->socket_open;
+        if (valid_session) bridge_session_ = status->session_id;
+        if (changed || expired || !bridge_status_ready_) {
+          if (changed || expired || !bridge_status_inhibited_) inhibit_bridge(
+            changed ? "CAN-RPC activation session changed; explicit initialization required" :
+            expired ? "CAN-RPC status heartbeat gap exceeded; explicit initialization required" :
+            "CAN-RPC bridge not ready: " + status->reason);
+          bridge_status_inhibited_ = true;
+        } else bridge_status_inhibited_ = false;
+      });
     const auto gate_service = declare_parameter<std::string>("target_gate_service", "arm_target/gate", descriptor);
     gate_ = create_service<Gate>(gate_service,
       [this](const std::shared_ptr<rmw_request_id_t> header,
@@ -74,8 +104,9 @@ public:
         }
         response.token = gate_token_;
         if (request->token != gate_token_ || request->deadline_steady_ns <= steady_ns() ||
-            !paused_ || pending_ || pause_header_ || planning_worker_.joinable()) {
-          response.message = "target resume rejected: stale token/deadline or pause incomplete";
+            !paused_ || pending_ || pause_header_ || planning_worker_.joinable() || !bridge_available()) {
+          response.message = !bridge_available() ? bridge_unavailable_reason() :
+            "target resume rejected: stale token/deadline or pause incomplete";
           gate_->send_response(*header, response);
           return;
         }
@@ -94,10 +125,10 @@ public:
             Gate::Response result;
             result.token = gate_token_;
             try { result.success = future.get()->success && gate_token_ == resume_token &&
-                steady_ns() < resume_deadline_ns_ && paused_ && !pending_ && !pause_header_; }
+                steady_ns() < resume_deadline_ns_ && paused_ && !pending_ && !pause_header_ && bridge_available(); }
             catch (...) {}
             if (result.success) {
-              latest_.reset(); faulted_ = false;
+              latest_.reset(); faulted_ = false; bridge_status_inhibited_ = false;
               target_.reset(); subscribe_targets(); paused_ = false;
               result.message = "target resumed after Joy rebase; waiting for new input";
             } else { faulted_ = true; result.message = "Joy rebase failed or initialization deadline expired"; }
@@ -116,6 +147,28 @@ private:
   static uint64_t steady_ns() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
       Clock::now().time_since_epoch()).count());
+  }
+  bool bridge_available() const {
+    return bridge_status_ready_ && Clock::now() - bridge_status_seen_ <
+      std::chrono::duration<double>(bridge_status_timeout_sec_);
+  }
+  std::string bridge_unavailable_reason() const {
+    if (!bridge_status_received_) return "target resume rejected: CAN-RPC status not received";
+    if (!bridge_status_ready_) return "target resume rejected: CAN-RPC bridge not ready: " + bridge_status_reason_;
+    return "target resume rejected: CAN-RPC status heartbeat expired";
+  }
+  void inhibit_bridge(const std::string &message) {
+    paused_ = true;
+    bridge_status_inhibited_ = true;
+    if (route_token_) revoked_route_until_ = route_expires_;
+    if (++gate_token_ == 0) ++gate_token_;
+    ++resume_generation_;
+    if (resume_header_) {
+      Gate::Response response; response.token = gate_token_; response.message = message;
+      gate_->send_response(*resume_header_, response); resume_header_.reset();
+    }
+    if (pending_) rpc_->remove_pending_request(request_id_);
+    fault(message);
   }
   void subscribe_targets() {
     target_ = create_subscription<Targets>("target_joint_angles", rclcpp::QoS(1),
@@ -173,6 +226,9 @@ private:
   }
   void tick() {
     const auto now = Clock::now();
+    if (!bridge_available() && !bridge_status_inhibited_) {
+      inhibit_bridge("CAN-RPC status missing or expired; explicit initialization required");
+    }
     if (pending_ && now >= deadline_) {
       rpc_->remove_pending_request(request_id_);
       fault("response deadline exceeded; execution outcome unknown");
@@ -184,7 +240,7 @@ private:
     }
     owner_tick();
     finish_pause();
-    if (paused_ || faulted_ || pending_ || !latest_ || now - last_sent_ < std::chrono::milliseconds(period_ms_)) return;
+    if (paused_ || faulted_ || !bridge_available() || pending_ || !latest_ || now - last_sent_ < std::chrono::milliseconds(period_ms_)) return;
     if (!rpc_->service_is_ready()) {
       fault("CAN-RPC service unavailable");
       return;
@@ -295,7 +351,7 @@ private:
     });
     trajectory_server_ = rclcpp_action::create_server<Trajectory>(this, "follow_trajectory",
       [this](const rclcpp_action::GoalUUID &, std::shared_ptr<const Trajectory::Goal> goal) {
-        if (!trajectory_core_ || paused_ || faulted_ || route_token_ || trajectory_goal_ ||
+        if (!trajectory_core_ || !bridge_available() || paused_ || faulted_ || route_token_ || trajectory_goal_ ||
             trajectory_reserved_ || ending_ || planning_worker_.joinable() || !goal->start || goal->plan_from_start_goal || goal->trajectory.points.empty() ||
             goal->trajectory.points.size() > 10000 || goal->payload.has_payload ||
             !trajectory_core_->follower()->hasFreshJoints(seconds())) return rclcpp_action::GoalResponse::REJECT;
@@ -339,7 +395,7 @@ private:
       Lease::Response response;
       response.token = route_token_;
       if (request->deadline_steady_ns <= steady_ns()) response.message = "lease request expired";
-      else if (request->operation == Lease::Request::ACQUIRE && !paused_ && !faulted_ &&
+      else if (request->operation == Lease::Request::ACQUIRE && bridge_available() && !paused_ && !faulted_ &&
           !trajectory_goal_ && !trajectory_reserved_ && !ending_ && !route_token_ && !planning_worker_.joinable()) {
         if (++gate_token_ == 0) ++gate_token_;
         route_token_ = gate_token_;
@@ -347,7 +403,7 @@ private:
         latest_.reset();
         response.success = true; response.token = route_token_;
       } else if (request->token && request->token == route_token_ && Clock::now() < route_expires_) {
-        if (request->operation == Lease::Request::RENEW && !paused_ && !faulted_) {
+        if (request->operation == Lease::Request::RENEW && bridge_available() && !paused_ && !faulted_) {
           route_expires_ = Clock::now() + std::chrono::milliseconds(lease_ms_); response.success = true;
         } else if (request->operation == Lease::Request::RELEASE && !ending_) {
           route_token_ = 0; latest_.reset();
@@ -579,6 +635,11 @@ private:
   double maximum_tracking_error_ = std::numeric_limits<double>::quiet_NaN();
   std::string ending_message_;
 
+  rclcpp::Subscription<canrpc_bridge::msg::BridgeStatus>::SharedPtr bridge_status_;
+  Clock::time_point bridge_status_seen_;
+  bool bridge_status_ready_ = false, bridge_status_inhibited_ = false, bridge_status_received_ = false;
+  double bridge_status_timeout_sec_ = 2.5;
+  std::string bridge_session_, bridge_status_reason_;
   rclcpp::Client<Call>::SharedPtr rpc_;
   rclcpp::Subscription<Targets>::SharedPtr target_;
   rclcpp::Service<Gate>::SharedPtr gate_;

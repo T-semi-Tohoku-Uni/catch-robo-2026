@@ -40,7 +40,7 @@ CONTROL `0x11` ANNOUNCE_QUERYはunicast、Low5=0、Data長0で再通知を依頼
 
 宣言済みendpointはunicast REQUESTで呼び出し、RESPONSEで最終結果を返します。RESPONSEは要求のSource／Destinationを反転し、ServiceとTagを保持します。payloadの型と論理長はprofileのendpointとアプリケーション契約で定めます。REQUEST／RESPONSEにも同じCAN FD長への0埋め規則を適用します。
 
-Tagは向き付きclient→serverペアで全serviceに共通です。clientはpeerごとに1件だけinflightを許し、guard中のTagを再利用しません。serverはsource＋Tagを全serviceで照合し、同じBoot世代・Service・payloadの重複は保存結果またはRUNNINGを返して再実行しません。相違はCONFLICT。cacheは設定容量（最大8）の固定枠で、受付時からTag guard終了まで枠を再使用しません。容量不足はREJECT_BUSYです。
+Tagは向き付きclient→serverペアで全serviceに共通です。clientはpeerごとに1件だけinflightを許し、guard中のTagを再利用しません。serverはsource＋Tagを全serviceで照合し、同じBoot世代・Service・payloadの重複は保存結果またはRUNNINGを返して再実行しません。相違はCONFLICT。cacheは設定容量（最大32）の固定枠で、受付時からTag guard終了まで枠を再使用しません。容量不足はREJECT_BUSYです。
 
 | CONTROL Opcode | 意味 |
 | --- | --- |
@@ -62,7 +62,8 @@ serverは受付後response_timeout_msを超えた操作を完了成功へ変更�
 | endpoint | 宛先／Service | request | response |
 | --- | --- | --- | --- |
 | pump_set | Node 3／0 | u32LE絶対mask、4byte | u32LE result＋u32LE applied mask、8byte |
-| arm_ready | Node 2／0 | 0byte | result/flags＋version 1の3軸診断、48byte |
+| arm_ready | Node 2／0 | 0byte | result/flags＋version 2の3軸診断＋Boot ID、64byte |
+| arm_initialize | Node 2／2 | 0byte | result/flags＋version 2の3軸診断＋Boot ID、64byte |
 | arm_target | Node 2／1 | float32LE×3、12byte | result＋echo＋axis confirmation mask、20byte |
 
 pump resultは0=APPLIED、1=INVALID、2=NOT_READY、3=FAULT。APPLIEDはGPIO ODRをactive-lowで読み戻したmaskが指定値と一致したことを意味し、物理圧力の成立を保証しません。旧pump PUBLISHでは状態を上書きしません。
@@ -100,7 +101,7 @@ MCUアダプターは安全化し、ACCEPTEDの実送信を確認してresetし�
 
 ROSの起動clientは全reset対象の現READYとcapabilityを確認してから、各対象へ1操作を送ります。締切は観測uptime＋観測後の経過＋request_window_ms。同じ操作のTag・nonce・全Dataを固定した有限再送だけを行い、ACCEPTEDまたは新Boot IDの観測で再送を止めます。新世代を観測してもRESET_REQUESTを作り直しません。
 
-全対象で異なるBoot IDの新しいREADYを確認して完了します。STATUSが失われても新READYで完了できます。初期化中もROS自身は通信準備状態のREADYを通知しますが、ROSのactive・指令購読・自動制御開始は全対象完了後です。拒否・通信エラー・全体期限超過は起動失敗で、launchの子を終了し非ゼロで終了します。
+全対象で異なるBoot IDの新しいREADYを確認して完了します。STATUSが失われても新READYで完了できます。初期化中もROS自身は通信準備状態のREADYを通知します。Lifecycle activeはbridge処理稼働のみを表し、UI/automaticはCAN成否と独立して起動します。全対象完了まで操作は禁止し、拒否・通信エラー・全体期限超過はDEGRADEDで生存して診断を続けます。`canrpc/status`の型付きBridgeStatusとcommands_enabledが操作可否を表します。
 
 ## 保証境界
 
@@ -110,13 +111,21 @@ peer通知断で既存物理出力を停止する処理は追加しません。�
 
 参考: [RobStride 03公式マニュアル](https://robstride.com/assets/product_manual_robStride03-9c54db7a.pdf) のnative運転状態・応答仕様。運転状態feedbackの確認を、設定パラメータのreadback確認と解釈しません。
 
-### Arm readiness diagnostic version 1
+### Arm readiness diagnostic version 2
 
-`arm_ready` の応答は48byteです。offset 0のresult、4のflagsに続き、8=boot stage（0〜28は実行step、29=READY、30=CONTROL_ACK）、9=failure reason、10=failed axis（255=無し）、11=version（1）です。offset 12/24/36に各軸の12byte recordを置きます。recordはmode u8、fault u8、validity u8、motor ID u8、feedback age u32LE、last command u8、response state u8、reserved u16LE（0）。validity bit0=ever seen、bit1=fresh(ageがfeedback_max_age_ms未満かつonline)、bit2=fault-free(ever seenかつfault0)、bit3=最後のnative command（初期化・通常制御）の応答確認済み、bit7=FAULT_SNAPSHOTです。失敗時にSTOP送信前の全軸情報を固定し、ageは失敗時点の値です。STARTING/READYのlive値と区別してください。
+`arm_ready`／`arm_initialize`の応答は64byteです。先頭48byteは従来の診断layout、offset 48〜63は応答MCU自身のBoot ID（BOOTと同じ不透明な16byte）です。offset 0のresult、4のflagsに続き、8=boot stage（0〜28は実行step、29=READY、30=CONTROL_ACK、31=WAITING）、9=failure reason、10=failed axis（255=無し）、11=version（2）です。offset 12/24/36に各軸の12byte recordを置きます。recordはmode u8、fault u8、validity u8、motor ID u8、feedback age u32LE、last command u8、response state u8、reserved u16LE（0）。validity bit0=ever seen、bit1=fresh(ageがfeedback_max_age_ms未満かつonline)、bit2=fault-free(ever seenかつfault0)、bit3=最後のnative command（初期化・通常制御）の応答確認済み、bit7=FAULT_SNAPSHOTです。失敗時にSTOP送信前の全軸情報を固定し、ageは失敗時点の値です。STARTING/READYのlive値と区別してください。
 
-reasonは0 NONE、1 TX_ENQUEUE_TIMEOUT、2 TX_COMPLETE_TIMEOUT、3 RESPONSE_TIMEOUT、4 MOTOR_FAULT、5 MODE_MISMATCH、6 HOME_TIMEOUT、7 FINAL_FEEDBACK_TIMEOUT、8 CONTROL_FAILURE（既存ADRC guardによる停止要求）。response stateは0 NONE、1 QUEUE_WAIT、2 TX_WAIT、3 RESPONSE_WAIT、4 CONFIRMED、5 FAILED。last commandは0 NONE、1 STOP、2 MODE_OPERATION、3 ENABLE、4 MODE_SPEED、5 VELOCITY、6 ZERO、7 MODE_PP、8 PP_VMAX、9 PP_ACCEL、10 CURRENT_LIMIT、11 MODE_CURRENT、12 CURRENT_ZERO、13 REFRESH、14 POSITION_TARGET、15 CURRENT_REFERENCEです。不明version/enumでもROSは生bytesを記録します。
+reasonは0 NONE、1 TX_ENQUEUE_TIMEOUT、2 TX_COMPLETE_TIMEOUT、3 RESPONSE_TIMEOUT、4 MOTOR_FAULT、5 MODE_MISMATCH、6 HOME_TIMEOUT、7 FINAL_FEEDBACK_TIMEOUT、8 CONTROL_FAILURE（既存ADRC guardによる停止要求）、9 INITIALIZATION_TIMEOUT（明示初期化全体の期限超過）。response stateは0 NONE、1 QUEUE_WAIT、2 TX_WAIT、3 RESPONSE_WAIT、4 CONFIRMED、5 FAILED。last commandは0 NONE、1 STOP、2 MODE_OPERATION、3 ENABLE、4 MODE_SPEED、5 VELOCITY、6 ZERO、7 MODE_PP、8 PP_VMAX、9 PP_ACCEL、10 CURRENT_LIMIT、11 MODE_CURRENT、12 CURRENT_ZERO、13 REFRESH、14 POSITION_TARGET、15 CURRENT_REFERENCEです。不明version/enumでもROSは生bytesを記録します。
 
-起動reset失敗時は`startup_diagnostic` endpointへ読み取り専用要求を送り、endpoint名・node・transport outcome・raw hexをERRORログへ出します。全診断で共通の`response_timeout_ms`期限を用い、元の起動失敗を成功へ変えません。例としてrawの先頭`020000000000000005040001`はresult=FAULT、flags=0、stage=5、reason=MOTOR_FAULT、failed axis=0、version=1です。その後の各24桁hexがq0/q1/q2 recordなので、上記offsetで読みます。通常INITのTrigger.messageは同じ情報を軸ごとの名前付き文字列で返します。
+起動reset失敗後は`startup_diagnostic` endpointだけをCallで読み取り専用照会できます。診断結果dataは返しますがROS outcomeはUNAVAILABLEを維持し、元の起動失敗を成功へ変えません。初期化中はすべてのCallが即UNAVAILABLEです。例としてrawの先頭`020000000000000005040002`はresult=FAULT、flags=0、stage=5、reason=MOTOR_FAULT、failed axis=0、version=2です。その後の各24桁hexがq0/q1/q2 recordなので、上記offsetで読みます。通常INITのTrigger.messageは同じ情報を軸ごとの名前付き文字列で返します。
+
+### 明示的なモーター初期化
+
+MCU先・駆動電源後の投入順に対応し、arm起動直後は通信BOOTのREADYとアプリWAITINGを分離します。起動だけではnativeモーター設定・STOP・原点復帰を送りません。本番のstartup SYSTEM_RESETは有効のままで、未開始ならnative送信なしで再起動できます。既に初期化開始済みのSYSTEM_RESET安全化、初期化手順内のSTOP、FAULT cleanupのSTOPは維持します。ポンプは6出力OFF（active-low GPIO SET）で起動します。
+
+明示UI INITはtarget gateをpause/drainし、`arm_initialize`で開始を依頼します。返却responseは受付時点の状態であり、モーター準備完了を保証しません。stateは返却Boot IDを固定し、同じBoot IDの`arm_ready`を有限間隔で照会し、outcome OK・result READY・flags 0x1fのときだけresumeします。RUNNING／WAITING、世代変更、通信UNAVAILABLE（診断data付きも含む）、FAULT、期限超過はINIT成功にしません。
+
+1 Boot世代で開始は1回だけです。RUNNING中の別Tag要求でも再開始せず、READY後の初期化要求はno-opです。FAULTからの自動再試行・再homeは行わず、駆動電源OFF→MCU reset→駆動電源ON→bridge明示復旧→UI INITを基本手順とします。開始応答が失われても上位が新要求で自動再実行しません。後の明示INITは同じ試行の状態を確認できます。20秒の初期化総期限と個々の100ms普通RPC期限は別であり、普通RPCを長時間inflightにしません。駆動電源を維持した外部MCU reset／電源断ではnativeの前回電流・位置指令が残り得ます。CANRPC reset安全化は外部resetの保証ではなく、UART診断も駆動電源の検出ではありません。
 
 ### Arm target command
 

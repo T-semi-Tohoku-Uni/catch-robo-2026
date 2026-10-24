@@ -200,3 +200,21 @@ def test_feedback_loss_aborts_without_fallback(rig):
     assert handle.accepted
     assert not rig.resolve(handle.get_result_async()).result.success
     client.destroy()
+
+
+@pytest.mark.parametrize('rig', [{'trajectory': True}], indirect=True)
+def test_bridge_status_fault_aborts_owner_without_new_input(rig):
+    rig.resume()
+    client, handle = action(rig, 1.0)
+    assert handle.accepted
+    rig.until(lambda: bool(rig.records))
+    rig.status_ready = False
+    assert not rig.resolve(handle.get_result_async()).result.success
+    count = len(rig.records)
+    rig.status_ready = True
+    rig.spin(0.1)
+    assert len(rig.records) == count
+    assert not lease(rig).success
+    rig.resume()
+    assert lease(rig).success
+    client.destroy()

@@ -25,8 +25,11 @@ def rpc_settings(context):
     pump_sec = endpoint_seconds('pump_set')
     target_sec = endpoint_seconds(
         context.launch_configurations.get('arm_target_endpoint', 'arm_target'))
+    motor = profile.get('application', {}).get('motor_initialization', {})
     initialization_sec = max(response_sec + 0.5,
-                             target_sec + endpoint_seconds('arm_ready') + 1.0)
+                             float(motor.get('initialization_timeout_ms', 0)) / 1000.0 +
+                             target_sec + endpoint_seconds('arm_initialize') +
+                             endpoint_seconds('arm_ready') + 1.0)
     application_sec = max(initialization_sec, pump_sec + 0.5)
     return [
         SetLaunchConfiguration('canrpc_service', rpc.get('ros_service', 'canrpc/call')),
@@ -59,6 +62,8 @@ def generate_launch_description():
         DeclareLaunchArgument('canrpc_config', default_value=os.path.join(
             get_package_share_directory('canrpc_bridge'), 'config', 'gakusai.yaml')),
         DeclareLaunchArgument('arm_target_endpoint', default_value='arm_target'),
+        DeclareLaunchArgument('canrpc_status_topic', default_value='canrpc/status'),
+        DeclareLaunchArgument('bridge_status_timeout_sec', default_value='2.5'),
         DeclareLaunchArgument('trajectory_dynamics_config', default_value=os.path.join(
             get_package_share_directory('path_planner'), 'config', 'robot_dynamics.yaml')),
         DeclareLaunchArgument('trajectory_pipeline_config', default_value=os.path.join(
@@ -138,6 +143,9 @@ def generate_launch_description():
             name='arm_target_client', output='screen', parameters=[{
                 'canrpc_service': LaunchConfiguration('canrpc_service'),
                 'arm_target_endpoint': LaunchConfiguration('arm_target_endpoint'),
+                'canrpc_status_topic': LaunchConfiguration('canrpc_status_topic'),
+                'bridge_status_timeout_sec': ParameterValue(
+                    LaunchConfiguration('bridge_status_timeout_sec'), value_type=float),
                 'trajectory_dynamics_config': LaunchConfiguration('trajectory_dynamics_config'),
                 'trajectory_pipeline_config': LaunchConfiguration('trajectory_pipeline_config'),
                 'target_period_ms': ParameterValue(
@@ -153,6 +161,7 @@ def generate_launch_description():
                 'canrpc_service': LaunchConfiguration('canrpc_service'),
                 'rpc_timeout_sec': ParameterValue(
                     LaunchConfiguration('initialization_rpc_timeout_sec'), value_type=float),
+                'arm_initialize_endpoint': 'arm_initialize',
             }],
             output='screen'
         ),

@@ -75,10 +75,11 @@ def rig(tmp_path, monkeypatch):
         response.outcome = outcome
         mask = struct.unpack('<I', bytes(request.data))[0] if request.data else flags
         data = struct.pack('<II', result, mask ^ int(mismatch))
-        if request.endpoint == 'arm_ready':
-            data += bytes([29, 0, 255, 1])
+        if request.endpoint in ('arm_initialize', 'arm_ready'):
+            data += bytes([29, 0, 255, 2])
             for axis in range(3):
                 data += struct.pack('<4BI2BH', 2, 0, 15, axis + 1, 5, 13, 4, 0)
+            data += bytes([1]) + bytes(15)
         response.data = list(raw if raw is not None else data)
         response.message = 'mock application result'
         return response
@@ -170,12 +171,14 @@ def test_readiness_requires_remote_ready_and_all_flags(rig, result, flags, outco
     rig.app_result, rig.flags, rig.outcome = result, flags, outcome
     response = rig.result(rig.ready.call_async(Trigger.Request()))
     assert response.success is expected
-    assert rig.requests[-1].endpoint == 'arm_ready' and not rig.requests[-1].data
+    assert rig.requests[0].endpoint == 'arm_initialize' and not rig.requests[0].data
+    assert all(not request.data for request in rig.requests)
+    assert sum(request.endpoint == 'arm_initialize' for request in rig.requests) == 1
     assert not rig.legacy
 
 
 def test_readiness_delayed_more_than_old_one_second_limit_succeeds(rig):
-    rig.launch(timeout=1.5)
+    rig.launch(timeout=3.0)
     rig.delay = 1.1
     assert rig.result(rig.ready.call_async(Trigger.Request())).success
 

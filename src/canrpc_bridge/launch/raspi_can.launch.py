@@ -7,7 +7,7 @@ import subprocess
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, EmitEvent, OpaqueFunction, RegisterEventHandler
+from launch.actions import DeclareLaunchArgument, EmitEvent, LogInfo, OpaqueFunction, RegisterEventHandler
 from launch.event_handlers import OnProcessStart
 from launch.events import matches_action
 from launch.substitutions import LaunchConfiguration
@@ -60,7 +60,7 @@ def configure_interface(bus):
 
 
 def initialization_failed(context):
-    raise RuntimeError('CAN-RPC initialization failed; automatic control was not started')
+    return [LogInfo(msg='ERROR: CAN-RPC lifecycle transition failed; diagnostic processes remain alive')]
 
 
 def start_bridge(context):
@@ -75,20 +75,29 @@ def start_bridge(context):
     if reset == 'true' and not profile['reset']['targets']:
         raise RuntimeError('reset_on_startup requires reset.targets')
     # Validate the complete profile before touching the interface.
-    configure_interface(profile['bus'])
+    setup_error = ''
+    try:
+        configure_interface(profile['bus'])
+    except RuntimeError as error:
+        setup_error = str(error)
     node = LifecycleNode(package='canrpc_bridge', executable='canrpc_bridge',
                          name='canrpc_bridge', namespace='', output='screen', emulate_tty=True,
                          parameters=[{'config_file': path, 'reset_on_startup': reset == 'true',
-                                      'startup_timeout_sec': timeout}])
+                                      'startup_timeout_sec': timeout, 'startup_block_reason': setup_error,
+                                      'status_topic': LaunchConfiguration('status_topic').perform(context)}])
     handlers = [
         RegisterEventHandler(OnProcessStart(target_action=node, on_start=[EmitEvent(
             event=ChangeState(lifecycle_node_matcher=matches_action(node),
                               transition_id=Transition.TRANSITION_CONFIGURE))])),
-        RegisterEventHandler(OnStateTransition(target_lifecycle_node=node,
+    ]
+    if not setup_error:
+        handlers.append(RegisterEventHandler(OnStateTransition(target_lifecycle_node=node,
             start_state='configuring', goal_state='inactive', entities=[EmitEvent(
                 event=ChangeState(lifecycle_node_matcher=matches_action(node),
-                                  transition_id=Transition.TRANSITION_ACTIVATE))])),
-    ]
+                                  transition_id=Transition.TRANSITION_ACTIVATE))], handle_once=True)))
+    else:
+        handlers.append(LogInfo(msg='ERROR: ' + setup_error + '; activation withheld. Prepare the interface and explicitly activate.'))
+
     for start, goal in [('activating', 'inactive'), ('configuring', 'unconfigured')]:
         handlers.append(RegisterEventHandler(OnStateTransition(
             target_lifecycle_node=node, start_state=start, goal_state=goal,
@@ -102,6 +111,7 @@ def generate_launch_description():
     profile = str(Path(get_package_share_directory('canrpc_bridge')) / 'config' / 'gakusai.yaml')
     return LaunchDescription([
         DeclareLaunchArgument('config_file', default_value=profile),
+        DeclareLaunchArgument('status_topic', default_value='canrpc/status'),
         DeclareLaunchArgument('reset_on_startup', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('startup_timeout_sec', default_value='0.0',
                               description='0 uses the profile timeout; positive values override it'),
