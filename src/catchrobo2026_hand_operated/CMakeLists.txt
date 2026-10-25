@@ -7,6 +7,7 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+find_package(canrpc_bridge REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(rcl_yaml_param_parser REQUIRED)
@@ -33,6 +34,7 @@ add_executable(joy_controller_node src/joy_controller_node.cpp)
 target_compile_features(joy_controller_node PRIVATE cxx_std_17)
 ament_target_dependencies(joy_controller_node
   rclcpp
+  canrpc_bridge
   rcl_interfaces
   rcl_yaml_param_parser
   rcutils

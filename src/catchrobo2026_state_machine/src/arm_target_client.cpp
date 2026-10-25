@@ -22,6 +22,7 @@
 #include "canrpc_bridge/srv/call.hpp"
 #include "canrpc_bridge/msg/bridge_status.hpp"
 #include "arm_trajectory_owner.hpp"
+#include "arm_safety.h"
 
 using namespace std::chrono_literals;
 using Call = canrpc_bridge::srv::Call;
@@ -47,6 +48,10 @@ public:
     if (!std::isfinite(bridge_status_timeout_sec_) || bridge_status_timeout_sec_ <= 1.0) {
       throw std::invalid_argument("bridge_status_timeout_sec must be finite and greater than 1 second");
     }
+    motion_config_.rebase_max_delta_rad = static_cast<float>(declare_parameter<double>(
+      "rebase_max_delta_rad", 0.2, descriptor));
+    if (!std::isfinite(motion_config_.rebase_max_delta_rad) || motion_config_.rebase_max_delta_rad <= 0)
+      throw std::invalid_argument("rebase_max_delta_rad must be finite and positive");
     rpc_ = create_client<Call>(rpc_service);
     subscribe_targets();
     initialize_trajectory_owner();
@@ -84,6 +89,7 @@ public:
         Gate::Response response;
         if (request->pause) {
           paused_ = true;
+          first_target_pending_ = false;
           if (route_token_) revoked_route_until_ = route_expires_;
           route_token_ = 0;
           ++owner_generation_;
@@ -110,6 +116,11 @@ public:
           gate_->send_response(*header, response);
           return;
         }
+        if (!handoff_feedback_safe()) {
+          response.message = "target resume rejected: fresh finite joint feedback required for handoff";
+          gate_->send_response(*header, response);
+          return;
+        }
         if (resume_header_ || !rebase_->service_is_ready()) {
           response.message = "Joy rebase unavailable or already pending";
           gate_->send_response(*header, response);
@@ -125,9 +136,10 @@ public:
             Gate::Response result;
             result.token = gate_token_;
             try { result.success = future.get()->success && gate_token_ == resume_token &&
-                steady_ns() < resume_deadline_ns_ && paused_ && !pending_ && !pause_header_ && bridge_available(); }
+                steady_ns() < resume_deadline_ns_ && paused_ && !pending_ && !pause_header_ && bridge_available() && handoff_feedback_safe(); }
             catch (...) {}
             if (result.success) {
+              command_anchor_ = measured_joints_; first_target_pending_ = true;
               latest_.reset(); faulted_ = false; bridge_status_inhibited_ = false;
               target_.reset(); subscribe_targets(); paused_ = false;
               result.message = "target resumed after Joy rebase; waiting for new input";
@@ -147,6 +159,9 @@ private:
   static uint64_t steady_ns() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
       Clock::now().time_since_epoch()).count());
+  }
+  bool handoff_feedback_safe() const {
+    return measured_valid_ && Clock::now() - measured_at_ <= 500ms;
   }
   bool bridge_available() const {
     return bridge_status_ready_ && Clock::now() - bridge_status_seen_ <
@@ -245,6 +260,11 @@ private:
       fault("CAN-RPC service unavailable");
       return;
     }
+    if (first_target_pending_ && canrpc_arm_continuous(
+        &motion_config_, command_anchor_.data(), latest_->data(), nullptr) != 0) {
+      fault("target rejected: first-command non-wrapped joint discontinuity");
+      return;
+    }
     const auto data = encode(*latest_);
     latest_.reset();
     auto request = std::make_shared<Call::Request>();
@@ -271,6 +291,7 @@ private:
               std::equal(data.begin(), data.end(), reply->data.begin() + 4);
             if (!confirmed) { fault("native command not confirmed: " + reply->message); return; }
             pending_ = false;
+            first_target_pending_ = false;
             if (trajectory_goal_ && trajectory_request && trajectory_epoch == trajectory_epoch_ && data != encode(final_target_)) final_ack_ = false;
             if (trajectory_goal_ && trajectory_request && trajectory_epoch == trajectory_epoch_ && data == encode(final_target_)) {
               final_ack_ = true; final_ack_at_ = Clock::now();
@@ -315,6 +336,12 @@ private:
       }
     }
     current_ = create_subscription<Targets>("current_joints", rclcpp::QoS(1), [this](Targets::ConstSharedPtr msg) {
+      measured_valid_ = msg->data.size() == 3 && msg->layout.data_offset == 0 &&
+        std::all_of(msg->data.begin(), msg->data.end(), [](float q) { return std::isfinite(q); });
+      if (measured_valid_) {
+        std::copy_n(msg->data.begin(), 3, measured_joints_.begin());
+        measured_at_ = Clock::now();
+      }
       if (!trajectory_core_) return;
       std::vector<double> q(msg->data.begin(), msg->data.end());
       if (q.size() == 3 && msg->layout.data_offset == 0) q.push_back(0);
@@ -637,6 +664,10 @@ private:
 
   rclcpp::Subscription<canrpc_bridge::msg::BridgeStatus>::SharedPtr bridge_status_;
   Clock::time_point bridge_status_seen_;
+  canrpc_arm_motion_config_t motion_config_ = CANRPC_ARM_MOTION_DEFAULT_CONFIG;
+  std::array<float, 3> measured_joints_{}, command_anchor_{};
+  bool measured_valid_ = false, first_target_pending_ = false;
+  Clock::time_point measured_at_;
   bool bridge_status_ready_ = false, bridge_status_inhibited_ = false, bridge_status_received_ = false;
   double bridge_status_timeout_sec_ = 2.5;
   std::string bridge_session_, bridge_status_reason_;

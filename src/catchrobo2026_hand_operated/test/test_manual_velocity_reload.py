@@ -10,9 +10,11 @@ import unittest
 
 from ament_index_python.packages import get_package_prefix
 from catchrobo2026_msgs.srv import EndeffectorControl, WristControl
+from geometry_msgs.msg import PoseStamped
 import rclpy
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Float32MultiArray
+from std_srvs.srv import Trigger
 from visualization_msgs.msg import MarkerArray
 
 os.environ['ROS_DOMAIN_ID'] = '229'
@@ -41,6 +43,7 @@ class ManualVelocityReloadTest(unittest.TestCase):
         self.node = None
         self.log = None
         self.samples = []
+        self.pose_samples = []
         self.joint_samples = []
         self.joint_arrays = []
 
@@ -80,7 +83,16 @@ class ManualVelocityReloadTest(unittest.TestCase):
         self.node.create_subscription(
             Float32MultiArray, 'target_joint_angles',
             lambda message: self.joint_arrays.append(list(message.data)), 100)
+        self.node.create_subscription(
+            MarkerArray, 'target_arm_markers',
+            lambda message: self.pose_samples.append(message.markers[-1].points[-1]), 100)
         self.joy_pub = self.node.create_publisher(Joy, 'joy', 10)
+        self.pose_pub = self.node.create_publisher(PoseStamped, 'target_pose', 1)
+        self.current_pub = self.node.create_publisher(Float32MultiArray, 'current_joints', 1)
+        self.feedback_joints = [-0.062418811, -0.858503282, 1.963554144]
+        self.node.create_timer(0.02, lambda: self.current_pub.publish(
+            Float32MultiArray(data=self.feedback_joints)))
+        rebase = self.node.create_client(Trigger, 'joy/rebase')
         self.log = tempfile.TemporaryFile(mode='w+')
         self.child = subprocess.Popen(
             [str(self.executable), '--ros-args', '-r', f'__ns:={self.namespace}',
@@ -89,10 +101,17 @@ class ManualVelocityReloadTest(unittest.TestCase):
              '-p', f'manual_velocity_config:={self.config}'],
             stdout=self.log, stderr=self.log, start_new_session=True)
         deadline = time.monotonic() + 10.0
-        while not (self.samples and self.joy_pub.get_subscription_count()):
+        while not (rebase.service_is_ready() and self.current_pub.get_subscription_count()):
             if time.monotonic() >= deadline or self.child.poll() is not None:
                 self.fail('Joy node did not become ready')
             rclpy.spin_once(self.node, timeout_sec=0.02)
+        self.spin(0.3)
+        future = rebase.call_async(Trigger.Request())
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=2)
+        self.assertTrue(future.result().success, future.result().message)
+        self.neutral()
+        self.spin(0.05)
+        self.assertTrue(self.samples)
 
     @staticmethod
     def joy(x=0.0, wrist=0.0, button=False):
@@ -235,6 +254,68 @@ class ManualVelocityReloadTest(unittest.TestCase):
         self.assert_neutral_motion()
         self.neutral()
         self.assert_linear_speed(22.0)
+
+    def rebase_at(self, joints):
+        self.feedback_joints = list(joints)
+        self.spin(0.08)
+        client = self.node.create_client(Trigger, 'joy/rebase')
+        future = client.call_async(Trigger.Request())
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=2)
+        return future.result()
+
+    def test_rebase_preserves_branch_and_turn_without_manual_input(self):
+        self.start_node(debug=False)
+        for joints in ([0.0, 1.0, 0.0], [-0.062418811, 5.42468214, 1.963554144],
+                       [0.0307, -1.9746, 1.8650]):
+            self.assertTrue(self.rebase_at(list(joints)).success)
+            self.spin(0.04)
+            self.joint_arrays.clear()
+            self.neutral()
+            self.spin(0.08)
+            self.assertGreater(len(self.joint_arrays), 5)
+            for actual in self.joint_arrays:
+                for expected, value in zip(joints, actual):
+                    self.assertAlmostEqual(expected, value, delta=1e-6)
+            # A new IK solution on another branch or turn must be rejected.
+            self.joint_arrays.clear()
+            self.publish_and_spin(self.joy(x=1.0), 0.08)
+            self.assertTrue(self.joint_arrays)
+            for actual in self.joint_arrays:
+                for expected, value in zip(joints, actual):
+                    self.assertAlmostEqual(expected, value, delta=1e-6)
+
+    def test_logged_feedback_and_target_pose_keep_measured_branch(self):
+        self.start_node(debug=False)
+        joints = [0.0307, -1.9746, 1.8650]
+        self.assertTrue(self.rebase_at(joints).success)
+        self.spin(0.04)
+        self.neutral()
+        held_pose = self.pose_samples[-1]
+        self.joint_arrays.clear()
+        # Repeating the held XYZ must not run IK or produce a rejection.
+        message = PoseStamped()
+        message.header.stamp = self.node.get_clock().now().to_msg()
+        message.pose.position = held_pose
+        self.pose_pub.publish(message)
+        self.spin(0.08)
+        self.log.seek(0)
+        self.assertNotIn('Joy target rejected', self.log.read())
+        self.assertGreater(len(self.joint_arrays), 5)
+        for actual in self.joint_arrays:
+            for expected, value in zip(joints, actual):
+                self.assertAlmostEqual(expected, value, delta=1e-6)
+        # A changed XYZ yields an IK candidate on the other branch; keep raw q.
+        message.header.stamp = self.node.get_clock().now().to_msg()
+        message.pose.position.x += 0.0001
+        self.joint_arrays.clear()
+        self.pose_pub.publish(message)
+        self.spin(0.1)
+        self.log.seek(0)
+        self.assertIn('Joy target rejected', self.log.read())
+        self.assertGreater(len(self.joint_arrays), 5)
+        for actual in self.joint_arrays:
+            for expected, value in zip(joints, actual):
+                self.assertAlmostEqual(expected, value, delta=1e-6)
 
     def test_three_joint_contract_has_no_wrist_or_width_operation(self):
         self.start_node(debug=False)

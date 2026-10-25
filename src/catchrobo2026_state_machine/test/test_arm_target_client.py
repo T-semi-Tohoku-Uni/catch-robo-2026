@@ -205,15 +205,15 @@ def rig(tmp_path, monkeypatch, request):
 
 
 def test_start_paused_and_resume_discards_preexisting_input(rig):
-    rig.send([1., 2., 3.])
+    rig.send([0.21, 0.3, 0.4])
     rig.spin(0.1)
     assert not rig.records
     rig.resume()
     rig.spin(0.1)
     assert not rig.records
-    rig.send([4., 5., 6.])
+    rig.send([0.22, 0.3, 0.4])
     rig.until(lambda: len(rig.records) == 1)
-    assert rig.records[0][1:] == (struct.pack('<3f', 4, 5, 6), 'arm_target')
+    assert rig.records[0][1:] == (struct.pack('<3f', 0.22, 0.3, 0.4), 'arm_target')
 
 
 def test_gate_rejects_expired_resume_and_stale_pause_token(rig):
@@ -222,7 +222,7 @@ def test_gate_rejects_expired_resume_and_stale_pause_token(rig):
     assert first.success and second.success and first.token != second.token
     assert not rig.resolve(rig.gate(False, first.token)).success
     assert not rig.resolve(rig.gate(False, second.token, seconds=-1)).success
-    rig.send([1., 2., 3.])
+    rig.send([0.21, 0.3, 0.4])
     rig.spin()
     assert not rig.records
     assert rig.resolve(rig.gate(False, second.token)).success
@@ -232,7 +232,7 @@ def test_expired_pause_still_closes_gate(rig):
     rig.resume()
     reply = rig.resolve(rig.gate(seconds=-1))
     assert not reply.success
-    rig.send([1., 2., 3.])
+    rig.send([0.21, 0.3, 0.4])
     rig.spin()
     assert not rig.records
 
@@ -240,16 +240,16 @@ def test_expired_pause_still_closes_gate(rig):
 def test_latest_one_coalesces_while_single_rpc_is_inflight(rig):
     rig.resume()
     rig.hold = True
-    rig.send([0., 0., 0.])
+    rig.send([0.2, 0.3, 0.4])
     rig.until(lambda: len(rig.records) == 1)
     for index in range(30):
-        rig.send([float(index), 1., 2.])
+        rig.send([0.2 + float(index) / 1000., 0.3, 0.4])
         rig.spin(0.002)
     assert len(rig.records) == 1
     rig.hold = False
     rig.release()
     rig.until(lambda: len(rig.records) == 2)
-    assert rig.records[1][1] == struct.pack('<3f', 29, 1, 2)
+    assert rig.records[1][1] == struct.pack('<3f', 0.229, 0.3, 0.4)
     rig.spin(0.05)
     assert len(rig.records) == 2
 
@@ -257,12 +257,12 @@ def test_latest_one_coalesces_while_single_rpc_is_inflight(rig):
 def test_pause_waits_for_inflight_and_resume_requires_new_input(rig):
     rig.resume()
     rig.hold = True
-    rig.send([1., 2., 3.])
+    rig.send([0.21, 0.3, 0.4])
     rig.until(lambda: len(rig.records) == 1)
     paused = rig.gate()
     rig.spin(0.03)
     assert not paused.done()
-    rig.send([4., 5., 6.])
+    rig.send([0.22, 0.3, 0.4])
     rig.hold = False
     rig.release()
     reply = rig.resolve(paused)
@@ -270,9 +270,9 @@ def test_pause_waits_for_inflight_and_resume_requires_new_input(rig):
     assert rig.resolve(rig.gate(False, reply.token)).success
     rig.spin(0.1)
     assert len(rig.records) == 1
-    rig.send([7., 8., 9.])
+    rig.send([0.23, 0.3, 0.4])
     rig.until(lambda: len(rig.records) == 2)
-    assert rig.records[1][1] == struct.pack('<3f', 7, 8, 9)
+    assert rig.records[1][1] == struct.pack('<3f', 0.23, 0.3, 0.4)
 
 
 @pytest.mark.parametrize('outcome,result,mask,mismatch', [
@@ -283,30 +283,30 @@ def test_pause_waits_for_inflight_and_resume_requires_new_input(rig):
 def test_unconfirmed_rpc_latches_until_explicit_pause_resume(rig, outcome, result, mask, mismatch):
     rig.resume()
     rig.outcome, rig.result, rig.mask, rig.mismatch = outcome, result, mask, mismatch
-    rig.send([1., 2., 3.])
+    rig.send([0.21, 0.3, 0.4])
     rig.until(lambda: len(rig.records) == 1)
     rig.spin(0.03)
     for _ in range(10):
-        rig.send([1., 2., 3.])
+        rig.send([0.21, 0.3, 0.4])
         rig.spin(0.002)
     assert len(rig.records) == 1
     rig.outcome, rig.result, rig.mask, rig.mismatch = 0, 0, 7, False
     rig.resume()
     rig.spin(0.05)
     assert len(rig.records) == 1
-    rig.send([4., 5., 6.])
+    rig.send([0.22, 0.3, 0.4])
     rig.until(lambda: len(rig.records) == 2)
 
 
 def test_timeout_latches_and_late_completion_cannot_restore_stream(rig):
     rig.resume()
     rig.hold = True
-    rig.send([1., 2., 3.])
+    rig.send([0.21, 0.3, 0.4])
     rig.until(lambda: len(rig.records) == 1)
     rig.spin(0.2)
     rig.release()
     for _ in range(15):
-        rig.send([4., 5., 6.])
+        rig.send([0.22, 0.3, 0.4])
         rig.spin(0.002)
     assert len(rig.records) == 1
 
@@ -319,7 +319,7 @@ def test_500hz_input_never_exceeds_100hz_send_and_invalid_arrays_are_ignored(rig
     assert not rig.records
     began = time.monotonic()
     while time.monotonic() - began < 0.25:
-        rig.send([float(len(rig.records)), 1., 2.])
+        rig.send([0.2 + float(len(rig.records)) / 1000., 0.3, 0.4])
         rig.spin(0.002)
     rig.spin(0.03)
     assert 2 <= len(rig.records) <= 27
@@ -332,7 +332,7 @@ def test_configured_period_reduces_send_rate_without_changing_input_rate(rig):
     rig.resume()
     began = time.monotonic()
     while time.monotonic() - began < 0.25:
-        rig.send([float(len(rig.records)), 1., 2.])
+        rig.send([0.2 + float(len(rig.records)) / 1000., 0.3, 0.4])
         rig.spin(0.002)
     rig.spin(0.03)
     assert 2 <= len(rig.records) <= 13
@@ -346,7 +346,7 @@ def test_idle_bridge_fault_closes_open_gate_until_explicit_init(rig):
     rig.spin(0.05)
     rig.status_ready = True
     rig.spin(0.05)
-    rig.send([1., 2., 3.])
+    rig.send([0.21, 0.3, 0.4])
     rig.spin(0.05)
     assert not rig.records
     rig.resume()
@@ -360,7 +360,7 @@ def test_ready_session_change_closes_idle_gate_without_replaying(rig):
     rig.resume()
     rig.status_session = 'fedcba9876543210' * 2
     rig.spin(0.05)
-    rig.send([1., 2., 3.])
+    rig.send([0.21, 0.3, 0.4])
     rig.spin(0.05)
     assert not rig.records
     rig.resume()
@@ -380,7 +380,7 @@ def test_expired_status_rejects_resume_and_ready_does_not_reopen(rig):
     assert not rejected.success and 'heartbeat expired' in rejected.message
     rig.status_enabled = True
     rig.spin(0.05)
-    rig.send([1., 2., 3.])
+    rig.send([0.21, 0.3, 0.4])
     rig.spin(0.05)
     assert not rig.records
     rig.resume()
@@ -400,7 +400,7 @@ def test_status_failure_invalidates_pending_resume_and_late_rebase(rig):
     rig.status_ready = True
     rig.spin(0.05)
     assert not rig.resolve(rig.gate(False, paused.token)).success
-    rig.send([1., 2., 3.])
+    rig.send([0.21, 0.3, 0.4])
     rig.spin(0.05)
     assert not rig.records
     rig.resume()
@@ -413,12 +413,12 @@ def test_missing_status_cannot_open_gate_and_first_ready_needs_init(rig):
     paused = rig.resolve(rig.gate())
     rejected = rig.resolve(rig.gate(False, paused.token))
     assert not rejected.success and 'status not received' in rejected.message
-    rig.send([1., 2., 3.])
+    rig.send([0.21, 0.3, 0.4])
     rig.spin(0.05)
     assert not rig.records
     rig.status_enabled = True
     rig.spin(0.05)
-    rig.send([1., 2., 3.])
+    rig.send([0.21, 0.3, 0.4])
     rig.spin(0.05)
     assert not rig.records
     rig.resume()
@@ -435,9 +435,77 @@ def test_same_ready_after_executor_gap_cannot_hide_expired_status(rig):
     finally:
         os.kill(rig.child.pid, signal.SIGCONT)
     rig.spin(0.1)
-    rig.send([1., 2., 3.])
+    rig.send([0.21, 0.3, 0.4])
     rig.spin(0.05)
     assert not rig.records
     rig.resume()
     rig.send([0.2, 0.3, 0.4])
     rig.until(lambda: len(rig.records) == 1)
+
+
+@pytest.mark.parametrize('target', [[0.2 + 6.2831853, 0.3, 0.4], [0.0307, 1.865, 4.309]])
+def test_first_handoff_rejects_nonwrapped_jump(rig, target):
+    rig.resume()
+    rig.send(target)
+    rig.spin(0.12)
+    assert not rig.records
+    rig.send([0.2, 0.3, 0.4])
+    rig.spin(0.05)
+    assert not rig.records  # Rejection keeps the existing explicit-init latch.
+
+
+def test_first_handoff_preserves_measured_turn(rig):
+    rig.actual = [0.2 + 6.2831853, 0.3, 0.4]
+    rig.spin(0.08)
+    rig.resume()
+    rig.send(list(rig.actual))
+    rig.until(lambda: len(rig.records) == 1)
+    assert rig.records[0][1] == struct.pack('<3f', *rig.actual)
+
+
+def test_handoff_requires_fresh_feedback_without_ros_arrival_judgement(rig):
+    rig.feedback_enabled = False
+    rig.spin(0.6)
+    paused = rig.resolve(rig.gate())
+    assert paused.success
+    assert not rig.resolve(rig.gate(False, paused.token)).success
+    assert not rig.records
+
+
+def test_logged_feedback_can_resume_and_send_unchanged_first_target(rig):
+    rig.actual = [0.0307, -1.9746, 1.8650]
+    rig.spin(0.08)
+    rig.resume()
+    rig.send(list(rig.actual))
+    rig.until(lambda: len(rig.records) == 1)
+    assert rig.records[0][1] == struct.pack('<3f', *rig.actual)
+
+
+def test_logged_ik_candidate_rejected_as_first_handoff_target(rig):
+    rig.actual = [0.0307, -1.9746, 1.8650]
+    rig.spin(0.08)
+    rig.resume()
+    rig.send([0.0307, 1.8650, 4.309])
+    rig.spin(0.12)
+    assert not rig.records
+
+
+def test_normal_target_keeps_existing_finite_rpc_contract(rig):
+    rig.resume()
+    rig.send([0.2, 0.3, 0.4])
+    rig.until(lambda: len(rig.records) == 1)
+    rig.spin(0.03)
+    target = [0.0307, -1.9746, 1.8650]
+    rig.send(target)
+    rig.until(lambda: len(rig.records) == 2)
+    assert rig.records[1][1] == struct.pack('<3f', *target)
+
+
+def test_handoff_does_not_rejudge_mcu_initial_pose(rig):
+    # The state service owns the MCU final response; the gate preserves live q.
+    rig.actual = [0.0, 1.0, 0.0]
+    rig.spin(0.08)
+    rig.resume()
+    rig.send(list(rig.actual))
+    rig.until(lambda: len(rig.records) == 1)
+    assert rig.records[0][1] == struct.pack('<3f', *rig.actual)

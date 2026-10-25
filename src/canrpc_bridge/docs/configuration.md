@@ -204,7 +204,7 @@ void receive_reset(const uint8_t own_boot[16], const uint8_t request[48],
 
 この例ではcontrollerのBOOTを `canrpc_peer_announce` へ渡し、返信IDに `canrpc_id(3, CANRPC_CONTROL, 17, CANRPC_RESET_STATUS, 42, tag)` を使います。乱数生成、受信source／destinationの照合、時刻、送受信、安全化、MCU resetはプラットフォーム実装が担当します。特定のrole名やROSを必要としません。
 
-`startup_diagnostic`は既定false。trueはrequest_bytes=0かつrequire_ready=falseに限定し、起動失敗時にも非作動の診断だけを有限時間で照会します。学祭の診断許可endpointはarm_readyだけです。arm_initializeは通常の作動要求としてDEGRADED中は拒否します。両endpointの応答は64byte/version2で、形式は[protocol](protocol.md#arm-readiness-diagnostic-version-2)を参照してください。
+`startup_diagnostic`は既定false。trueはrequest_bytes=0かつrequire_ready=falseに限定し、起動失敗時にも非作動の診断だけを有限時間で照会します。学祭の診断許可endpointはarm_readyだけです。arm_initializeは通常の作動要求としてDEGRADED中は拒否します。両endpointの応答は64byte/version3で、形式は[protocol](protocol.md#arm-readiness-diagnostic-version-3)を参照してください。
 
 Nodeごとに`nodes.<role>.rpc`へ8つのpolicy値（ROS service名以外）をすべて指定すると、global rpcをそのpeerだけ上書きします。Tagは同じpeerの全serviceで共有するためendpoint別policyにはしません。cache_capacity上限は32。学祭armはresponse 100ms、retry interval 10ms/window 20ms、query 10ms、retention 120ms、guard 240ms、max frame age 20ms、cache 32です。pumpは既定1000ms/guard5000ms/cache8を維持します。
 
@@ -227,3 +227,10 @@ bridgeのread-only ROS parameter `status_topic`（既定canrpc/status）は型�
 automatic／main／handoperated launchは同じ`canrpc_config`のname=pressure routeから`pressure_enabled`を導出し、pumpとUIへ伝播します。routeが無い別project設定ではfalse、enabled省略はtrueです。省略中はCheckSuctionをunknownとして拒否し、圧力0や吸着成功で代用しません。ポンプの通常設定RPCは使用できます。
 
 圧力基板を再追加するときは、同じprofileのpressure routeを`enabled: true`にし、`reset.targets`を`[2, 3, 4]`へ戻してROS一式を再起動します。再追加後はNode4も新Boot ID・fresh READYを必要とし、未接続なら起動確認は完了しません。MCUの再生成・firmware変更は不要です。物理的にCANバスを壊している基板は、この設定で電気的に切り離せません。controller異常では従来どおりDEGRADEDとして操作を拒否します。
+
+
+### 初期移動と完了確認のソフト設定
+
+`motor_initialization`の`position_tolerance_rad: [0.05,0.01,0.01]`は既存nav到達許容差を使用します。`settle_velocity_rad_s: 0.05`、`settle_duration_ms: 200`、`rebase_max_delta_rad: 0.2`は静止・引継ぎ判定用のソフト値です。これら4項目は省略可能で、省略時も上記既定値を補完し既存profileを使用できます。明示した不正値だけを形式エラーとします。最初の3値はMCUの初期角到達・静止判定、最後はROS/Joyの非wrap引継ぎ拒否へ使います。機械の速度・加速度・電流設定は変更せず、新しい機械範囲やconfigured/zero確認/faultpolicy gateは追加しません。既存20秒総期限に初期移動・dwellも含めます。
+
+`include/canrpc_bridge/arm_safety.h`をMCUへ同一vendorし、既存native変換、有限値・非wrap差と到達・静止の小判定を共用します。初期角は従来の{0,0,2}rad。MCUだけがfresh全軸の物理到達・静止を確認し、64byte/version3/flags127で完了を返します。ROSは独自の重複到達判断をせず、この完了後に初回目標の非wrap連続性を保って通常制御へ移ります。

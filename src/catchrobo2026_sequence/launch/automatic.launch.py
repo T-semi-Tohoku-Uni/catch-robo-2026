@@ -43,6 +43,7 @@ def rpc_settings(context):
                              endpoint_seconds('arm_ready') + 1.0)
     application_sec = max(initialization_sec, pump_sec + 0.5)
     return [
+        SetLaunchConfiguration('rebase_max_delta_rad', str(motor.get('rebase_max_delta_rad', 0.2))),
         SetLaunchConfiguration('pressure_enabled', str(pressure_enabled).lower()),
         SetLaunchConfiguration('canrpc_service', rpc.get('ros_service', 'canrpc/call')),
         SetLaunchConfiguration('rpc_timeout_sec', str(pump_sec + 0.5)),
@@ -143,6 +144,8 @@ def generate_launch_description():
             name='arm_target_client', output='screen', parameters=[{
                 'canrpc_service': LaunchConfiguration('canrpc_service'),
                 'arm_target_endpoint': LaunchConfiguration('arm_target_endpoint'),
+                'rebase_max_delta_rad': ParameterValue(
+                    LaunchConfiguration('rebase_max_delta_rad'), value_type=float),
                 'canrpc_status_topic': LaunchConfiguration('canrpc_status_topic'),
                 'bridge_status_timeout_sec': ParameterValue(
                     LaunchConfiguration('bridge_status_timeout_sec'), value_type=float),
@@ -185,6 +188,8 @@ def generate_launch_description():
                             'service_timeout_sec': ParameterValue(
                                 LaunchConfiguration('application_service_timeout_sec'),
                                 value_type=float),
+                            'rebase_max_delta_rad': ParameterValue(
+                                LaunchConfiguration('rebase_max_delta_rad'), value_type=float),
                             'manual_velocity_config': ParameterValue(
                                 LaunchConfiguration('manual_velocity_config'), value_type=str),
                         }],

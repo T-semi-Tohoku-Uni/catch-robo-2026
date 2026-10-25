@@ -92,7 +92,7 @@ private:
     return request;
   }
   static bool valid_diagnostic(const std::vector<uint8_t> &data) {
-    return data.size() == 64 && data[11] == 2 &&
+    return data.size() == 64 && (data[11] == 2 || data[11] == 3) &&
       std::any_of(data.begin() + 48, data.end(), [](uint8_t value) { return value != 0; });
   }
   std::string diagnostic_detail(const Call::Response &reply) {
@@ -143,7 +143,8 @@ private:
               query(token, false);
               return;
             }
-            const bool ready = result == 0 && (read_u32(reply->data, 4) & 0x1f) == 0x1f;
+            const bool ready = reply->data[11] == 3 && result == 0 &&
+              (read_u32(reply->data, 4) & 0x7f) == 0x7f;
             if (!ready) {
               phase_ = Phase::PollWait;
               poll_due_ = Clock::now() + std::chrono::duration_cast<Clock::duration>(
@@ -215,7 +216,8 @@ private:
     out << "arm result=" << read_u32(data, 0) << " flags=" << read_u32(data, 4)
         << " stage=" << unsigned(data[8]) << " reason=" << name(data[9],
           {"NONE","TX_ENQUEUE_TIMEOUT","TX_COMPLETE_TIMEOUT","RESPONSE_TIMEOUT","MOTOR_FAULT",
-           "MODE_MISMATCH","HOME_TIMEOUT","FINAL_FEEDBACK_TIMEOUT","CONTROL_FAILURE","INITIALIZATION_TIMEOUT"})
+           "MODE_MISMATCH","HOME_TIMEOUT","FINAL_FEEDBACK_TIMEOUT","CONTROL_FAILURE","INITIALIZATION_TIMEOUT",
+           "RESERVED","INVALID_ANGLE","RESERVED","RESERVED","STALE_FEEDBACK","REBASE_DISCONTINUITY"})
         << '(' << unsigned(data[9]) << ") failed_axis=" << unsigned(data[10]);
     out << " snapshot(age@failure)=" << ((data[14]|data[26]|data[38])&128 ? 1 : 0);
     for (size_t axis = 0; axis < 3; ++axis) {

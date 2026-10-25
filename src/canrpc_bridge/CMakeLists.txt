@@ -47,5 +47,6 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/config/gakusai.yaml
     ${CMAKE_CURRENT_SOURCE_DIR}/config/reuse_example.yaml)
 endif()
+ament_export_include_directories(include)
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()

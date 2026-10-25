@@ -27,8 +27,8 @@ def diagnostics(tmp_path, monkeypatch):
 
     class Rig:
         events = []
-        outcome, result, flags, version, length = 4, 2, 0, 2, 64
-        initialize_outcome, initialize_result, initialize_version, initialize_length = 0, 1, 2, 64
+        outcome, result, flags, version, length = 4, 2, 0, 3, 64
+        initialize_outcome, initialize_result, initialize_version, initialize_length = 0, 1, 3, 64
         boot = bytes([1]) + bytes(15)
         initialize_boot = bytes([1]) + bytes(15)
         ready_sequence = []
@@ -114,7 +114,7 @@ def assert_all_axes(message):
 
 @pytest.mark.parametrize('outcome', [1, 2, 3, 4, 5, 6])
 def test_non_ok_ready_payload_never_resumes(diagnostics, outcome):
-    diagnostics.outcome, diagnostics.result, diagnostics.flags = outcome, 0, 31
+    diagnostics.outcome, diagnostics.result, diagnostics.flags = outcome, 0, 127
     response = diagnostics.query()
     assert not response.success
     assert diagnostics.events == ['pause', 'initialize', 'rpc']
@@ -149,7 +149,7 @@ def test_invalid_payload_is_not_decoded(diagnostics, version, length):
 
 
 def test_only_normal_ok_ready_may_resume_after_failure(diagnostics):
-    diagnostics.result, diagnostics.flags = 0, 31
+    diagnostics.result, diagnostics.flags = 0, 127
     assert not diagnostics.query().success
     assert diagnostics.events == ['pause', 'initialize', 'rpc']
     diagnostics.outcome = 0
@@ -162,13 +162,13 @@ def test_only_normal_ok_ready_may_resume_after_failure(diagnostics):
 
 def test_running_polls_same_boot_once_started(diagnostics):
     diagnostics.outcome = 0
-    diagnostics.ready_sequence = [(1, 0, 0), (1, 0, 15), (0, 31, 29)]
+    diagnostics.ready_sequence = [(1, 0, 0), (1, 0, 15), (0, 127, 29)]
     assert diagnostics.query().success
     assert diagnostics.events == ['pause', 'initialize', 'rpc', 'rpc', 'rpc', 'resume']
 
 
 def test_boot_change_during_poll_never_resumes(diagnostics):
-    diagnostics.outcome, diagnostics.result, diagnostics.flags = 0, 0, 31
+    diagnostics.outcome, diagnostics.result, diagnostics.flags = 0, 0, 127
     diagnostics.boot = bytes([2]) + bytes(15)
     response = diagnostics.query()
     assert not response.success and 'boot changed' in response.message
@@ -177,7 +177,7 @@ def test_boot_change_during_poll_never_resumes(diagnostics):
 
 @pytest.mark.parametrize('failure', ['unavailable', 'lost', 'old48', 'zero_boot'])
 def test_start_failure_only_reads_diagnostic_once_and_never_restarts(diagnostics, failure):
-    diagnostics.outcome, diagnostics.result, diagnostics.flags = 0, 0, 31
+    diagnostics.outcome, diagnostics.result, diagnostics.flags = 0, 0, 127
     if failure == 'unavailable':
         diagnostics.initialize_outcome, diagnostics.initialize_length = 4, 0
     elif failure == 'lost':
@@ -202,7 +202,7 @@ def test_failed_start_and_missing_fallback_keep_original_failure(diagnostics):
 
 
 def test_zero_boot_and_old_format_ready_are_never_accepted(diagnostics):
-    diagnostics.outcome, diagnostics.result, diagnostics.flags = 0, 0, 31
+    diagnostics.outcome, diagnostics.result, diagnostics.flags = 0, 0, 127
     diagnostics.boot = bytes(16)
     assert not diagnostics.query().success
     assert diagnostics.events == ['pause', 'initialize', 'rpc']
@@ -215,3 +215,20 @@ def test_running_deadline_never_resumes_or_restarts(diagnostics):
     assert_all_axes(response.message)
     assert diagnostics.events.count('initialize') == 1
     assert 'resume' not in diagnostics.events
+
+
+@pytest.mark.parametrize('version,flags', [(2, 127), (3, 31), (3, 63)])
+def test_ack_or_position_without_settling_never_resumes(diagnostics, version, flags):
+    diagnostics.outcome, diagnostics.result = 0, 0
+    diagnostics.version, diagnostics.flags = version, flags
+    response = diagnostics.query()
+    assert not response.success
+    assert diagnostics.events.count('initialize') == 1
+    assert 'resume' not in diagnostics.events
+
+
+def test_resume_waits_until_motion_and_dwell_flags(diagnostics):
+    diagnostics.outcome = 0
+    diagnostics.ready_sequence = [(0, 31, 32), (0, 63, 33), (0, 127, 29)]
+    assert diagnostics.query().success
+    assert diagnostics.events == ['pause', 'initialize', 'rpc', 'rpc', 'rpc', 'resume']

@@ -55,6 +55,10 @@ rpc_endpoints:
 application:
   arm_control: {native_ack_timeout_ms: 40, target_period_ms: 10}
   motor_initialization:
+    position_tolerance_rad: [0.05, 0.01, 0.01]
+    settle_velocity_rad_s: 0.05
+    settle_duration_ms: 200
+    rebase_max_delta_rad: 0.2
     initialization_timeout_ms: 20000
     step_timeout_ms: 200
     homing_timeout_ms: 10000

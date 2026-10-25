@@ -24,7 +24,7 @@ ros2 run canrpc_bridge canrpc_bridge --ros-args -p config_file:=/absolute/projec
 
 UI・自動制御プロセスはCANの成否と独立して起動します。起動RESETは全対象の現在READYを確認してから世代条件付きSYSTEM_RESETを送り、異なるBoot IDのREADYを全対象で確認するまで実機操作を許可しません。CAN/初期化失敗ではDEGRADEDとして診断を続け、全体を終了しません。CAN設定はlaunchへ集約し、help/`--show-args`では実行しません。
 
-学祭armは起動後、通信READY／モーターWAITINGで待機し、明示UI INITの`arm_initialize`要求までnative設定・STOP・原点復帰を送りません。startup SYSTEM_RESETは有効のままで、未開始ならnative送信なし、開始済みなら既存q0 STOPの実TX確認後にresetします。手順内・FAULT時のSTOPは維持します。ポンプは6出力OFF（既存ROS極性に対応するGPIO Low／wire mask63）で起動します。UI INITは開始応答のBoot IDと一致する64byte/version2の`arm_ready`で完了を有限時間確認します。[wireと運用](docs/protocol.md#明示的なモーター初期化)。
+学祭armは起動後、通信READY／モーターWAITINGで待機し、明示UI INITの`arm_initialize`要求までnative設定・STOP・原点復帰を送りません。startup SYSTEM_RESETは有効のままで、未開始ならnative送信なし、開始済みなら既存q0 STOPの実TX確認後にresetします。手順内・FAULT時のSTOPは維持します。ポンプは6出力OFF（既存ROS極性に対応するGPIO Low／wire mask63）で起動します。UI INITは開始応答のBoot IDと一致する64byte/version3の`arm_ready`でMCU最終完了を有限時間確認します。MCUは従来の初期角{0,0,2}radへの移動を専有し、fresh全軸到達と静止200msを確認するまでboot_complete/flags127を返しません。途中のACK・実測だけでROS通常制御を開始しません。[wireと運用](docs/protocol.md#明示的なモーター初期化)。
 
 
 ### CAN未接続・駆動電源なしでの診断

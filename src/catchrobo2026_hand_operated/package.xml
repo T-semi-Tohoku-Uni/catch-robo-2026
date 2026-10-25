@@ -10,6 +10,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
+  <depend>canrpc_bridge</depend>
   <depend>rcl_interfaces</depend>
   <depend>rcl_yaml_param_parser</depend>
   <depend>rcutils</depend>

@@ -10,6 +10,7 @@
 #include <stdexcept>
 
 #include "rclcpp/rclcpp.hpp"
+#include "arm_safety.h"
 #include "rclcpp/parameter_map.hpp"
 #include "rcl_interfaces/msg/parameter_descriptor.hpp"
 #include "rcl_yaml_param_parser/parser.h"
@@ -70,6 +71,7 @@ public:
         rebase_service_ = create_service<std_srvs::srv::Trigger>("joy/rebase",
             [this](std_srvs::srv::Trigger::Request::SharedPtr,
                    std_srvs::srv::Trigger::Response::SharedPtr response) {
+                held_joints_valid_ = false;
                 clear_velocity();
                 manual_input_active_ = false;
                 manual_input_blocked_until_neutral_ = true;
@@ -92,6 +94,9 @@ public:
                     response->message = "Joy rebase requires a valid ROS clock";
                     return;
                 }
+                held_joints_ = feedback_joints_;
+                held_joints_valid_ = true;
+                pose_changed_ = false;
                 std::copy_n(pose, 3, current_pose_);
                 current_pose_[3] = 0.0f;
                 // Replace the subscription to discard queued commands from the previous owner.
@@ -109,6 +114,10 @@ public:
         rcl_interfaces::msg::ParameterDescriptor velocity_descriptor;
         velocity_descriptor.read_only = true;
         velocity_descriptor.description = "Maximum manual velocity at full Joy input";
+        motion_config_.rebase_max_delta_rad = static_cast<float>(declare_parameter(
+            "rebase_max_delta_rad", 0.2, velocity_descriptor));
+        if (!std::isfinite(motion_config_.rebase_max_delta_rad) || motion_config_.rebase_max_delta_rad <= 0)
+            throw std::invalid_argument("rebase_max_delta_rad must be finite and positive");
         manual_linear_speed_mm_s_ = declare_parameter(
             "manual_linear_speed_mm_s", kDefaultManualLinearSpeedMmS, velocity_descriptor);
         service_timeout_sec_ = declare_parameter("service_timeout_sec", 2.0, velocity_descriptor);
@@ -245,9 +254,14 @@ private:
         const auto &position = msg->pose.position;
         if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
             !std::isfinite(position.z)) return;
-        current_pose_[0] = position.x * 1000.0f;
-        current_pose_[1] = position.y * 1000.0f;
-        current_pose_[2] = position.z * 1000.0f;
+        const std::array<float, 3> next_pose = {
+            static_cast<float>(position.x * 1000.0),
+            static_cast<float>(position.y * 1000.0),
+            static_cast<float>(position.z * 1000.0)};
+        if (!std::all_of(next_pose.begin(), next_pose.end(), [](float v) { return std::isfinite(v); }) ||
+            std::equal(next_pose.begin(), next_pose.end(), current_pose_)) return;
+        pose_changed_ = true;
+        std::copy(next_pose.begin(), next_pose.end(), current_pose_);
         current_pose_[3] = 0.0f;
     }
 
@@ -407,18 +421,35 @@ private:
         const float pos_gain = static_cast<float>(manual_linear_speed_mm_s_) *
             kPublishPeriodSeconds;
 
+        if (vel_x_ != 0.0f || vel_y_ != 0.0f || vel_z_ != 0.0f) pose_changed_ = true;
         current_pose_[0] -= vel_x_ * pos_gain;
         current_pose_[1] += vel_y_ * pos_gain;
         current_pose_[2] += vel_z_ * pos_gain;
 
         // 2. ローカルで逆運動学(IK)を計算
         float target_joints[4] = {0.0f};
-        kin_.inverse_kinematics(current_pose_, target_joints);
+        if (!held_joints_valid_) return;
+        if (pose_changed_) {
+            kin_.inverse_kinematics(current_pose_, target_joints);
+        } else {
+            // Keep the measured branch and turn count while holding position.
+            std::copy(held_joints_.begin(), held_joints_.end(), target_joints);
+        }
 
         target_joints[3] = 0.0f;  // Only the library boundary has a fourth joint.
 
-        if (!std::all_of(target_joints, target_joints + 3,
-                [](float value) { return std::isfinite(value); })) return;
+        if (canrpc_arm_continuous(&motion_config_, held_joints_.data(), target_joints, nullptr) != 0) {
+            float held[4] = {held_joints_[0], held_joints_[1], held_joints_[2], 0};
+            kin_.forward_kinematics(current_pose_, held);
+            clear_velocity();
+            manual_input_blocked_until_neutral_ = true;
+            pose_changed_ = false;
+            RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000,
+                "Joy target rejected: invalid or non-wrapped joint discontinuity");
+            return;
+        }
+        std::copy_n(target_joints, 3, held_joints_.begin());
+        pose_changed_ = false;
 
         // Publish the three physical joint commands.
         std_msgs::msg::Float32MultiArray msg_out;
@@ -492,11 +523,15 @@ private:
     rclcpp::TimerBase::SharedPtr publish_timer_; 
     rclcpp::TimerBase::SharedPtr manual_velocity_reload_timer_;
     
+    canrpc_arm_motion_config_t motion_config_ = CANRPC_ARM_MOTION_DEFAULT_CONFIG;
     robot_kinematics kin_; // 運動学クラスのインスタンス
 
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr current_sub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr rebase_service_;
     std::array<float, 3> feedback_joints_{};
+    std::array<float, 3> held_joints_{};
+    bool held_joints_valid_ = false;
+    bool pose_changed_ = false;
     bool feedback_valid_ = false;
     bool pose_clock_valid_ = true;
     int64_t pose_cutoff_ns_ = 0, last_ros_ns_ = 0;
