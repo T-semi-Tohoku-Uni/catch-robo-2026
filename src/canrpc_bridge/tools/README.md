@@ -45,7 +45,7 @@ actual board wiring to match. A disconnected receiver never stalls control.
 interrupts enabled. IRQ/masked calls and overflow are dropped and counted by
 `drop`; no formatting is called from periodic IRQs. Each main-loop drain writes
 at most 32 bytes and exits immediately when UART TXE is not ready. No UART IRQ,
-DMA, HAL transmit wait, float formatting, or reset-time flush is introduced.
+DMA, HAL transmit wait, or reset-time flush is introduced.
 Arm and pump service the UART during their existing 10 ms tick wait. Fatal
 handlers may drain already queued bytes with interrupts disabled and do not
 wait on HAL ticks. Fatal errors before USER2/UART readiness cannot print.
@@ -55,6 +55,15 @@ Arm lines report RPC state, boot step, boot completion/failure reason and failin
 per-axis lines report motor ID, mode, fault, freshness flags, feedback age,
 command and response. Axis data is captured with a short IRQ mask and formatted
 after interrupts resume; on failure the original fault snapshot is retained.
+Arm `angles_live` groups additionally report native motor radians, converted
+ROS joint radians and the current joint target (`motor_rad`, `joint_rad`,
+`target_rad`) every 200 ms and on boot-complete/fault transitions. Float
+formatting runs only from main after the snapshot's IRQ mask is released.
+These angle groups remain live after fault; `valid=0`/`nan` means no usable
+measurement, and `fresh`/`age_ms` distinguish old feedback. `target_token=0`
+means no ordinary joint-target RPC has been accepted yet. Displayed targets
+are MCU variables, not motor-side readback or proof of command transmission.
+See the arm firmware README and `arm_debug.h` for axis mappings and offsets.
 Numeric stage/reason/command definitions remain in `arm_boot.h` and the arm
 README. Arm summaries occur on boot-step/state changes and otherwise at 1 Hz;
 pressure raw/filtered values occur at 1 Hz from main; pump GPIO applied-mask
